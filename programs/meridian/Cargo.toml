@@ -1,22 +1,31 @@
 [package]
-name = "meridian-matching"
+name = "meridian"
 version = "0.1.0"
 edition = "2021"
-description = "Pure-Rust matching engine module for the Meridian on-chain CLOB. Will be wrapped by the Anchor `meridian` program at U1 time; standalone for U2."
+description = "Meridian on-chain CLOB for binary outcome markets — Anchor program wrapping a pure-Rust matching engine."
 license = "Apache-2.0"
 publish = false
 
-# NOTE: Standalone crate for U2 per the U2 dispatch. This Cargo.toml will be
-# replaced by the Anchor program manifest when U1 (Anchor scaffolding) lands.
-# Until then, this crate stays free of Solana / Anchor dependencies so the
-# matching engine can be developed and tested without the Solana toolchain.
-
 [lib]
-name = "meridian_matching"
-path = "src/lib.rs"
+crate-type = ["cdylib", "lib"]
+name = "meridian"
+
+[features]
+default = []
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
 
 [dependencies]
+anchor-lang = "1.0.0"
+anchor-spl = { version = "1.0.0", features = ["token", "associated_token"] }
+borsh = "1.5"
 arrayvec = { version = "0.7", default-features = false }
+# TODO(U7): re-enable pyth-solana-receiver-sdk once we wire `settle_market`.
+# Attempted at U1: version not pinned here to avoid blocking the scaffold.
+# pyth-solana-receiver-sdk = "0.6"
 
 [dev-dependencies]
 proptest = "1.5"
