@@ -1,0 +1,44 @@
+[package]
+name = "meridian-litesvm-tests"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "LiteSVM scenario tests for the Meridian on-chain CLOB."
+
+# Library only ships test helpers (program loaders, USDC fixtures). The
+# actual scenarios are `tests/*.rs` files, one per scenario, discovered
+# automatically by `cargo test` per Cargo's integration-test convention.
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+# The on-chain program — `no-entrypoint` so we don't double-register
+# `entrypoint!`. We only need its types + PDA seed constants here.
+meridian = { path = "../../programs/meridian", features = ["no-entrypoint"] }
+
+# Pinned to match `meridian`'s own toolchain — using these crates from
+# the host side keeps us on Anchor 1.0's solana-program version, which
+# in turn matches LiteSVM 0.12's solana-* deps.
+anchor-lang = "1.0.0"
+
+# LiteSVM + the individual solana-* crates it expects. Importing the
+# umbrella `solana-sdk` would pull in incompatible versions.
+litesvm = "0.12"
+solana-keypair = "3.1"
+solana-signer = "3.0"
+solana-instruction = "3.4"
+solana-message = "3.1"
+solana-transaction = "3.0"
+solana-account = "3.2"
+solana-address = "2.6"
+solana-program-pack = "3.0"
+solana-program-option = "3.0"
+solana-system-interface = { version = "3.2", features = ["bincode"] }
+
+# SPL token state types — used to read+verify mint/account fields after
+# `create_strike_market` ran on the SVM.
+spl-token-interface = "2"
+
+bytemuck = "1.16"
+borsh = "1.5"
+sha2 = "0.10"

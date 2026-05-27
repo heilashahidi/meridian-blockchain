@@ -18,7 +18,9 @@
 use anchor_lang::prelude::*;
 
 pub mod error;
+pub mod instructions;
 pub mod matching;
+pub mod state;
 
 // Re-export the matching engine surface so future instruction modules
 // (U3-U7) can `use crate::matching::...` or just `use crate::*` cleanly.
@@ -28,6 +30,15 @@ pub use matching::{
     order_key::OrderKey,
 };
 
+// Anchor's `#[program]` macro expects the generated `__client_accounts_*`
+// modules (produced by `#[derive(Accounts)]`) at the crate root via
+// `pub use crate::__client_accounts_<ix>::*;`. Re-exporting each
+// instruction module's contents (including those generated modules)
+// satisfies the macro without polluting the public API with the
+// `handler` symbol collision (each module has its own `handler`).
+pub use instructions::create_strike_market::*;
+pub use instructions::initialize_config::*;
+
 // Program keypair generated on first `anchor build`; lives on disk at
 // `target/deploy/meridian-keypair.json` (gitignored) and is also reflected in
 // the `[programs.*]` tables of `Anchor.toml`. Regenerate per environment if
@@ -36,11 +47,25 @@ declare_id!("APBHkU44Jtz7CTakjj33XKyDrnAmEoqA7gZ3n1MhYomC");
 
 #[program]
 pub mod meridian {
-    // Instruction handlers land in U3 (initialize_config, create_strike_market),
-    // U4 (mint_pair, burn_pair), U5 (place_limit_order, place_market_order,
-    // cancel_order), U6 (buy_no, sell_no), and U7 (settle_market,
-    // settle_sweep, redeem). Intentionally empty at U1 — the goal is
-    // `anchor build` succeeds and the matching engine is reachable.
-    #[allow(unused_imports)]
+    //! U3 wires `initialize_config` and `create_strike_market`. U4-U7 add
+    //! the remaining instructions (mint_pair/burn_pair, place/market/cancel,
+    //! buy_no/sell_no, settle/redeem).
     use super::*;
+
+    /// Bootstrap the singleton Config PDA. First caller becomes admin.
+    pub fn initialize_config(
+        ctx: Context<InitializeConfig>,
+        fee_authority: Pubkey,
+    ) -> Result<()> {
+        instructions::initialize_config::initialize_config_handler(ctx, fee_authority)
+    }
+
+    /// Admin-only: create a strike market (Market + Book + Yes/No mints
+    /// + USDC/Yes escrows) for a `(ticker, strike, expiry)` triple.
+    pub fn create_strike_market(
+        ctx: Context<CreateStrikeMarket>,
+        args: CreateStrikeMarketArgs,
+    ) -> Result<()> {
+        instructions::create_strike_market::create_strike_market_handler(ctx, args)
+    }
 }

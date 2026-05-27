@@ -23,3 +23,7 @@ test = "cargo test -p meridian --lib matching::tests"
 
 [workspace]
 members = ["programs/meridian"]
+# `tests/litesvm` is deliberately excluded from Anchor's workspace view
+# (it would otherwise try to anchor-build it). It IS part of the Cargo
+# workspace (see top-level `Cargo.toml`) so `cargo test --workspace`
+# picks it up.

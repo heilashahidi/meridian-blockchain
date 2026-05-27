@@ -1,5 +1,5 @@
 [workspace]
-members = ["programs/*"]
+members = ["programs/*", "tests/litesvm"]
 resolver = "2"
 
 [profile.release]
