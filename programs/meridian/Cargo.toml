@@ -23,6 +23,10 @@ anchor-lang = "1.0.0"
 anchor-spl = { version = "1.0.0", features = ["token", "associated_token"] }
 borsh = "1.5"
 arrayvec = { version = "0.7", default-features = false }
+# Required for `#[account(zero_copy)]` to derive `Pod` / `Zeroable` against
+# the local crate's bytemuck (Anchor 1.0 references `::bytemuck::Pod`, not
+# its private re-export, so the crate must be in scope).
+bytemuck = { version = "1.16", features = ["derive"] }
 # TODO(U7): re-enable pyth-solana-receiver-sdk once we wire `settle_market`.
 # Attempted at U1: version not pinned here to avoid blocking the scaffold.
 # pyth-solana-receiver-sdk = "0.6"

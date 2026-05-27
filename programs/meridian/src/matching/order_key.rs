@@ -19,59 +19,102 @@
 //! `price = 0` is reserved as an invalid sentinel (callers must reject zero
 //! prices at instruction entry) so a freshly-zeroed `OrderEntry` can be
 //! distinguished from a real order during fixed-array compaction.
+//!
+//! ## U3 layout
+//!
+//! U2 stored the key as a single `u128`. U3 needs `BookSide<N>` (which
+//! contains `[OrderEntry; N]` which contains `OrderKey`) to be
+//! `bytemuck::Pod` so it can live inside an `#[account(zero_copy)]` Anchor
+//! account. `u128` is `Pod`, but it has 16-byte alignment, which forces
+//! `OrderEntry` (otherwise an 8-byte-aligned struct) to have 8 bytes of
+//! trailing padding — `Pod` rejects padding bytes.
+//!
+//! Splitting the key into two `u64` fields keeps the type 8-byte-aligned,
+//! 16 bytes wide, padding-free, and `Pod` — while still letting the
+//! comparator behave like a `u128` ordering via the conceptual
+//! `(price as u128) << 64 | seq` mapping.
 
 use core::cmp::Ordering;
 
-/// Packed `(price, seq)` key. Layout: `(price as u128) << 64 | (seq as u128)`.
+/// `(price, seq)` order key.
 ///
-/// This is `#[repr(transparent)]` over `u128` so it can be stored in a
-/// zero-copy `BookSide` later (U3) without any conversion.
-#[repr(transparent)]
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
-pub struct OrderKey(pub u128);
+/// Layout: `#[repr(C)] { price: u64, seq: u64 }`. Conceptually still the
+/// packed-`u128` key of the U2 docs — see the module preamble for the
+/// reason for the field split.
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    Hash,
+    bytemuck::Pod,
+    bytemuck::Zeroable,
+)]
+pub struct OrderKey {
+    price: u64,
+    seq: u64,
+}
 
 impl OrderKey {
     /// Construct from `(price, seq)`.
     #[inline]
     pub const fn new(price: u64, seq: u64) -> Self {
-        OrderKey(((price as u128) << 64) | (seq as u128))
+        Self { price, seq }
     }
 
     /// Extract the price half.
     #[inline]
     pub const fn price(self) -> u64 {
-        (self.0 >> 64) as u64
+        self.price
     }
 
     /// Extract the sequence half.
     #[inline]
     pub const fn seq(self) -> u64 {
-        (self.0 & 0xFFFF_FFFF_FFFF_FFFF) as u64
+        self.seq
     }
 
     /// Comparator for the **ask** side: best (lowest) price first; within a
-    /// price, earliest `seq` first. This is the natural `u128` ordering on
-    /// the packed key.
+    /// price, earliest `seq` first.
+    ///
+    /// Equivalent to the U2 doc's "natural `u128` ordering on
+    /// `(price << 64) | seq`": compare price first, then seq.
     #[inline]
     pub fn cmp_ask(&self, other: &Self) -> Ordering {
-        self.0.cmp(&other.0)
+        match self.price.cmp(&other.price) {
+            Ordering::Equal => self.seq.cmp(&other.seq),
+            non_eq => non_eq,
+        }
     }
 
     /// Comparator for the **bid** side: best (highest) price first; within a
     /// price, earliest `seq` first.
     ///
-    /// Note: we cannot simply `other.0.cmp(&self.0)` because that would
-    /// also reverse the seq order, which would put **later** orders ahead
-    /// at equal price and break FIFO. Compare price descending and seq
-    /// ascending explicitly.
+    /// Note: we cannot simply reverse the whole key ordering because that
+    /// would also reverse the seq order, which would put **later** orders
+    /// ahead at equal price and break FIFO. Compare price descending and
+    /// seq ascending explicitly.
     #[inline]
     pub fn cmp_bid(&self, other: &Self) -> Ordering {
-        match other.price().cmp(&self.price()) {
-            Ordering::Equal => self.seq().cmp(&other.seq()),
+        match other.price.cmp(&self.price) {
+            Ordering::Equal => self.seq.cmp(&other.seq),
             non_eq => non_eq,
         }
     }
 }
+
+// Anchor's `#[program]` macro emits IDL-builder calls on every type that
+// ends up in an `#[account(zero_copy)]` field tree (see
+// `anchor-syn::idl::accounts`). We're not interested in surfacing the
+// matching engine's internal types in the IDL — they're plumbing — but
+// they must satisfy `IdlBuild`. The default trait impl is empty and the
+// trait lives behind the `idl-build` feature; both impls below are gated
+// so non-IDL builds don't pull in any extra deps.
+#[cfg(feature = "idl-build")]
+impl anchor_lang::IdlBuild for OrderKey {}
 
 #[cfg(test)]
 mod order_key_tests {
@@ -91,7 +134,8 @@ mod order_key_tests {
         assert_eq!(k.seq(), u64::MAX);
 
         let z = OrderKey::new(0, 0);
-        assert_eq!(z.0, 0);
+        assert_eq!(z.price(), 0);
+        assert_eq!(z.seq(), 0);
     }
 
     #[test]

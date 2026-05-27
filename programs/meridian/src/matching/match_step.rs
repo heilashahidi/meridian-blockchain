@@ -95,6 +95,13 @@ impl<const N: usize> MatchResult<N> {
 /// Self-trade prevention is *not* applied here (the plan defers
 /// "self-trade prevention beyond owner-equality check" to follow-up work);
 /// the caller may filter fills with `maker_owner == taker.owner` if needed.
+///
+/// Note: `opposite` is the side the taker matches against (the *opposing*
+/// side). The U3 refactor removed the cached `side` field from `BookSide`,
+/// so the caller is responsible for passing the correct side here. The
+/// match path doesn't otherwise need the side — it just walks from the
+/// front, which is best-first by construction regardless of which sort
+/// the side was built with.
 pub fn match_step<const N: usize>(
     taker: TakerOrder,
     opposite: &mut BookSide<N>,
@@ -105,7 +112,6 @@ pub fn match_step<const N: usize>(
     if taker.order_type == OrderType::Limit && taker.limit_price == 0 {
         return Err(MatchError::InvalidPrice);
     }
-    debug_assert_eq!(opposite.side(), taker.side.opposite());
 
     let mut fills: ArrayVec<Fill, N> = ArrayVec::new();
     let mut remaining = taker.qty;
@@ -181,7 +187,7 @@ mod match_step_tests {
     #[test]
     fn taker_ask_fully_fills_against_single_bid() {
         let mut bids: BookSide<8> = BookSide::new(Side::Bid);
-        bids.insert(entry(40, 1, 100, 0xAA)).unwrap();
+        bids.insert(Side::Bid, entry(40, 1, 100, 0xAA)).unwrap();
         let res = match_step(
             TakerOrder {
                 side: Side::Ask,
@@ -204,9 +210,9 @@ mod match_step_tests {
     #[test]
     fn fifo_three_bids_one_large_ask() {
         let mut bids: BookSide<8> = BookSide::new(Side::Bid);
-        bids.insert(entry(40, 1, 10, 0x01)).unwrap();
-        bids.insert(entry(40, 2, 10, 0x02)).unwrap();
-        bids.insert(entry(40, 3, 10, 0x03)).unwrap();
+        bids.insert(Side::Bid, entry(40, 1, 10, 0x01)).unwrap();
+        bids.insert(Side::Bid, entry(40, 2, 10, 0x02)).unwrap();
+        bids.insert(Side::Bid, entry(40, 3, 10, 0x03)).unwrap();
         let res = match_step(
             TakerOrder {
                 side: Side::Ask,
@@ -228,7 +234,7 @@ mod match_step_tests {
     #[test]
     fn no_match_when_prices_dont_cross() {
         let mut asks: BookSide<8> = BookSide::new(Side::Ask);
-        asks.insert(entry(50, 1, 10, 0xCC)).unwrap();
+        asks.insert(Side::Ask, entry(50, 1, 10, 0xCC)).unwrap();
         let res = match_step(
             TakerOrder {
                 side: Side::Bid,
@@ -248,7 +254,7 @@ mod match_step_tests {
     #[test]
     fn market_order_residual_returned_when_book_shallow() {
         let mut asks: BookSide<8> = BookSide::new(Side::Ask);
-        asks.insert(entry(50, 1, 5, 0x11)).unwrap();
+        asks.insert(Side::Ask, entry(50, 1, 5, 0x11)).unwrap();
         let res = match_step(
             TakerOrder {
                 side: Side::Bid,
@@ -269,8 +275,8 @@ mod match_step_tests {
     #[test]
     fn partial_fill_preserves_fifo_position() {
         let mut bids: BookSide<8> = BookSide::new(Side::Bid);
-        bids.insert(entry(50, 1, 10, 0xAA)).unwrap();
-        bids.insert(entry(50, 2, 10, 0xBB)).unwrap();
+        bids.insert(Side::Bid, entry(50, 1, 10, 0xAA)).unwrap();
+        bids.insert(Side::Bid, entry(50, 2, 10, 0xBB)).unwrap();
         // Taker ask of 3 — should partially fill the first bid only.
         let res = match_step(
             TakerOrder {
@@ -298,8 +304,8 @@ mod match_step_tests {
         // Two asks at $50 and $60. Market buy with slippage bound $55
         // should only sweep the first level.
         let mut asks: BookSide<8> = BookSide::new(Side::Ask);
-        asks.insert(entry(50, 1, 5, 0xAA)).unwrap();
-        asks.insert(entry(60, 2, 5, 0xBB)).unwrap();
+        asks.insert(Side::Ask, entry(50, 1, 5, 0xAA)).unwrap();
+        asks.insert(Side::Ask, entry(60, 2, 5, 0xBB)).unwrap();
         let res = match_step(
             TakerOrder {
                 side: Side::Bid,

@@ -12,12 +12,29 @@
 //!
 //! Pattern ported from OpenBook v2's `programs/openbook-v2/src/state/orderbook/`
 //! (fixed-array node management).
+//!
+//! ## Zero-copy refactor (U3)
+//!
+//! U3 stores `BookSide<N>` inside an `#[account(zero_copy)]` Anchor account.
+//! That requires the struct to be `bytemuck::Pod`, which in turn forbids
+//! enum fields (no niche guarantees) and tag fields whose values are
+//! constrained (e.g. only 0 or 1). The U2-era `BookSide` carried a
+//! `side: Side` field for the comparator dispatch; U3 removes the field and
+//! the caller passes `Side` into the methods that need it.
+//!
+//! The Anchor `Book` PDA pairs two `BookSide<N>` instances — one for bids,
+//! one for asks — and the surrounding `Book` struct knows which is which by
+//! position. Tests and any out-of-program callers pass the same explicit
+//! `Side` they used to construct the side via [`BookSide::new`].
 
 use core::cmp::Ordering;
 
 use crate::matching::order_key::OrderKey;
 
 /// Which side of the book a resting order lives on.
+///
+/// Note: this is *not* stored on `BookSide` itself (see module docs) — it
+/// is passed by value into methods that need the comparator dispatch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub enum Side {
     Bid,
@@ -36,8 +53,24 @@ impl Side {
 }
 
 /// One resting order. `owner` is `[u8; 32]` for U2's no-Solana stance — the
-/// Anchor wrapper will pass `pubkey.to_bytes()` at U3 time.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+/// Anchor wrapper passes `pubkey.to_bytes()` at U3 time.
+///
+/// `#[repr(C)]` + `Pod + Zeroable` so the entry can live inline in a
+/// zero-copy `Book` account. The trailing `_pad` field aligns the struct to
+/// 8 bytes (already true by layout — `u128 + [u8;32] + u64` = 56 bytes, all
+/// 8-byte aligned — but the explicit `repr(C)` keeps the layout stable
+/// across Rust versions).
+#[repr(C)]
+#[derive(
+    Clone,
+    Copy,
+    Debug,
+    Default,
+    Eq,
+    PartialEq,
+    bytemuck::Pod,
+    bytemuck::Zeroable,
+)]
 pub struct OrderEntry {
     pub key: OrderKey,
     pub owner: [u8; 32],
@@ -66,33 +99,64 @@ pub struct OrderNotFound;
 ///
 /// Holds up to `N` resting orders sorted best-first per [`Side`].
 /// Empty slots beyond `len` are `OrderEntry::default()` but **not** indexed.
-#[derive(Clone, Debug)]
+///
+/// `len` is `u64` rather than `usize` so the layout is stable across host
+/// (64-bit) and BPF (also 64-bit but Anchor's account ABI fixes the width
+/// explicitly). The Pod derive requires this — `usize` isn't `Pod`.
+///
+/// `Pod` / `Zeroable` are implemented by hand below rather than via the
+/// `bytemuck` derive macro. The derive macro can't prove a const-generic
+/// array `[OrderEntry; N]` is `Pod` (it expands a `where` clause naming
+/// the concrete field type), so we open-code the impls and rely on the
+/// bytemuck library's blanket `impl<T: Pod, const N: usize> Pod for [T; N]`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
 pub struct BookSide<const N: usize> {
-    side: Side,
-    len: usize,
+    len: u64,
     entries: [OrderEntry; N],
 }
 
-impl<const N: usize> BookSide<N> {
-    /// Create an empty side.
-    pub fn new(side: Side) -> Self {
+// SAFETY: `BookSide<N>` is `#[repr(C)]`, contains only `Pod` fields
+// (`u64` and `[OrderEntry; N]`), has no uninhabited types, and has no
+// padding because both fields are 8-byte aligned and the struct's natural
+// alignment is 8. `Zeroable` is satisfied because the all-zero byte
+// pattern is a valid `BookSide` (len=0, all-zero entries) — equivalent to
+// `BookSide::default()`.
+unsafe impl<const N: usize> bytemuck::Zeroable for BookSide<N> {}
+unsafe impl<const N: usize> bytemuck::Pod for BookSide<N> {}
+
+// IDL-builder stub. See `order_key.rs` for the rationale — the matching
+// engine's internal types are plumbing and don't need to surface in the
+// generated IDL. The default trait body is empty, which is what we want.
+#[cfg(feature = "idl-build")]
+impl<const N: usize> anchor_lang::IdlBuild for BookSide<N> {}
+
+#[cfg(feature = "idl-build")]
+impl anchor_lang::IdlBuild for OrderEntry {}
+
+impl<const N: usize> Default for BookSide<N> {
+    fn default() -> Self {
         Self {
-            side,
             len: 0,
             entries: [OrderEntry::default(); N],
         }
     }
+}
 
-    /// Which side this is.
-    #[inline]
-    pub fn side(&self) -> Side {
-        self.side
+impl<const N: usize> BookSide<N> {
+    /// Create an empty side.
+    ///
+    /// `_side` is accepted for source-compatibility with the U2 API but is
+    /// no longer stored — see module docs. Callers must pass the same side
+    /// into any method that needs the comparator dispatch.
+    pub fn new(_side: Side) -> Self {
+        Self::default()
     }
 
     /// Number of resting orders.
     #[inline]
     pub fn len(&self) -> usize {
-        self.len
+        self.len as usize
     }
 
     /// Capacity (the const generic).
@@ -108,13 +172,13 @@ impl<const N: usize> BookSide<N> {
 
     #[inline]
     pub fn is_full(&self) -> bool {
-        self.len == N
+        self.len as usize == N
     }
 
     /// Read-only view of the sorted, in-use prefix.
     #[inline]
     pub fn as_slice(&self) -> &[OrderEntry] {
-        &self.entries[..self.len]
+        &self.entries[..self.len as usize]
     }
 
     /// Best (front-of-book) entry, if any.
@@ -127,24 +191,24 @@ impl<const N: usize> BookSide<N> {
         }
     }
 
-    /// Compare two keys using this side's comparator.
+    /// Compare two keys using the given side's comparator.
     #[inline]
-    fn cmp_keys(&self, a: &OrderKey, b: &OrderKey) -> Ordering {
-        match self.side {
+    fn cmp_keys(side: Side, a: &OrderKey, b: &OrderKey) -> Ordering {
+        match side {
             Side::Bid => a.cmp_bid(b),
             Side::Ask => a.cmp_ask(b),
         }
     }
 
-    /// Insert an order. Returns its stable [`OrderId`] on success, [`BookFull`]
-    /// if at capacity.
+    /// Insert an order on the given `side`. Returns its stable [`OrderId`]
+    /// on success, [`BookFull`] if at capacity.
     ///
     /// Caller is responsible for choosing a `seq` strictly larger than any
     /// previously-inserted seq on this side (or across both sides, if the
     /// program shares one sequencer — Meridian does). Duplicate keys are
     /// rejected as a defensive measure even though the caller shouldn't
     /// produce them.
-    pub fn insert(&mut self, entry: OrderEntry) -> Result<OrderId, BookFull> {
+    pub fn insert(&mut self, side: Side, entry: OrderEntry) -> Result<OrderId, BookFull> {
         if self.is_full() {
             return Err(BookFull);
         }
@@ -154,23 +218,29 @@ impl<const N: usize> BookSide<N> {
         // because the caller bumps `seq` on every insert; even if it did,
         // inserting at `found` simply pushes the dup to the same slot,
         // which keeps the sort stable.)
-        let pos = self.entries[..self.len]
-            .binary_search_by(|probe| self.cmp_keys(&probe.key, &entry.key))
+        let len = self.len as usize;
+        let pos = self.entries[..len]
+            .binary_search_by(|probe| Self::cmp_keys(side, &probe.key, &entry.key))
             .unwrap_or_else(|ins| ins);
         // Shift right.
-        if pos < self.len {
-            self.entries.copy_within(pos..self.len, pos + 1);
+        if pos < len {
+            self.entries.copy_within(pos..len, pos + 1);
         }
         self.entries[pos] = entry;
         self.len += 1;
         Ok(OrderId(entry.key))
     }
 
-    /// Remove an order by its stable id. Returns the removed entry, or
-    /// [`OrderNotFound`] if no resting order matches.
-    pub fn cancel_by_id(&mut self, id: OrderId) -> Result<OrderEntry, OrderNotFound> {
-        let pos = self.entries[..self.len]
-            .binary_search_by(|probe| self.cmp_keys(&probe.key, &id.0))
+    /// Remove an order by its stable id on the given `side`. Returns the
+    /// removed entry, or [`OrderNotFound`] if no resting order matches.
+    pub fn cancel_by_id(
+        &mut self,
+        side: Side,
+        id: OrderId,
+    ) -> Result<OrderEntry, OrderNotFound> {
+        let len = self.len as usize;
+        let pos = self.entries[..len]
+            .binary_search_by(|probe| Self::cmp_keys(side, &probe.key, &id.0))
             .map_err(|_| OrderNotFound)?;
         Ok(self.remove_at(pos))
     }
@@ -206,19 +276,20 @@ impl<const N: usize> BookSide<N> {
 
     /// Sum of resting qty across the side. Used by tests / invariant checks.
     pub fn total_qty(&self) -> u128 {
-        self.entries[..self.len]
+        self.entries[..self.len as usize]
             .iter()
             .map(|e| e.qty as u128)
             .sum()
     }
 
     fn remove_at(&mut self, pos: usize) -> OrderEntry {
+        let len = self.len as usize;
         let removed = self.entries[pos];
-        if pos + 1 < self.len {
-            self.entries.copy_within((pos + 1)..self.len, pos);
+        if pos + 1 < len {
+            self.entries.copy_within((pos + 1)..len, pos);
         }
         self.len -= 1;
-        self.entries[self.len] = OrderEntry::default();
+        self.entries[self.len as usize] = OrderEntry::default();
         removed
     }
 }
@@ -247,10 +318,10 @@ mod book_side_tests {
     #[test]
     fn bid_sort_is_price_desc_seq_asc() {
         let mut b: BookSide<8> = BookSide::new(Side::Bid);
-        b.insert(mk(40, 1, 5)).unwrap();
-        b.insert(mk(50, 2, 5)).unwrap();
-        b.insert(mk(50, 3, 5)).unwrap();
-        b.insert(mk(45, 4, 5)).unwrap();
+        b.insert(Side::Bid, mk(40, 1, 5)).unwrap();
+        b.insert(Side::Bid, mk(50, 2, 5)).unwrap();
+        b.insert(Side::Bid, mk(50, 3, 5)).unwrap();
+        b.insert(Side::Bid, mk(45, 4, 5)).unwrap();
         let prices_and_seq: Vec<_> = b
             .as_slice()
             .iter()
@@ -262,10 +333,10 @@ mod book_side_tests {
     #[test]
     fn ask_sort_is_price_asc_seq_asc() {
         let mut a: BookSide<8> = BookSide::new(Side::Ask);
-        a.insert(mk(60, 10, 1)).unwrap();
-        a.insert(mk(55, 11, 1)).unwrap();
-        a.insert(mk(55, 12, 1)).unwrap();
-        a.insert(mk(70, 13, 1)).unwrap();
+        a.insert(Side::Ask, mk(60, 10, 1)).unwrap();
+        a.insert(Side::Ask, mk(55, 11, 1)).unwrap();
+        a.insert(Side::Ask, mk(55, 12, 1)).unwrap();
+        a.insert(Side::Ask, mk(70, 13, 1)).unwrap();
         let prices_and_seq: Vec<_> = a
             .as_slice()
             .iter()
@@ -277,38 +348,38 @@ mod book_side_tests {
     #[test]
     fn full_book_rejects() {
         let mut a: BookSide<2> = BookSide::new(Side::Ask);
-        a.insert(mk(10, 1, 1)).unwrap();
-        a.insert(mk(20, 2, 1)).unwrap();
-        assert_eq!(a.insert(mk(30, 3, 1)), Err(BookFull));
+        a.insert(Side::Ask, mk(10, 1, 1)).unwrap();
+        a.insert(Side::Ask, mk(20, 2, 1)).unwrap();
+        assert_eq!(a.insert(Side::Ask, mk(30, 3, 1)), Err(BookFull));
     }
 
     #[test]
     fn cancel_removes_and_shifts() {
         let mut b: BookSide<8> = BookSide::new(Side::Bid);
-        let id_a = b.insert(mk(40, 1, 5)).unwrap();
-        let id_b = b.insert(mk(50, 2, 5)).unwrap();
-        let id_c = b.insert(mk(45, 3, 5)).unwrap();
+        let id_a = b.insert(Side::Bid, mk(40, 1, 5)).unwrap();
+        let id_b = b.insert(Side::Bid, mk(50, 2, 5)).unwrap();
+        let id_c = b.insert(Side::Bid, mk(45, 3, 5)).unwrap();
         assert_eq!(b.len(), 3);
 
-        let removed = b.cancel_by_id(id_b).unwrap();
+        let removed = b.cancel_by_id(Side::Bid, id_b).unwrap();
         assert_eq!(removed.qty, 5);
         assert_eq!(b.len(), 2);
         assert_eq!(b.best().unwrap().key.price(), 45);
 
         // Cancel best, then last.
-        b.cancel_by_id(id_c).unwrap();
-        b.cancel_by_id(id_a).unwrap();
+        b.cancel_by_id(Side::Bid, id_c).unwrap();
+        b.cancel_by_id(Side::Bid, id_a).unwrap();
         assert!(b.is_empty());
 
         // Cancel missing → NotFound.
-        assert_eq!(b.cancel_by_id(id_a), Err(OrderNotFound));
+        assert_eq!(b.cancel_by_id(Side::Bid, id_a), Err(OrderNotFound));
     }
 
     #[test]
     fn pop_front_returns_best_then_next() {
         let mut a: BookSide<4> = BookSide::new(Side::Ask);
-        a.insert(mk(20, 1, 7)).unwrap();
-        a.insert(mk(10, 2, 3)).unwrap();
+        a.insert(Side::Ask, mk(20, 1, 7)).unwrap();
+        a.insert(Side::Ask, mk(10, 2, 3)).unwrap();
         assert_eq!(a.pop_front().unwrap().key.price(), 10);
         assert_eq!(a.pop_front().unwrap().key.price(), 20);
         assert!(a.pop_front().is_none());
@@ -317,8 +388,8 @@ mod book_side_tests {
     #[test]
     fn decrement_front_preserves_fifo_position() {
         let mut b: BookSide<4> = BookSide::new(Side::Bid);
-        b.insert(mk(50, 1, 10)).unwrap();
-        b.insert(mk(50, 2, 4)).unwrap();
+        b.insert(Side::Bid, mk(50, 1, 10)).unwrap();
+        b.insert(Side::Bid, mk(50, 2, 4)).unwrap();
         b.decrement_front(3);
         assert_eq!(b.best().unwrap().qty, 7);
         assert_eq!(b.best().unwrap().key.seq(), 1);

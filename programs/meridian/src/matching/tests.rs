@@ -41,7 +41,7 @@ fn mk_entry(price: u64, seq: u64, qty: u64, owner_byte: u8) -> OrderEntry {
 #[test]
 fn happy_one_bid_one_crossing_ask_clears_book() {
     let mut bids: BookSide<N> = BookSide::new(Side::Bid);
-    bids.insert(mk_entry(40, 1, 100, 0xAA)).unwrap();
+    bids.insert(Side::Bid, mk_entry(40, 1, 100, 0xAA)).unwrap();
     let res = match_step(
         TakerOrder {
             side: Side::Ask,
@@ -61,9 +61,9 @@ fn happy_one_bid_one_crossing_ask_clears_book() {
 #[test]
 fn fifo_three_same_price_then_large_ask() {
     let mut bids: BookSide<N> = BookSide::new(Side::Bid);
-    bids.insert(mk_entry(40, 1, 10, 0x01)).unwrap();
-    bids.insert(mk_entry(40, 2, 10, 0x02)).unwrap();
-    bids.insert(mk_entry(40, 3, 10, 0x03)).unwrap();
+    bids.insert(Side::Bid, mk_entry(40, 1, 10, 0x01)).unwrap();
+    bids.insert(Side::Bid, mk_entry(40, 2, 10, 0x02)).unwrap();
+    bids.insert(Side::Bid, mk_entry(40, 3, 10, 0x03)).unwrap();
     let res = match_step(
         TakerOrder {
             side: Side::Ask,
@@ -82,7 +82,7 @@ fn fifo_three_same_price_then_large_ask() {
 #[test]
 fn no_match_residual_when_limit_below_best_ask() {
     let mut asks: BookSide<N> = BookSide::new(Side::Ask);
-    asks.insert(mk_entry(50, 1, 10, 0xCC)).unwrap();
+    asks.insert(Side::Ask, mk_entry(50, 1, 10, 0xCC)).unwrap();
     let res = match_step(
         TakerOrder {
             side: Side::Bid,
@@ -102,9 +102,9 @@ fn no_match_residual_when_limit_below_best_ask() {
 #[test]
 fn cancel_then_match_skips_cancelled_order() {
     let mut bids: BookSide<N> = BookSide::new(Side::Bid);
-    let id_a = bids.insert(mk_entry(50, 1, 10, 0xAA)).unwrap();
-    let _id_b = bids.insert(mk_entry(50, 2, 10, 0xBB)).unwrap();
-    bids.cancel_by_id(id_a).unwrap();
+    let id_a = bids.insert(Side::Bid, mk_entry(50, 1, 10, 0xAA)).unwrap();
+    let _id_b = bids.insert(Side::Bid, mk_entry(50, 2, 10, 0xBB)).unwrap();
+    bids.cancel_by_id(Side::Bid, id_a).unwrap();
     // Taker should now match against BB (the only remaining order).
     let res = match_step(
         TakerOrder {
@@ -125,16 +125,16 @@ fn cancel_then_match_skips_cancelled_order() {
 #[test]
 fn place_into_full_book_returns_bookfull() {
     let mut a: BookSide<2> = BookSide::new(Side::Ask);
-    a.insert(mk_entry(10, 1, 1, 0)).unwrap();
-    a.insert(mk_entry(20, 2, 1, 0)).unwrap();
-    assert!(a.insert(mk_entry(30, 3, 1, 0)).is_err());
+    a.insert(Side::Ask, mk_entry(10, 1, 1, 0)).unwrap();
+    a.insert(Side::Ask, mk_entry(20, 2, 1, 0)).unwrap();
+    assert!(a.insert(Side::Ask, mk_entry(30, 3, 1, 0)).is_err());
 }
 
 #[test]
 fn partial_fill_decrements_in_place_preserves_fifo() {
     let mut bids: BookSide<N> = BookSide::new(Side::Bid);
-    bids.insert(mk_entry(50, 1, 10, 0xAA)).unwrap();
-    bids.insert(mk_entry(50, 2, 10, 0xBB)).unwrap();
+    bids.insert(Side::Bid, mk_entry(50, 1, 10, 0xAA)).unwrap();
+    bids.insert(Side::Bid, mk_entry(50, 2, 10, 0xBB)).unwrap();
     let res = match_step(
         TakerOrder {
             side: Side::Ask,
@@ -183,7 +183,7 @@ fn invalid_price_and_qty_rejected() {
 #[test]
 fn cancel_partially_filled_returns_remainder_only() {
     let mut bids: BookSide<N> = BookSide::new(Side::Bid);
-    let id_a = bids.insert(mk_entry(50, 1, 10, 0xAA)).unwrap();
+    let id_a = bids.insert(Side::Bid, mk_entry(50, 1, 10, 0xAA)).unwrap();
     // Partial fill of 4.
     match_step(
         TakerOrder {
@@ -196,7 +196,7 @@ fn cancel_partially_filled_returns_remainder_only() {
         &mut bids,
     )
     .unwrap();
-    let removed = bids.cancel_by_id(id_a).unwrap();
+    let removed = bids.cancel_by_id(Side::Bid, id_a).unwrap();
     assert_eq!(removed.qty, 6); // 10 placed − 4 filled.
 }
 
@@ -304,7 +304,7 @@ impl Sim {
                     qty,
                 };
                 self.next_seq += 1;
-                if let Ok(id) = self.bids.insert(entry) {
+                if let Ok(id) = self.bids.insert(Side::Bid, entry) {
                     self.bid_oracle.placed += qty as u128;
                     self.bid_oracle.entries.push(entry);
                     self.bid_ids.push(id);
@@ -317,7 +317,7 @@ impl Sim {
                     qty,
                 };
                 self.next_seq += 1;
-                if let Ok(id) = self.asks.insert(entry) {
+                if let Ok(id) = self.asks.insert(Side::Ask, entry) {
                     self.ask_oracle.placed += qty as u128;
                     self.ask_oracle.entries.push(entry);
                     self.ask_ids.push(id);
@@ -329,7 +329,7 @@ impl Sim {
                 }
                 let i = index % self.bid_ids.len();
                 let id = self.bid_ids.remove(i);
-                if let Ok(removed) = self.bids.cancel_by_id(id) {
+                if let Ok(removed) = self.bids.cancel_by_id(Side::Bid, id) {
                     self.bid_oracle.cancelled += removed.qty as u128;
                     // Find matching entry in oracle and remove.
                     if let Some(pos) =
@@ -345,7 +345,7 @@ impl Sim {
                 }
                 let i = index % self.ask_ids.len();
                 let id = self.ask_ids.remove(i);
-                if let Ok(removed) = self.asks.cancel_by_id(id) {
+                if let Ok(removed) = self.asks.cancel_by_id(Side::Ask, id) {
                     self.ask_oracle.cancelled += removed.qty as u128;
                     if let Some(pos) =
                         self.ask_oracle.entries.iter().position(|e| e.key == id.0)
