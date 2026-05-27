@@ -1,0 +1,22 @@
+[package]
+name = "meridian-matching"
+version = "0.1.0"
+edition = "2021"
+description = "Pure-Rust matching engine module for the Meridian on-chain CLOB. Will be wrapped by the Anchor `meridian` program at U1 time; standalone for U2."
+license = "Apache-2.0"
+publish = false
+
+# NOTE: Standalone crate for U2 per the U2 dispatch. This Cargo.toml will be
+# replaced by the Anchor program manifest when U1 (Anchor scaffolding) lands.
+# Until then, this crate stays free of Solana / Anchor dependencies so the
+# matching engine can be developed and tested without the Solana toolchain.
+
+[lib]
+name = "meridian_matching"
+path = "src/lib.rs"
+
+[dependencies]
+arrayvec = { version = "0.7", default-features = false }
+
+[dev-dependencies]
+proptest = "1.5"
