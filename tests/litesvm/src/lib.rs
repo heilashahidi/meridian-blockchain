@@ -399,3 +399,84 @@ pub fn set_clock_unix_ts(svm: &mut LiteSVM, new_ts: i64) {
 /// when test scenarios don't directly reference it.
 #[allow(dead_code)]
 fn _account_kept_live(_: Account) {}
+
+// ============================================================================
+// Cross-cutting invariant helper (U8)
+// ============================================================================
+//
+// Per plan §U8 verification:
+//   "escrow reconciliation invariant asserted in test teardown via helper."
+//
+// Rust's test framework doesn't expose teardown hooks; tests call
+// `assert_invariants(...)` explicitly at end-of-test (or after key
+// transitions) instead. The helper is opt-in by design.
+//
+// The invariants we assert are the cross-cutting ones from the plan's
+// Requirements ledger that survive mid-trade states:
+//
+//   R14:  yes_mint.supply == no_mint.supply
+//         Every mint_pair creates one Yes + one No; every burn_pair burns
+//         one of each. The supplies must always match.
+//
+//   USDC conservation (the $1.00 invariant precondition):
+//         sum(user_usdc) + sum(escrow_usdc) == initial_total
+//         No USDC is ever created or destroyed by program instructions —
+//         it only moves between user wallets and escrow PDAs. After settle
+//         + sweep + redeem, the same total is preserved.
+//
+// Mid-trade USDC-vs-open-bid-notional reconciliation is *not* asserted
+// here: that invariant holds only when no order is currently being
+// matched, and pinning it down requires the test to know the exact book
+// state, which is scenario-specific. We keep the helper minimal and
+// scenario-agnostic so it can be called at any logical breakpoint.
+
+/// USDC + supply invariants asserted across the test environment.
+///
+/// Pass every USDC-holding address (user ATAs + escrows + settlement
+/// vault) that should be counted toward the conservation sum. The
+/// `expected_total_usdc` argument is the total USDC seeded into the test
+/// at fixture time (admin minted into user wallets); the helper asserts
+/// nothing escaped.
+///
+/// `yes_mint` / `no_mint` are read for R14 (`supply_yes == supply_no`).
+pub fn assert_invariants(
+    svm: &LiteSVM,
+    usdc_holders: &[Address],
+    expected_total_usdc: u64,
+    yes_mint: &Address,
+    no_mint: &Address,
+) {
+    // R14: Yes and No supplies match.
+    let yes_supply = read_mint(svm, yes_mint).supply;
+    let no_supply = read_mint(svm, no_mint).supply;
+    assert_eq!(
+        yes_supply, no_supply,
+        "R14 violated: Yes supply {yes_supply} != No supply {no_supply}",
+    );
+
+    // USDC conservation: sum across the named accounts equals the seeded
+    // total. This catches both creation (program-side mint) and
+    // destruction (program-side burn or stuck-in-orphan-account) bugs.
+    let mut sum: u64 = 0;
+    for addr in usdc_holders {
+        // Some addresses may not exist as token accounts in a given
+        // scenario (e.g., a second-market escrow that's empty); treat
+        // missing accounts as zero so the helper composes cleanly across
+        // sub-tests that touch different account sets.
+        if let Some(account) = svm.get_account(addr) {
+            if account.owner == TOKEN_PROGRAM_ID && !account.data.is_empty() {
+                let state: spl_token_interface::state::Account =
+                    solana_program_pack::Pack::unpack(&account.data)
+                        .expect("unpack token account in assert_invariants");
+                sum = sum
+                    .checked_add(state.amount)
+                    .expect("USDC sum overflow — test seeded too much?");
+            }
+        }
+    }
+    assert_eq!(
+        sum, expected_total_usdc,
+        "USDC conservation violated: observed {sum} across {n} accounts, expected {expected_total_usdc}",
+        n = usdc_holders.len(),
+    );
+}
