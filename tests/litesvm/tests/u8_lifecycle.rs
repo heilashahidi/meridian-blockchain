@@ -176,10 +176,15 @@ impl Env {
 
         // initialize_config
         let fee_authority = Keypair::new().pubkey();
+        let mut init_args = fee_authority.to_bytes().to_vec();
+        // pyth_receiver: pin to our own program ID so the LiteSVM fixture
+        // (which set_account()s PriceUpdateV2 with owner=meridian) passes the
+        // settle_market owner check.
+        init_args.extend_from_slice(MERIDIAN_PROGRAM_ID.as_ref());
         let init_ix = anchor_ix(
             MERIDIAN_PROGRAM_ID,
             "initialize_config",
-            &fee_authority.to_bytes().to_vec(),
+            &init_args,
             vec![
                 AccountMeta::new(fx.admin.pubkey(), true),
                 AccountMeta::new(config_pda, false),
@@ -353,6 +358,7 @@ impl Env {
         let caller = self.users[0].kp.insecure_clone();
         let metas = vec![
             AccountMeta::new(caller.pubkey(), true),
+            AccountMeta::new_readonly(self.config_pda, false),
             AccountMeta::new(self.market.market_pda, false),
             AccountMeta::new_readonly(self.market.pyth_account, false),
         ];
@@ -705,10 +711,15 @@ fn multi_market_isolation() {
     let (config_pda, _) = fx.config_pda();
 
     let fee_authority = Keypair::new().pubkey();
+    let mut init_args = fee_authority.to_bytes().to_vec();
+    // pyth_receiver: pin to our own program ID so the LiteSVM fixture
+    // (which set_account()s PriceUpdateV2 with owner=meridian) passes the
+    // settle_market owner check.
+    init_args.extend_from_slice(MERIDIAN_PROGRAM_ID.as_ref());
     let init_ix = anchor_ix(
         MERIDIAN_PROGRAM_ID,
         "initialize_config",
-        &fee_authority.to_bytes().to_vec(),
+        &init_args,
         vec![
             AccountMeta::new(fx.admin.pubkey(), true),
             AccountMeta::new(config_pda, false),
@@ -863,6 +874,7 @@ fn multi_market_isolation() {
             &[],
             vec![
                 AccountMeta::new(kp.pubkey(), true),
+                AccountMeta::new_readonly(config_pda, false),
                 AccountMeta::new(market_a.market_pda, false),
                 AccountMeta::new_readonly(market_a.pyth_account, false),
             ],

@@ -32,13 +32,16 @@ pub struct CreateStrikeMarket<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
 
-    /// Global config — used only to authenticate the admin.
+    /// Global config — used only to authenticate the admin. Boxed so the
+    /// Config struct doesn't sit inline on the SBPF function frame
+    /// alongside the SPL accounts below; growing Config (e.g. adding
+    /// `pyth_receiver`) otherwise pushes try_accounts past the 4 KB cap.
     #[account(
         seeds = [Config::SEED],
         bump = config.bump,
         has_one = admin @ MeridianError::Unauthorized,
     )]
-    pub config: Account<'info, Config>,
+    pub config: Box<Account<'info, Config>>,
 
     /// Market PDA. Seed = `(ticker, strike, expiry)` so a second call for
     /// the same triple fails the PDA derivation.

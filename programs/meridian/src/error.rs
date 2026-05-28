@@ -109,4 +109,11 @@ pub enum MeridianError {
     /// caught at the call site rather than masked.
     #[msg("Internal invariant violated. This is a bug — please report.")]
     InvariantBroken,
+
+    /// `settle_market`'s `price_update` account is not owned by the
+    /// operator-pinned `Config.pyth_receiver` program. Distinct from
+    /// `OracleStale` / `OracleConfidenceTooWide` so the off-chain caller
+    /// can distinguish "wrong account passed" from "Pyth said no."
+    #[msg("Oracle account is not owned by the operator-pinned Pyth receiver program.")]
+    InvalidOracleOwner,
 }
