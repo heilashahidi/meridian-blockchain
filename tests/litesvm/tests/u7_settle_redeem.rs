@@ -25,7 +25,7 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use anchor_lang::AnchorSerialize;
+use anchor_lang::{AccountSerialize, AnchorSerialize};
 use litesvm::LiteSVM;
 use meridian_litesvm_tests::{
     anchor_ix, load_anchor_account, load_zero_copy_account, read_mint, read_token_account,
@@ -282,6 +282,29 @@ impl Env {
         let ix = anchor_ix(MERIDIAN_PROGRAM_ID, "mint_pair", &amount.to_le_bytes(), metas);
         let kp = self.users[i].kp.insecure_clone();
         submit(&mut self.fx.svm, ix, &[&kp]);
+    }
+
+    /// Force `config.paused = true` via raw account mutation (no on-chain
+    /// pause instruction exists yet — see module docs).
+    fn force_paused(&mut self) {
+        let config: meridian::state::Config =
+            load_anchor_account(&self.fx.svm, &self.config_pda);
+        let updated = meridian::state::Config {
+            paused: true,
+            ..config
+        };
+        let mut account = self
+            .fx
+            .svm
+            .get_account(&self.config_pda)
+            .expect("config exists");
+        let mut buf: Vec<u8> = Vec::new();
+        updated.try_serialize(&mut buf).expect("serialize Config");
+        account.data = buf;
+        self.fx
+            .svm
+            .set_account(self.config_pda, account)
+            .expect("set_account paused=true");
     }
 
     fn place_limit(
@@ -591,6 +614,47 @@ fn settle_fails_wide_confidence() {
     assert!(
         s.contains("OracleConfidenceTooWide") || s.contains("custom"),
         "expected OracleConfidenceTooWide, got {s}"
+    );
+}
+
+#[test]
+fn redeem_when_paused_rejected() {
+    // A settled market that is then paused must still reject redeem
+    // (ProgramPaused gate runs before the settled check).
+    let mut env = Env::new(1, 10_000);
+    env.seed_yes(0, 50);
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle YesWins");
+    env.force_paused();
+    let err = env
+        .redeem(0, env.yes_mint, env.users[0].yes, 50)
+        .expect_err("paused config must reject redeem");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("ProgramPaused") || s.contains("custom"),
+        "expected ProgramPaused, got {s}"
+    );
+}
+
+#[test]
+fn settle_sweep_when_paused_rejected() {
+    // Settled market with an open order; pausing must block settle_sweep.
+    let mut env = Env::new(1, 10_000);
+    env.place_limit(0, 0, 40, 10, &[]).expect("bid posts");
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle");
+    env.force_paused();
+    let err = env
+        .sweep(1, &[env.users[0].usdc])
+        .expect_err("paused config must reject settle_sweep");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("ProgramPaused") || s.contains("custom"),
+        "expected ProgramPaused, got {s}"
     );
 }
 

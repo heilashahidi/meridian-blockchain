@@ -360,6 +360,30 @@ impl Env {
             .set_account(self.config_pda, account)
             .expect("set_account paused=true");
     }
+
+    /// Force `market.settled = true` via raw account mutation (settle_market
+    /// needs a Pyth account; for the gate tests we just flip the flag).
+    fn force_settled(&mut self) {
+        let market: meridian::state::Market =
+            load_anchor_account(&self.fx.svm, &self.market_pda);
+        let updated = meridian::state::Market {
+            settled: true,
+            outcome: Some(meridian::state::Outcome::YesWins),
+            ..market
+        };
+        let mut buf: Vec<u8> = Vec::new();
+        updated.try_serialize(&mut buf).expect("serialize Market");
+        let mut account = self
+            .fx
+            .svm
+            .get_account(&self.market_pda)
+            .expect("market exists");
+        account.data = buf;
+        self.fx
+            .svm
+            .set_account(self.market_pda, account)
+            .expect("set_account settled=true");
+    }
 }
 
 #[derive(Debug)]
@@ -573,6 +597,110 @@ fn burn_pair_when_paused_rejected() {
     assert_eq!(b.no, 50);
     assert_eq!(b.escrow, 50);
     env.assert_invariant();
+}
+
+#[test]
+fn mint_pair_when_settled_rejected() {
+    let mut env = Env::new(100);
+    env.force_settled();
+
+    let ix = env.mint_pair_ix(50);
+    let user = env.user.insecure_clone();
+    let err = try_submit(&mut env.fx.svm, ix, &[&user])
+        .expect_err("mint_pair must fail on a settled market");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("MarketSettled") || s.contains("custom"),
+        "expected MarketSettled error, got: {s}",
+    );
+
+    // No tokens minted.
+    let b = env.balances();
+    assert_eq!(b.yes, 0);
+    assert_eq!(b.no, 0);
+    assert_eq!(b.escrow, 0);
+}
+
+#[test]
+fn burn_pair_when_settled_rejected() {
+    let mut env = Env::new(100);
+    let user = env.user.insecure_clone();
+
+    // Mint a pair while open so the user holds tokens, then settle + burn.
+    let mint_ix = env.mint_pair_ix(50);
+    submit(&mut env.fx.svm, mint_ix, &[&user]);
+    env.force_settled();
+
+    let burn_ix = env.burn_pair_ix(20);
+    let err = try_submit(&mut env.fx.svm, burn_ix, &[&user])
+        .expect_err("burn_pair must fail on a settled market");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("MarketSettled") || s.contains("custom"),
+        "expected MarketSettled error, got: {s}",
+    );
+
+    // Post-mint state preserved (burn was rejected).
+    let b = env.balances();
+    assert_eq!(b.yes, 50);
+    assert_eq!(b.no, 50);
+    assert_eq!(b.escrow, 50);
+}
+
+#[test]
+fn create_strike_market_when_paused_rejected() {
+    // Admin pauses, then tries to open a brand-new market → ProgramPaused.
+    let mut env = Env::new(0);
+    env.force_pause();
+
+    let ticker: [u8; 8] = *b"PAUSED__";
+    let strike_price: u64 = 999_000_000;
+    let expiry_unix: i64 = 200_000;
+    let pyth_feed_id = [0u8; 32];
+    let (market_pda, _) = env.fx.market_pda(&ticker, strike_price, expiry_unix);
+    let (book_pda, _) = env.fx.book_pda(&market_pda);
+    let (mint_authority, _) = env.fx.mint_authority_pda(&market_pda);
+    let (yes_mint, _) = env.fx.yes_mint_pda(&market_pda);
+    let (no_mint, _) = env.fx.no_mint_pda(&market_pda);
+    let (usdc_escrow, _) = env.fx.usdc_escrow_pda(&market_pda);
+    let (yes_escrow, _) = env.fx.yes_escrow_pda(&market_pda);
+
+    let args = meridian::CreateStrikeMarketArgs {
+        ticker,
+        strike_price,
+        expiry_unix,
+        pyth_feed_id,
+    };
+    let mut args_bytes = Vec::new();
+    args.serialize(&mut args_bytes).unwrap();
+    let ix = anchor_ix(
+        MERIDIAN_PROGRAM_ID,
+        "create_strike_market",
+        &args_bytes,
+        vec![
+            AccountMeta::new(env.fx.admin.pubkey(), true),
+            AccountMeta::new_readonly(env.config_pda, false),
+            AccountMeta::new(market_pda, false),
+            AccountMeta::new(book_pda, false),
+            AccountMeta::new(yes_mint, false),
+            AccountMeta::new(no_mint, false),
+            AccountMeta::new_readonly(mint_authority, false),
+            AccountMeta::new(usdc_escrow, false),
+            AccountMeta::new(yes_escrow, false),
+            AccountMeta::new_readonly(env.fx.usdc_mint.pubkey(), false),
+            AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
+            AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            AccountMeta::new_readonly(RENT_SYSVAR_ID, false),
+        ],
+    );
+    let admin = env.fx.admin.insecure_clone();
+    let err = try_submit(&mut env.fx.svm, ix, &[&admin])
+        .expect_err("create_strike_market must fail when paused");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("ProgramPaused") || s.contains("custom"),
+        "expected ProgramPaused error, got: {s}",
+    );
 }
 
 // ---------- keep imports live ----------

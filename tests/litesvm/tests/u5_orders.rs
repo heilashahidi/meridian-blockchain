@@ -445,6 +445,28 @@ impl Env {
             .expect("set_account settled=true");
     }
 
+    /// Force `config.paused = true` via raw account mutation (no on-chain
+    /// pause instruction exists yet — see module docs).
+    fn force_paused(&mut self) {
+        let config: meridian::state::Config =
+            load_anchor_account(&self.fx.svm, &self.config_pda);
+        let updated = meridian::state::Config {
+            paused: true,
+            ..config
+        };
+        let mut account = self
+            .fx
+            .svm
+            .get_account(&self.config_pda)
+            .expect("config exists");
+        let mut buf: Vec<u8> = Vec::new();
+        updated.try_serialize(&mut buf).expect("serialize Config");
+        account.data = buf;
+        self.fx
+            .svm
+            .set_account(self.config_pda, account)
+            .expect("set_account paused=true");
+    }
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -713,6 +735,53 @@ fn place_on_settled_market_rejected() {
     assert!(
         s.contains("MarketSettled") || s.contains("custom"),
         "expected MarketSettled error, got {s}",
+    );
+}
+
+#[test]
+fn place_limit_when_paused_rejected() {
+    let mut env = Env::new(1, 10_000);
+    env.force_paused();
+    let err = env
+        .place_limit(0, 0, 40, 100, &[])
+        .expect_err("paused config must reject place_limit_order");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("ProgramPaused") || s.contains("custom"),
+        "expected ProgramPaused, got {s}",
+    );
+}
+
+#[test]
+fn place_market_when_paused_rejected() {
+    let mut env = Env::new(1, 10_000);
+    env.force_paused();
+    // u64::MAX = "no ceiling" slippage bound for a bid taker; the paused gate
+    // fires before matching, so the bound value is immaterial here.
+    let err = env
+        .place_market(0, 0, 100, u64::MAX, &[])
+        .expect_err("paused config must reject place_market_order");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("ProgramPaused") || s.contains("custom"),
+        "expected ProgramPaused, got {s}",
+    );
+}
+
+#[test]
+fn cancel_when_paused_rejected() {
+    let mut env = Env::new(1, 10_000);
+    // Post a resting bid while open, capture its seq, then pause and cancel.
+    env.place_limit(0, 0, 40, 100, &[]).expect("bid posts");
+    let seq = env.book().bids.as_slice()[0].key.seq();
+    env.force_paused();
+    let err = env
+        .cancel(0, 0, 40, seq)
+        .expect_err("paused config must reject cancel_order");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("ProgramPaused") || s.contains("custom"),
+        "expected ProgramPaused, got {s}",
     );
 }
 
