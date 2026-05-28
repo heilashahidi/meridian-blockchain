@@ -37,9 +37,12 @@ pub use matching::{
 // satisfies the macro without polluting the public API with the
 // `handler` symbol collision (each module has its own `handler`).
 pub use instructions::burn_pair::*;
+pub use instructions::cancel_order::*;
 pub use instructions::create_strike_market::*;
 pub use instructions::initialize_config::*;
 pub use instructions::mint_pair::*;
+pub use instructions::place_limit_order::*;
+pub use instructions::place_market_order::*;
 
 // Program keypair generated on first `anchor build`; lives on disk at
 // `target/deploy/meridian-keypair.json` (gitignored) and is also reflected in
@@ -82,5 +85,37 @@ pub mod meridian {
     /// USDC from the per-market escrow. The symmetric inverse of `mint_pair`.
     pub fn burn_pair(ctx: Context<BurnPair>, amount: u64) -> Result<()> {
         instructions::burn_pair::burn_pair_handler(ctx, amount)
+    }
+
+    /// Place a price-time-priority limit order on the book. Partial fills
+    /// settle inline against opposing makers (up to
+    /// [`instructions::place_limit_order::MAX_FILLS_PER_TX`]); any residual
+    /// posts to the caller's side with the engine's next sequence number.
+    ///
+    /// Maker ATAs (USDC + Yes per fill) must be supplied as
+    /// `remaining_accounts` in fill order — see the module docs for the
+    /// layout.
+    pub fn place_limit_order<'info>(
+        ctx: Context<'info, PlaceLimitOrder<'info>>,
+        args: PlaceLimitOrderArgs,
+    ) -> Result<()> {
+        instructions::place_limit_order::place_limit_order_handler(ctx, args)
+    }
+
+    /// Place a market order — same matching flow as `place_limit_order`
+    /// but any unfilled residual is refunded to the taker rather than
+    /// posted. `slippage_bound` caps the worst price the taker accepts.
+    pub fn place_market_order<'info>(
+        ctx: Context<'info, PlaceMarketOrder<'info>>,
+        args: PlaceMarketOrderArgs,
+    ) -> Result<()> {
+        instructions::place_market_order::place_market_order_handler(ctx, args)
+    }
+
+    /// Cancel a resting order by its stable [`matching::OrderKey`] `(price,
+    /// seq)`. Owner-only; refunds the escrowed collateral to the owner's
+    /// ATA.
+    pub fn cancel_order(ctx: Context<CancelOrder>, args: CancelOrderArgs) -> Result<()> {
+        instructions::cancel_order::cancel_order_handler(ctx, args)
     }
 }
