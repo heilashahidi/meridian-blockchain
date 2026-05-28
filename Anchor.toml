@@ -1,0 +1,24 @@
+[toolchain]
+anchor_version = "1.0.0"
+
+[features]
+resolution = true
+skip-lint = false
+
+[programs.devnet]
+meridian = "6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX"
+
+[programs.localnet]
+meridian = "6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[workspace]
+members = ["programs/meridian"]
+
+[scripts]
+test = "cargo test -p meridian --lib matching::tests"
+
+[hooks]

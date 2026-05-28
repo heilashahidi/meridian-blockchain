@@ -1,0 +1,27 @@
+# Rust build artifacts
+target/
+**/*.rs.bk
+Cargo.lock.bak
+
+# Per-crate lockfiles inside workspace members (workspace root Cargo.lock
+# is the source of truth and IS committed for the binary program crate).
+programs/*/Cargo.lock
+
+# Anchor / Solana
+.anchor/
+test-ledger/
+target/deploy/*-keypair.json
+
+# Node (frontend / tooling, future workstreams)
+node_modules/
+
+# Env
+.env
+.env.local
+
+# OS / editor noise
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/

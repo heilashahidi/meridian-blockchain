@@ -1,0 +1,37 @@
+[workspace]
+# trident-tests is its own Cargo workspace, separate from the top-level
+# meridian workspace. trident init scaffolded this empty `[workspace]` table
+# to ensure the fuzz harness has independent dependency resolution from the
+# Anchor program build (different solana_sdk versions: trident-fuzz pulls
+# solana-sdk 3.x via trident-svm; the Anchor program uses a 2.x set via
+# anchor-lang 1.0).
+#
+# Because of that separation, the meridian crate is brought in as a path
+# dependency below (not a workspace member), which Cargo allows but routes
+# through the registry's own version resolution for transitive crates.
+
+[package]
+name = "fuzz_tests"
+version = "0.1.0"
+description = "Created with Trident"
+edition = "2021"
+
+[dependencies]
+borsh = "1.5.3"
+bytemuck = "1.16"
+sha2 = "0.10"
+trident-fuzz = { version = "0.12.0", features = ["token"] }
+# Pull in the meridian crate (no-entrypoint, same as LiteSVM tests) so we can
+# reuse the program's PDA seed constants and discriminator helpers. This means
+# the harness mirrors instruction surface changes automatically — when an
+# instruction's account list or args shift, the harness fails at compile time
+# instead of silently fuzzing the wrong shape.
+meridian = { path = "../programs/meridian", features = ["no-entrypoint"] }
+anchor-lang = "1.0.0"
+# SPL token state types — used to read+verify mint/account fields after
+# instructions ran on the SVM, matching the version Trident pins.
+spl-token-interface = "1"
+
+[[bin]]
+name = "clob_invariants"
+path = "clob_invariants/test_fuzz.rs"

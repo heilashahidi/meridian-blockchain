@@ -1,0 +1,8 @@
+[fuzz.metrics]
+enabled = true
+
+
+[[fuzz.programs]]
+address = "6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX"
+program = "../target/deploy/meridian.so"
+ 
