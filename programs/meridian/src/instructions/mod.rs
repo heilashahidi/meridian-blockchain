@@ -30,6 +30,7 @@
 //!     * [`redeem`] — winning-token holders burn for $1 USDC; no
 //!       deadline.
 
+pub mod admin;
 pub mod burn_pair;
 pub mod buy_no;
 pub mod cancel_order;
@@ -46,6 +47,7 @@ pub mod settle_sweep;
 // Re-export the `Accounts` structs and arg types only; each handler is
 // invoked via its module path in `lib.rs` so the per-module `handler`
 // symbols don't collide in this namespace.
+pub use admin::SetPaused;
 pub use burn_pair::BurnPair;
 pub use buy_no::{BuyNo, BuyNoArgs};
 pub use cancel_order::{CancelOrder, CancelOrderArgs};

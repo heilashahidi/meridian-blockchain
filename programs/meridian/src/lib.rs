@@ -36,6 +36,7 @@ pub use matching::{
 // instruction module's contents (including those generated modules)
 // satisfies the macro without polluting the public API with the
 // `handler` symbol collision (each module has its own `handler`).
+pub use instructions::admin::*;
 pub use instructions::burn_pair::*;
 pub use instructions::buy_no::*;
 pub use instructions::cancel_order::*;
@@ -81,6 +82,13 @@ pub mod meridian {
             fee_authority,
             pyth_receiver,
         )
+    }
+
+    /// Admin-only: flip the global `config.paused` kill switch. `true`
+    /// pauses every user-facing instruction; `false` resumes. The only
+    /// way to toggle the flag that `initialize_config` sets to `false`.
+    pub fn set_paused(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
+        instructions::admin::set_paused_handler(ctx, paused)
     }
 
     /// Admin-only: create a strike market (Market + Book + Yes/No mints

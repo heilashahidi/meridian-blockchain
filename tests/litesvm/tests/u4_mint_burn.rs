@@ -301,6 +301,25 @@ impl Env {
         anchor_ix(MERIDIAN_PROGRAM_ID, "burn_pair", &amount.to_le_bytes(), metas)
     }
 
+    /// Build a `set_paused(paused)` ix signed by `signer` (admin or not).
+    fn set_paused_ix(&self, signer: &Keypair, paused: bool) -> Instruction {
+        anchor_ix(
+            MERIDIAN_PROGRAM_ID,
+            "set_paused",
+            &[paused as u8],
+            vec![
+                AccountMeta::new_readonly(signer.pubkey(), true),
+                AccountMeta::new(self.config_pda, false),
+            ],
+        )
+    }
+
+    fn paused(&self) -> bool {
+        let config: meridian::state::Config =
+            load_anchor_account(&self.fx.svm, &self.config_pda);
+        config.paused
+    }
+
     /// Verify the $1.00 invariant: yes_supply == no_supply == usdc_escrow.amount.
     fn assert_invariant(&self) {
         let yes = read_mint(&self.fx.svm, &self.yes_mint);
@@ -701,6 +720,67 @@ fn create_strike_market_when_paused_rejected() {
         s.contains("ProgramPaused") || s.contains("custom"),
         "expected ProgramPaused error, got: {s}",
     );
+}
+
+#[test]
+fn admin_can_pause_and_unpause() {
+    let mut env = Env::new(0);
+    let admin = env.fx.admin.insecure_clone();
+    assert!(!env.paused(), "starts unpaused");
+
+    let ix = env.set_paused_ix(&admin, true);
+    submit(&mut env.fx.svm, ix, &[&admin]);
+    assert!(env.paused(), "admin pause sets paused=true");
+
+    let ix = env.set_paused_ix(&admin, false);
+    submit(&mut env.fx.svm, ix, &[&admin]);
+    assert!(!env.paused(), "admin unpause sets paused=false");
+}
+
+#[test]
+fn non_admin_cannot_pause() {
+    let mut env = Env::new(0);
+    let user = env.user.insecure_clone(); // not the admin
+    let ix = env.set_paused_ix(&user, true);
+    let err = try_submit(&mut env.fx.svm, ix, &[&user])
+        .expect_err("non-admin must not be able to pause");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("Unauthorized") || s.contains("custom"),
+        "expected Unauthorized, got: {s}",
+    );
+    assert!(!env.paused(), "paused stays false after a rejected attempt");
+}
+
+#[test]
+fn set_paused_gates_then_resumes_mint_pair() {
+    // End-to-end: the real instruction wires to the gate. Pause blocks
+    // mint_pair; unpause lets it through.
+    let mut env = Env::new(100);
+    let admin = env.fx.admin.insecure_clone();
+    let user = env.user.insecure_clone();
+
+    let pause_ix = env.set_paused_ix(&admin, true);
+    submit(&mut env.fx.svm, pause_ix, &[&admin]);
+    let mint_ix = env.mint_pair_ix(50);
+    let err = try_submit(&mut env.fx.svm, mint_ix, &[&user])
+        .expect_err("mint_pair must fail while paused");
+    assert!(
+        format!("{err:?}").contains("ProgramPaused") || format!("{err:?}").contains("custom"),
+        "expected ProgramPaused"
+    );
+
+    let unpause_ix = env.set_paused_ix(&admin, false);
+    submit(&mut env.fx.svm, unpause_ix, &[&admin]);
+    // Different amount than the rejected attempt so the tx signature differs
+    // (LiteSVM keeps a fixed blockhash; an identical tx would be deduped as
+    // AlreadyProcessed).
+    let mint_ix = env.mint_pair_ix(30);
+    submit(&mut env.fx.svm, mint_ix, &[&user]);
+    let b = env.balances();
+    assert_eq!(b.yes, 30);
+    assert_eq!(b.no, 30);
+    assert_eq!(b.escrow, 30);
 }
 
 // ---------- keep imports live ----------
