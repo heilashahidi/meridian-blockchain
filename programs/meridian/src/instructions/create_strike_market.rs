@@ -75,7 +75,7 @@ pub struct CreateStrikeMarket<'info> {
         payer = admin,
         mint::decimals = 6,
         mint::authority = mint_authority,
-        seeds = [b"yes_mint", market.key().as_ref()],
+        seeds = [Market::YES_MINT_SEED_PREFIX, market.key().as_ref()],
         bump,
     )]
     pub yes_mint: Account<'info, Mint>,
@@ -86,7 +86,7 @@ pub struct CreateStrikeMarket<'info> {
         payer = admin,
         mint::decimals = 6,
         mint::authority = mint_authority,
-        seeds = [b"no_mint", market.key().as_ref()],
+        seeds = [Market::NO_MINT_SEED_PREFIX, market.key().as_ref()],
         bump,
     )]
     pub no_mint: Account<'info, Mint>,

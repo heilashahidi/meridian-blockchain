@@ -24,7 +24,7 @@
 use anchor_lang::prelude::*;
 
 use crate::error::MeridianError;
-use crate::matching::book_side::{BookSide, Side};
+use crate::matching::book_side::BookSide;
 
 /// Book depth per side. Per plan Deferred §"Exact bounded depth per side":
 /// start with N=32 and adjust based on benchmarks. U3 ships at 32.
@@ -81,24 +81,6 @@ impl Book {
         Ok(n)
     }
 
-    /// Returns the [`BookSide`] reference for the given side. Convenience
-    /// for the order-placement instructions (U5).
-    #[inline]
-    pub fn side(&self, side: Side) -> &BookSide<BOOK_DEPTH> {
-        match side {
-            Side::Bid => &self.bids,
-            Side::Ask => &self.asks,
-        }
-    }
-
-    /// Mutable variant of [`Self::side`].
-    #[inline]
-    pub fn side_mut(&mut self, side: Side) -> &mut BookSide<BOOK_DEPTH> {
-        match side {
-            Side::Bid => &mut self.bids,
-            Side::Ask => &mut self.asks,
-        }
-    }
 }
 
 // Pin the on-chain layout. If a future change to `OrderEntry` /

@@ -87,6 +87,12 @@ impl VerificationLevel {
 
 /// One Pyth price feed update. Mirrors `pythnet_sdk::messages::PriceFeedMessage`
 /// byte-for-byte.
+///
+/// Only `feed_id`, `price`, `conf`, `exponent`, and `publish_time` are read
+/// by [`PriceUpdateV2::get_price_no_older_than`]. The remaining fields
+/// (`prev_publish_time`, `ema_price`, `ema_conf`) are **layout-only** — we
+/// carry them to keep the Borsh deserialization wire-compatible with real
+/// Pyth-posted accounts; the values are otherwise ignored by Meridian.
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PriceFeedMessage {
     pub feed_id: [u8; 32],
@@ -94,8 +100,11 @@ pub struct PriceFeedMessage {
     pub conf: u64,
     pub exponent: i32,
     pub publish_time: i64,
+    /// Layout-only. Not read by Meridian.
     pub prev_publish_time: i64,
+    /// Layout-only. Not read by Meridian.
     pub ema_price: i64,
+    /// Layout-only. Not read by Meridian.
     pub ema_conf: u64,
 }
 

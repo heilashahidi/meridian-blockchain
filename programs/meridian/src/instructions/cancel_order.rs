@@ -88,7 +88,7 @@ pub struct CancelOrder<'info> {
     pub yes_escrow: Box<Account<'info, TokenAccount>>,
 
     #[account(
-        seeds = [b"yes_mint", market.key().as_ref()],
+        seeds = [Market::YES_MINT_SEED_PREFIX, market.key().as_ref()],
         bump,
     )]
     pub yes_mint: Box<Account<'info, Mint>>,
@@ -135,10 +135,20 @@ pub struct CancelOrderArgs {
 }
 
 pub fn cancel_order_handler(ctx: Context<CancelOrder>, args: CancelOrderArgs) -> Result<()> {
-    // We *don't* gate cancel on `market.settled`: per plan §U7, the
-    // settle-sweep cranker calls into the same removal path to drain
-    // resting orders after settle. We do gate on `config.paused` so an
-    // operator pause halts everything user-driven.
+    // We *don't* gate cancel on `market.settled`. After settle, two paths
+    // drain resting orders:
+    //   * `settle_sweep` (public crank) pops orders directly via
+    //     `BookSide::pop_front` and refunds escrowed collateral to each
+    //     resting owner.
+    //   * Resting owners may also self-cancel via this instruction.
+    // The two paths are independent; this comment used to claim sweep
+    // "calls into the same removal path" but sweep does not invoke this
+    // handler. Leaving the post-settle path open here gives owners a
+    // self-service exit before the cranker reaches them — and the refund
+    // accounting is identical either way, so neither path can double-pay.
+    // Off-chain accounting should treat `sweep_cursor` as a drain-progress
+    // signal for the cranker only, not as a total-cancellation tally.
+    // (`config.paused` still halts everything user-driven.)
     require!(!ctx.accounts.config.paused, MeridianError::ProgramPaused);
 
     let side = match args.side {

@@ -116,7 +116,7 @@ pub struct SettleSweep<'info> {
 
     /// Yes mint — used to validate per-fill recipient ATAs.
     #[account(
-        seeds = [b"yes_mint", market.key().as_ref()],
+        seeds = [Market::YES_MINT_SEED_PREFIX, market.key().as_ref()],
         bump,
     )]
     pub yes_mint: Box<Account<'info, Mint>>,

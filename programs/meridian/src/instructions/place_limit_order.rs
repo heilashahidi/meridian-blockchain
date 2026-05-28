@@ -125,7 +125,7 @@ pub struct PlaceLimitOrder<'info> {
 
     /// Yes mint — only used to validate the escrow and maker ATAs.
     #[account(
-        seeds = [b"yes_mint", market.key().as_ref()],
+        seeds = [Market::YES_MINT_SEED_PREFIX, market.key().as_ref()],
         bump,
     )]
     pub yes_mint: Box<Account<'info, Mint>>,

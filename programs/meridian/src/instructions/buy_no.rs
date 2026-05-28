@@ -134,7 +134,7 @@ pub struct BuyNo<'info> {
     /// Yes mint — `mint::authority = mint_authority`.
     #[account(
         mut,
-        seeds = [b"yes_mint", market.key().as_ref()],
+        seeds = [Market::YES_MINT_SEED_PREFIX, market.key().as_ref()],
         bump,
     )]
     pub yes_mint: Box<Account<'info, Mint>>,
@@ -142,7 +142,7 @@ pub struct BuyNo<'info> {
     /// No mint — `mint::authority = mint_authority`.
     #[account(
         mut,
-        seeds = [b"no_mint", market.key().as_ref()],
+        seeds = [Market::NO_MINT_SEED_PREFIX, market.key().as_ref()],
         bump,
     )]
     pub no_mint: Box<Account<'info, Mint>>,

@@ -106,14 +106,14 @@ pub struct SellNo<'info> {
 
     #[account(
         mut,
-        seeds = [b"yes_mint", market.key().as_ref()],
+        seeds = [Market::YES_MINT_SEED_PREFIX, market.key().as_ref()],
         bump,
     )]
     pub yes_mint: Box<Account<'info, Mint>>,
 
     #[account(
         mut,
-        seeds = [b"no_mint", market.key().as_ref()],
+        seeds = [Market::NO_MINT_SEED_PREFIX, market.key().as_ref()],
         bump,
     )]
     pub no_mint: Box<Account<'info, Mint>>,

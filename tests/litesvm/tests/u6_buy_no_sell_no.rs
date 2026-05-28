@@ -631,8 +631,8 @@ fn buy_no_insufficient_book_depth_reverts_atomically() {
         .expect_err("buy_no must revert when book too thin");
     let s = format!("{err:?}");
     assert!(
-        s.contains("InvalidAmount") || s.contains("custom"),
-        "expected atomicity failure, got {s}",
+        s.contains("SlippageNotMet"),
+        "expected SlippageNotMet (atomicity failure on residual_qty != 0), got {s}",
     );
 
     // Pre-state preserved (the key atomicity assertion).
@@ -665,8 +665,8 @@ fn buy_no_slippage_too_high_reverts_atomically() {
         .expect_err("buy_no above slippage floor must revert");
     let s = format!("{err:?}");
     assert!(
-        s.contains("InvalidAmount") || s.contains("custom"),
-        "expected atomicity failure, got {s}",
+        s.contains("SlippageNotMet"),
+        "expected SlippageNotMet (no fills under slippage floor), got {s}",
     );
 
     // Atomicity: zero state change.
@@ -725,8 +725,8 @@ fn sell_no_no_book_depth_reverts_atomically() {
         .expect_err("sell_no with empty book must revert");
     let s = format!("{err:?}");
     assert!(
-        s.contains("InvalidAmount") || s.contains("custom"),
-        "expected atomicity failure, got {s}",
+        s.contains("SlippageNotMet"),
+        "expected SlippageNotMet (atomicity failure on residual_qty != 0), got {s}",
     );
 
     // No state change.

@@ -80,4 +80,13 @@ impl Market {
 
     /// Seed prefix for the per-market Yes-token escrow token account PDA.
     pub const YES_ESCROW_SEED_PREFIX: &'static [u8] = b"yes_escrow";
+
+    /// Seed prefix for the per-market Yes mint PDA. Used by every
+    /// `seeds = [Market::YES_MINT_SEED_PREFIX, market.key().as_ref()]`
+    /// account constraint across instructions.
+    pub const YES_MINT_SEED_PREFIX: &'static [u8] = b"yes_mint";
+
+    /// Seed prefix for the per-market No mint PDA. Mirror of
+    /// [`Self::YES_MINT_SEED_PREFIX`].
+    pub const NO_MINT_SEED_PREFIX: &'static [u8] = b"no_mint";
 }
