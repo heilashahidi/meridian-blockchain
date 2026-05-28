@@ -1166,13 +1166,32 @@ impl FuzzTest {
     /// only `0..fill_count` and ignores the rest. Appending these to any
     /// order that might cross is what lets fills actually settle — without
     /// them every crossing order reverts on the first fill.
-    fn maker_remaining(&self, market_idx: usize) -> Vec<AccountMeta> {
+    ///
+    /// Roughly 1 in 7 calls, we deliberately corrupt the FIRST pair by
+    /// swapping the USDC/Yes slots, so the USDC slot carries the Yes mint.
+    /// That fails the `usdc_ok` mint check (place_limit_order.rs:410) and
+    /// drives the ATA-close skip-and-continue branch (line 415): the taker
+    /// treats the first fill as un-payable, folds its qty into the residual,
+    /// and re-inserts the skipped maker with a fresh seq. Slot 0 is the one
+    /// read whenever any crossing happens (fill_count >= 1), so corrupting
+    /// it reliably exercises the skip path. This is the reworked P1
+    /// fund-movement code; fuzzing it under random sequences is the point of
+    /// the U9 gate, and the R13/R14/conservation asserts catch any escrow
+    /// mis-accounting in the skip + re-insert + residual-fold logic.
+    fn maker_remaining(&mut self, market_idx: usize) -> Vec<AccountMeta> {
         let maker_usdc = self.user_usdc[0];
         let maker_yes = self.markets[market_idx].user_yes_ata[0];
+        let corrupt_first = self.trident.random_from_range(0u64..7) == 0;
         let mut metas = Vec::with_capacity(MAX_FILLS_PER_TX * 2);
-        for _ in 0..MAX_FILLS_PER_TX {
-            metas.push(AccountMeta::new(maker_usdc, false));
-            metas.push(AccountMeta::new(maker_yes, false));
+        for i in 0..MAX_FILLS_PER_TX {
+            if corrupt_first && i == 0 {
+                // USDC slot now holds a Yes-mint account → usdc_ok == false → skip.
+                metas.push(AccountMeta::new(maker_yes, false));
+                metas.push(AccountMeta::new(maker_usdc, false));
+            } else {
+                metas.push(AccountMeta::new(maker_usdc, false));
+                metas.push(AccountMeta::new(maker_yes, false));
+            }
         }
         metas
     }
