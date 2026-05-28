@@ -264,6 +264,20 @@ impl<const N: usize> BookSide<N> {
         self.entries[0].qty -= delta;
     }
 
+    /// Add `delta` back onto the front entry's qty in place. The inverse of
+    /// [`Self::decrement_front`]: used when a partial fill's maker payout is
+    /// skipped, so the decremented remnant (still resting at the front)
+    /// reabsorbs the unpaid qty rather than the caller inserting a duplicate
+    /// entry. `delta` does not touch the key, so the sort order and FIFO
+    /// position are preserved.
+    pub fn increment_front(&mut self, delta: u64) {
+        debug_assert!(self.len > 0);
+        self.entries[0].qty = self.entries[0]
+            .qty
+            .checked_add(delta)
+            .expect("increment_front qty overflow");
+    }
+
     /// Front entry, mutable (for the match loop).
     #[inline]
     pub fn front_mut(&mut self) -> Option<&mut OrderEntry> {
@@ -439,5 +453,32 @@ mod book_side_tests {
         assert_eq!(b.best().unwrap().key.seq(), 1);
         // Order #2 still behind order #1.
         assert_eq!(b.as_slice()[1].key.seq(), 2);
+    }
+
+    #[test]
+    fn increment_front_inverts_decrement_and_preserves_position() {
+        let mut b: BookSide<4> = BookSide::new(Side::Bid);
+        b.insert(Side::Bid, mk(50, 1, 10)).unwrap();
+        b.insert(Side::Bid, mk(50, 2, 4)).unwrap();
+        b.decrement_front(3);
+        b.increment_front(3);
+        // Front qty and seq restored to the original; second entry unmoved.
+        assert_eq!(b.best().unwrap().qty, 10);
+        assert_eq!(b.best().unwrap().key.seq(), 1);
+        assert_eq!(b.as_slice()[1].key.seq(), 2);
+        assert_eq!(b.len(), 2);
+        assert_eq!(b.total_qty(), 14);
+    }
+
+    #[test]
+    fn increment_front_on_single_entry_restores_qty() {
+        let mut a: BookSide<4> = BookSide::new(Side::Ask);
+        a.insert(Side::Ask, mk(30, 1, 5)).unwrap();
+        a.decrement_front(2);
+        assert_eq!(a.total_qty(), 3);
+        a.increment_front(2);
+        assert_eq!(a.best().unwrap().qty, 5);
+        assert_eq!(a.total_qty(), 5);
+        assert_eq!(a.len(), 1);
     }
 }

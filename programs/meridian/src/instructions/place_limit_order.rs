@@ -750,6 +750,7 @@ fn match_capped(
             maker_owner: [0; 32],
             price: 0,
             qty: 0,
+            fully_consumed: false,
         }; MAX_FILLS_PER_TX],
         fill_count: 0,
     };

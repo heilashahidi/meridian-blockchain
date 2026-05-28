@@ -48,6 +48,14 @@ pub struct Fill {
     pub maker_owner: [u8; 32],
     pub price: u64,
     pub qty: u64,
+    /// `true` if this fill consumed the maker's resting order entirely (the
+    /// entry was popped from the book), `false` if it only partially consumed
+    /// it (the decremented remnant is still resting at the front of the
+    /// opposing side). The caller uses this when a fill's payout is skipped:
+    /// a fully-consumed maker must be re-inserted as a fresh entry, whereas a
+    /// partially-consumed maker's remnant already rests and only needs its qty
+    /// restored — re-inserting a new entry would duplicate the order.
+    pub fully_consumed: bool,
 }
 
 /// Errors that prevent matching from even running. Distinct from "no fill
@@ -134,8 +142,14 @@ pub fn match_step<const N: usize>(
             break;
         }
 
-        let fill_qty = core::cmp::min(remaining, front.qty);
+        let maker_qty = front.qty;
+        let fill_qty = core::cmp::min(remaining, maker_qty);
         let maker_owner = front.owner;
+        // Whether this fill empties the maker's resting order. Computed here
+        // (while `front` is still borrowed) so the `Fill` records it for the
+        // caller's skip-vs-restore decision; mirrors the pop/decrement branch
+        // below.
+        let fully_consumed = fill_qty == maker_qty;
 
         // ArrayVec is sized to N == opposite.capacity(), so this push
         // cannot overflow: each iteration either consumes the front
@@ -145,12 +159,13 @@ pub fn match_step<const N: usize>(
             maker_owner,
             price: maker_price,
             qty: fill_qty,
+            fully_consumed,
         });
         debug_assert!(push_result.is_ok());
 
         remaining -= fill_qty;
 
-        if fill_qty == front.qty {
+        if fully_consumed {
             // Maker fully consumed — pop it, preserving FIFO at the next price
             // level (the next entry shifts to front).
             opposite.pop_front();
@@ -322,6 +337,76 @@ mod match_step_tests {
         assert_eq!(res.residual_qty, 5);
         assert_eq!(asks.len(), 1);
         assert_eq!(asks.best().unwrap().key.price(), 60);
+    }
+
+    #[test]
+    fn full_consumption_sets_fully_consumed_true() {
+        let mut bids: BookSide<8> = BookSide::new(Side::Bid);
+        bids.insert(Side::Bid, entry(40, 1, 100, 0xAA)).unwrap();
+        let res = match_step(
+            TakerOrder {
+                side: Side::Ask,
+                order_type: OrderType::Limit,
+                limit_price: 40,
+                qty: 100,
+                owner: [0xBB; 32],
+            },
+            &mut bids,
+        )
+        .unwrap();
+        assert_eq!(res.fills.len(), 1);
+        assert!(res.fills[0].fully_consumed, "maker fully consumed");
+        assert!(bids.is_empty());
+    }
+
+    #[test]
+    fn partial_consumption_sets_fully_consumed_false() {
+        let mut bids: BookSide<8> = BookSide::new(Side::Bid);
+        bids.insert(Side::Bid, entry(50, 1, 10, 0xAA)).unwrap();
+        let res = match_step(
+            TakerOrder {
+                side: Side::Ask,
+                order_type: OrderType::Limit,
+                limit_price: 50,
+                qty: 3,
+                owner: [0xCC; 32],
+            },
+            &mut bids,
+        )
+        .unwrap();
+        assert_eq!(res.fills.len(), 1);
+        assert!(!res.fills[0].fully_consumed, "maker only partially consumed");
+        assert_eq!(res.fills[0].qty, 3);
+        // Remnant still resting.
+        assert_eq!(bids.len(), 1);
+        assert_eq!(bids.as_slice()[0].qty, 7);
+    }
+
+    #[test]
+    fn multi_fill_mix_sets_per_fill_consumed_flags() {
+        // Two makers fully consumed, the third partially.
+        let mut bids: BookSide<8> = BookSide::new(Side::Bid);
+        bids.insert(Side::Bid, entry(50, 1, 10, 0x01)).unwrap();
+        bids.insert(Side::Bid, entry(50, 2, 10, 0x02)).unwrap();
+        bids.insert(Side::Bid, entry(50, 3, 10, 0x03)).unwrap();
+        let res = match_step(
+            TakerOrder {
+                side: Side::Ask,
+                order_type: OrderType::Limit,
+                limit_price: 50,
+                qty: 25, // 10 + 10 + 5
+                owner: [0xFF; 32],
+            },
+            &mut bids,
+        )
+        .unwrap();
+        assert_eq!(res.fills.len(), 3);
+        let flags: Vec<bool> = res.fills.iter().map(|f| f.fully_consumed).collect();
+        assert_eq!(flags, vec![true, true, false]);
+        // Third maker's remnant (5) still resting and at front.
+        assert_eq!(bids.len(), 1);
+        assert_eq!(bids.as_slice()[0].owner[0], 0x03);
+        assert_eq!(bids.as_slice()[0].qty, 5);
     }
 
     #[test]
