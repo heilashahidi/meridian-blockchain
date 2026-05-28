@@ -246,6 +246,16 @@ pub(crate) fn place_order_inner<'info>(
 ) -> Result<OrderOutcome> {
     require!(!config.paused, MeridianError::ProgramPaused);
     require!(!market.settled, MeridianError::MarketSettled);
+    // Halt price-discovery trading at expiry. This single guard covers every
+    // trading path — place_limit_order, place_market_order, and buy_no/sell_no
+    // (which compose this kernel). Par operations (burn_pair) and exits
+    // (cancel_order) intentionally stay open so positions can still be unwound
+    // between expiry and settlement.
+    let clock = Clock::get()?;
+    require!(
+        clock.unix_timestamp < market.expiry_unix,
+        MeridianError::MarketExpired
+    );
     require!(qty > 0, MeridianError::InvalidAmount);
     // For limit orders: price=0 is a reserved sentinel in `OrderKey`.
     // For market orders: the parameter carries the slippage bound and must

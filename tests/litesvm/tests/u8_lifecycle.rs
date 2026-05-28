@@ -739,12 +739,17 @@ fn multi_market_isolation() {
         EXPIRY_UNIX,
         [1u8; 32],
     );
+    // Market B expires much later than A so that at the clock we use to
+    // settle A (EXPIRY_UNIX + 10) market B is still BEFORE its own expiry —
+    // i.e. genuinely tradeable. (Trading halts at expiry now, so we can't
+    // prove "B unaffected by A's settle" with a B that has also expired.)
+    let market_b_expiry = EXPIRY_UNIX + 100_000;
     let market_b = create_market(
         &mut fx,
         config_pda,
         *b"AAPL\0\0\0\0",
         200_000_000,
-        EXPIRY_UNIX,
+        market_b_expiry,
         [2u8; 32],
     );
 
@@ -889,9 +894,9 @@ fn multi_market_isolation() {
     let mkt_b: meridian::state::Market = load_anchor_account(&fx.svm, &market_b.market_pda);
     assert!(!mkt_b.settled, "settling A must not touch B");
 
-    // Market B should still accept new orders. Place a bid for 10 Yes
-    // @ price=30 on market B — this MUST succeed even though market A
-    // is settled.
+    // Market B is still active (unsettled AND before its later expiry), so it
+    // must still accept new orders even though market A is settled. Place a
+    // bid for 10 Yes @ price=30 on market B.
     let place_args = meridian::PlaceLimitOrderArgs {
         side: 0,
         price: 30,

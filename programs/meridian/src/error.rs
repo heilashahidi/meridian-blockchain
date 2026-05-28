@@ -129,4 +129,10 @@ pub enum MeridianError {
     /// only `Partial`-verified.
     #[msg("Oracle price update is not fully verified; refusing to settle.")]
     OracleVerificationInsufficient,
+
+    /// A trading instruction (place/market order, buy_no, sell_no) was called
+    /// at or after the market's expiry. Price-discovery trading halts at
+    /// expiry; par operations (burn_pair) and exits (cancel_order) stay open.
+    #[msg("Market has reached expiry; trading is closed.")]
+    MarketExpired,
 }

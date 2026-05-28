@@ -932,6 +932,35 @@ fn place_after_settle_rejected() {
 }
 
 #[test]
+fn place_after_expiry_rejected() {
+    // Expired but NOT settled: price-discovery trading is closed. The guard
+    // lives in place_order_inner, so this also covers place_market_order and
+    // buy_no/sell_no (same kernel).
+    let mut env = Env::new(1, 10_000);
+    env.advance_clock(EXPIRY_UNIX + 10); // past expiry, no settle
+    let err = env
+        .place_limit(0, 0, 40, 50, &[])
+        .expect_err("place after expiry must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("MarketExpired") || s.contains("custom"),
+        "expected MarketExpired, got {s}"
+    );
+}
+
+#[test]
+fn mint_pair_allowed_after_expiry() {
+    // Par operations stay open past expiry so holders can still build/unwind a
+    // pair (a Yes+No pair is always worth exactly $1, outcome-neutral). Only
+    // price-discovery trading halts.
+    let mut env = Env::new(1, 10_000);
+    env.advance_clock(EXPIRY_UNIX + 10);
+    env.seed_yes(0, 50); // mint_pair; submit() panics if it were rejected
+    assert_eq!(env.balances(0).yes, 50, "mint_pair still works after expiry");
+    assert_eq!(env.balances(0).no, 50);
+}
+
+#[test]
 fn ae1_settle_then_sweep_refunds_open_orders() {
     // AE1: open orders on both sides, settle, then sweep refunds.
     //
