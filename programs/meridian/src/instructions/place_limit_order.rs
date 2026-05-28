@@ -438,7 +438,7 @@ pub(crate) fn place_order_inner<'info>(
     let mut filled_qty_total: u128 = 0;
     let mut filled_notional_total: u128 = 0;
 
-    // Fills whose maker can't be paid (closed / wrong payout account). The
+    // Fills whose maker can't be paid (canonical ATA closed / frozen). The
     // maker's resting order was already consumed by match_step but its
     // collateral was never moved, so we restore the order afterward and fold
     // the qty into the taker's residual. This is the ATA-close DoS fix for the
@@ -446,8 +446,14 @@ pub(crate) fn place_order_inner<'info>(
     // payout ATA can no longer force every crossing taker to revert — the
     // taker skips past them, and matching at that level resumes once the maker
     // has a valid account again.
+    //
+    // We carry each skipped fill's `fully_consumed` flag alongside the entry so
+    // the restore step can tell a fully-consumed maker (popped from the book —
+    // re-insert a fresh entry) from a partially-consumed one (decremented
+    // remnant still resting — just restore the unpaid qty, never insert a
+    // second entry for the same order; see review finding #2).
     let opposite_side = side.opposite();
-    let mut skipped: Vec<OrderEntry> = Vec::new();
+    let mut skipped: Vec<(bool, OrderEntry)> = Vec::new();
     let mut skipped_qty: u64 = 0;
 
     for i in 0..fills.fill_count {
@@ -476,12 +482,16 @@ pub(crate) fn place_order_inner<'info>(
             skipped_qty = skipped_qty
                 .checked_add(fill.qty)
                 .ok_or(MeridianError::InvalidAmount)?;
-            // seq is assigned a fresh value at re-insert time.
-            skipped.push(OrderEntry {
-                key: crate::matching::order_key::OrderKey::new(fill.price, 0),
-                owner: fill.maker_owner,
-                qty: fill.qty,
-            });
+            // seq is assigned a fresh value at re-insert time (full fills only;
+            // partial fills restore into the existing remnant — see below).
+            skipped.push((
+                fill.fully_consumed,
+                OrderEntry {
+                    key: crate::matching::order_key::OrderKey::new(fill.price, 0),
+                    owner: fill.maker_owner,
+                    qty: fill.qty,
+                },
+            ));
             continue;
         }
 
@@ -562,21 +572,62 @@ pub(crate) fn place_order_inner<'info>(
         }
     }
 
-    // Restore skipped makers' orders with fresh sequence numbers (they go to
-    // the back of their price level). With the canonical-ATA binding above, a
-    // skip now only happens when the maker's OWN canonical ATA is genuinely
+    // Restore the skipped makers' orders. With the canonical-ATA binding above,
+    // a skip now only happens when the maker's OWN canonical ATA is genuinely
     // closed/frozen — a taker can no longer force the skip, so this is no
-    // longer a griefing-induced demotion. Sending the genuinely-unpayable
-    // maker to the back is the right DoS-avoidance behavior: it stops a maker
-    // with a closed ATA from pinning the price level for everyone else.
-    // Their collateral is still escrowed, so the book stays consistent. Fold
-    // the skipped qty into the residual so the taker's unfilled portion is
-    // refunded (market) or posts (limit) by the existing step-4/step-5
-    // machinery — a skipped fill is economically identical to
-    // unfilled qty from the taker's side.
+    // longer a griefing-induced demotion. Their collateral is still escrowed,
+    // so restoring the resting qty keeps the book consistent (R13). Fold the
+    // skipped qty into the residual so the taker's unfilled portion is refunded
+    // (market) or posts (limit) by the existing step-4/step-5 machinery — a
+    // skipped fill is economically identical to unfilled qty from the taker's
+    // side.
+    //
+    // Two cases, distinguished by the fill's `fully_consumed` flag (finding #2):
+    //   * Partial fill skipped: match_step left the maker's decremented remnant
+    //     resting at the FRONT of the opposing side (it only ever partial-fills
+    //     the front, on its last iteration, and no book mutation has happened
+    //     since). Add the unpaid qty straight back onto that remnant —
+    //     inserting a new entry would DUPLICATE the maker's order. Done first,
+    //     before any fresh-seq insert displaces the front.
+    //   * Fully-consumed fill skipped: the maker was popped, so re-enter a
+    //     fresh entry at the back of its price level (fresh seq). Sending a
+    //     genuinely-unpayable maker to the back is the right DoS-avoidance
+    //     behavior: it stops a maker with a closed ATA from pinning the level.
     if !skipped.is_empty() {
         let mut book = book_loader.load_mut()?;
-        for mut entry in skipped.drain(..) {
+        let mut to_insert: Vec<OrderEntry> = Vec::new();
+
+        // Pass 1: partial restores (front of opposing side). Full skips — and,
+        // defensively, any partial whose front guard fails — are queued for
+        // fresh-seq insertion in pass 2.
+        for (fully_consumed, entry) in skipped.drain(..) {
+            if fully_consumed {
+                to_insert.push(entry);
+                continue;
+            }
+            let side_ref = match opposite_side {
+                Side::Bid => &mut book.bids,
+                Side::Ask => &mut book.asks,
+            };
+            let front_matches = side_ref.best().map_or(false, |f| {
+                f.owner == entry.owner && f.key.price() == entry.key.price()
+            });
+            debug_assert!(
+                front_matches,
+                "partial-skip remnant must rest at the front of the opposing side"
+            );
+            if front_matches {
+                side_ref.increment_front(entry.qty);
+            } else {
+                // Unreachable per the match invariant; in release we recover the
+                // qty via a fresh-seq insert (a duplicate, but escrow-correct)
+                // rather than silently dropping it.
+                to_insert.push(entry);
+            }
+        }
+
+        // Pass 2: fresh-seq re-inserts at the back of the price level.
+        for mut entry in to_insert.drain(..) {
             let seq = book.next_seq()?;
             entry.key = crate::matching::order_key::OrderKey::new(entry.key.price(), seq);
             let side_ref = match opposite_side {
