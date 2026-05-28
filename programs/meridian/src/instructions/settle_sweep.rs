@@ -143,6 +143,10 @@ pub fn settle_sweep_handler<'info>(
     args: SettleSweepArgs,
 ) -> Result<()> {
     require!(ctx.accounts.market.settled, MeridianError::MarketNotSettled);
+    // Pause halts the public crank too. The plan's pause semantic is "stop
+    // user-driven activity"; the sweep cranker is technically a public
+    // function but it moves user funds and must respect the operator's halt.
+    require!(!ctx.accounts.config.paused, MeridianError::ProgramPaused);
 
     if args.max_orders == 0 {
         return Ok(());
@@ -258,12 +262,16 @@ pub fn settle_sweep_handler<'info>(
     // Update the cursor with however many we drained this call. The
     // cursor doesn't gate anything on-chain (we always re-check
     // book.bids/asks emptiness above) — it's purely a progress counter
-    // for off-chain observers and audit logs.
+    // for off-chain observers and audit logs. `checked_add` rather than
+    // `saturating_add` so overflow (only reachable if the cumulative drain
+    // count somehow exceeds u32::MAX) surfaces loudly as an audit-log
+    // violation rather than silently pinning the cursor.
     let new_cursor = ctx
         .accounts
         .market
         .sweep_cursor
-        .saturating_add(drained as u32);
+        .checked_add(drained as u32)
+        .ok_or(MeridianError::InvariantBroken)?;
     ctx.accounts.market.sweep_cursor = new_cursor;
 
     msg!(

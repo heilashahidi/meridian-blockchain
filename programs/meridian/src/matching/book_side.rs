@@ -292,6 +292,50 @@ impl<const N: usize> BookSide<N> {
         self.entries[self.len as usize] = OrderEntry::default();
         removed
     }
+
+    /// Temporarily shrink the visible side to `cap` entries (or `len`,
+    /// whichever is smaller) and return the prior `len`. The hidden tail
+    /// at `entries[cap..prior_len]` stays in storage untouched — it is
+    /// just out of the comparator's reach until [`Self::restore_tail`] is
+    /// called.
+    ///
+    /// Designed for the U5 `match_capped` dance: cap matching to
+    /// `MAX_FILLS_PER_TX` opposing entries without paying for a
+    /// stack-allocated stash array (which on a 32-deep `BookSide` blows
+    /// past the SBPF 4 KB stack budget).
+    ///
+    /// Caller MUST pair this with [`Self::restore_tail`] before the side
+    /// is observed by any other code path, or the hidden entries are
+    /// effectively lost. The matching kernel mutates `entries[..len]`
+    /// only, so the hidden tail survives intact across `match_step`.
+    pub fn trim_to(&mut self, cap: usize) -> usize {
+        let prior_len = self.len as usize;
+        self.len = (cap as u64).min(self.len);
+        prior_len
+    }
+
+    /// Restore the tail hidden by [`Self::trim_to`]. `prior_len` is the
+    /// value `trim_to` returned; `trimmed_cap` is the cap that was passed
+    /// to `trim_to`.
+    ///
+    /// Between the two calls the visible `len` may have shrunk (engine
+    /// pops) but never grown — so we slide the hidden tail forward to
+    /// re-establish contiguity, then bump `len` by the tail count.
+    pub fn restore_tail(&mut self, prior_len: usize, trimmed_cap: usize) {
+        if prior_len <= trimmed_cap {
+            return;
+        }
+        let tail_count = prior_len - trimmed_cap;
+        let visible_len = self.len as usize;
+        debug_assert!(visible_len <= trimmed_cap);
+        if visible_len < trimmed_cap {
+            // Slide the hidden tail forward into the gap left by popped
+            // front entries.
+            self.entries
+                .copy_within(trimmed_cap..prior_len, visible_len);
+        }
+        self.len = (visible_len + tail_count) as u64;
+    }
 }
 
 #[cfg(test)]

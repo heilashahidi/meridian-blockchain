@@ -93,4 +93,20 @@ pub enum MeridianError {
     /// underlyings this is degenerate — refuse to settle.
     #[msg("Oracle returned a non-positive price; refusing to settle.")]
     InvalidOraclePrice,
+
+    /// `buy_no` / `sell_no` could not fully fill the requested amount within
+    /// the supplied slippage bound. The composed instruction reverts
+    /// atomically; clients can retry with a wider bound or a smaller amount.
+    /// Distinct from [`InvalidAmount`] so frontends can tell "market moved"
+    /// from "you passed a malformed input."
+    #[msg("Order could not fully fill within slippage bound; revise and retry.")]
+    SlippageNotMet,
+
+    /// A program-internal invariant broke (e.g. matching engine returned a
+    /// fill at a price worse than the taker limit, or `residual_qty > qty`).
+    /// Should never fire in correctly-functioning code; surfaced loudly
+    /// instead of being absorbed by `saturating_*` so regressions are
+    /// caught at the call site rather than masked.
+    #[msg("Internal invariant violated. This is a bug — please report.")]
+    InvariantBroken,
 }

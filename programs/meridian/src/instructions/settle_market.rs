@@ -80,6 +80,30 @@ pub struct SettleMarket<'info> {
     /// this via Pyth Hermes/Wormhole infrastructure before calling
     /// `settle_market`. Anchor's `Account` wrapper verifies the
     /// discriminator + Borsh-deserializes the body.
+    ///
+    /// # KNOWN GAP: production owner check
+    ///
+    /// Anchor's `#[account]` macro on the vendored `PriceUpdateV2` generates
+    /// `impl Owner { fn owner() -> Pubkey { crate::ID } }` — pinning the
+    /// allowed owner to **this** program. Real Pyth `PriceUpdateV2` accounts
+    /// are owned by Pyth's on-chain Receiver program, not by us, so this
+    /// constraint will **reject every real Pyth-posted account** on devnet
+    /// and mainnet with `AccountOwnedByWrongProgram`.
+    ///
+    /// LiteSVM tests pass because the test fixture (`set_pyth_price` in
+    /// `tests/litesvm/src/lib.rs`) constructs the account with
+    /// `owner = meridian::ID` — that path works in tests but is not the
+    /// production wire layout.
+    ///
+    /// To deploy against real Pyth feeds: switch this field to
+    /// `UncheckedAccount<'info>` + an explicit `#[account(owner = <pyth
+    /// receiver program id>)]` constraint (or a Config-stored expected
+    /// owner pubkey that operators set per cluster), and `try_deserialize`
+    /// the body manually in the handler. The vendored layout is still
+    /// wire-compatible; only the owner check needs to change.
+    ///
+    /// Tracked as a residual code-review finding rather than auto-fixed
+    /// because the test fixture would also need updating in lockstep.
     pub price_update: Account<'info, PriceUpdateV2>,
 }
 

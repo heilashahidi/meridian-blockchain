@@ -50,7 +50,7 @@ use anchor_spl::token::{self, accessor as token_accessor, Mint, Token, TokenAcco
 
 use crate::error::MeridianError;
 use crate::matching::book_side::{OrderEntry, Side};
-use crate::matching::match_step::{match_step, MatchResult, OrderType, TakerOrder};
+use crate::matching::match_step::{match_step, OrderType, TakerOrder};
 use crate::state::{Book, Config, Market, BOOK_DEPTH};
 
 /// Per-tx hard cap on how many opposing entries one taker may walk.
@@ -247,17 +247,12 @@ pub(crate) fn place_order_inner<'info>(
     require!(!config.paused, MeridianError::ProgramPaused);
     require!(!market.settled, MeridianError::MarketSettled);
     require!(qty > 0, MeridianError::InvalidAmount);
-    // Zero is a reserved sentinel in `OrderKey`. For market orders the
-    // slippage bound may legitimately be `u64::MAX` (bid taker) or `1`
-    // (ask taker); only reject zero on limit orders.
-    if order_type == OrderType::Limit {
-        require!(price > 0, MeridianError::InvalidAmount);
-    } else {
-        // For market orders, callers still must pass a sensible bound. We
-        // treat zero as "no slippage cap supplied" → reject. `u64::MAX`
-        // (bid) or `1` (ask) is the right "no cap" sentinel.
-        require!(price > 0, MeridianError::InvalidAmount);
-    }
+    // For limit orders: price=0 is a reserved sentinel in `OrderKey`.
+    // For market orders: the parameter carries the slippage bound and must
+    // also be > 0 (a zero bound means "any price", which we don't support —
+    // callers should pass the loosest realistic bound: `u64::MAX` for a
+    // bid taker or `1` for an ask taker). Same check, same error.
+    require!(price > 0, MeridianError::InvalidAmount);
 
     let side = match side_byte {
         0 => Side::Bid,
@@ -379,8 +374,11 @@ pub(crate) fn place_order_inner<'info>(
 
     for i in 0..fills.fill_count {
         let fill = fills.fills[i];
+        // Compute the per-fill notional once; both `filled_notional_total`
+        // and the per-fill SPL transfer use it.
+        let fill_notional_u128 = (fill.qty as u128) * (fill.price as u128);
         filled_qty_total += fill.qty as u128;
-        filled_notional_total += (fill.qty as u128) * (fill.price as u128);
+        filled_notional_total += fill_notional_u128;
 
         let maker_pubkey = Pubkey::new_from_array(fill.maker_owner);
         let maker_usdc = &remaining[i * 2];
@@ -411,9 +409,8 @@ pub(crate) fn place_order_inner<'info>(
             MeridianError::Unauthorized,
         );
 
-        let fill_notional = (fill.qty as u128) * (fill.price as u128);
-        require!(fill_notional <= u64::MAX as u128, MeridianError::InvalidAmount);
-        let fill_notional = fill_notional as u64;
+        require!(fill_notional_u128 <= u64::MAX as u128, MeridianError::InvalidAmount);
+        let fill_notional = fill_notional_u128 as u64;
 
         match side {
             Side::Bid => {
@@ -502,7 +499,15 @@ pub(crate) fn place_order_inner<'info>(
     if side == Side::Bid && filled_qty_total > 0 {
         let filled_qty = filled_qty_total as u64;
         let want_at_limit = (filled_qty as u128) * (price as u128);
-        let refund = want_at_limit.saturating_sub(filled_notional_total);
+        // `checked_sub` instead of `saturating_sub`: every Bid fill respects
+        // `fill.price <= taker.price` (engine invariant), so
+        // `filled_notional_total <= want_at_limit`. A `None` here would mean
+        // the matching engine returned a fill at a maker price worse than
+        // the taker's limit — surface that as a loud `InvariantBroken`
+        // rather than silently flooring the refund to zero.
+        let refund = want_at_limit
+            .checked_sub(filled_notional_total)
+            .ok_or(MeridianError::InvariantBroken)?;
         if refund > 0 {
             token::transfer(
                 CpiContext::new_with_signer(
@@ -532,7 +537,7 @@ pub(crate) fn place_order_inner<'info>(
         match order_type {
             OrderType::Limit => {
                 let mut book = book_loader.load_mut()?;
-                let seq = book.next_seq();
+                let seq = book.next_seq()?;
                 let entry = OrderEntry {
                     key: crate::matching::order_key::OrderKey::new(price, seq),
                     owner: user_owner_bytes,
@@ -605,8 +610,13 @@ pub(crate) fn place_order_inner<'info>(
         }
     }
 
+    // `checked_sub`: matching engine guarantees `residual_qty <= qty`. A
+    // wrap would mean the engine corrupted its accounting — surface loudly.
+    let filled_qty = qty
+        .checked_sub(residual_qty)
+        .ok_or(MeridianError::InvariantBroken)?;
     Ok(OrderOutcome {
-        filled_qty: qty.saturating_sub(residual_qty),
+        filled_qty,
         residual_qty,
     })
 }
@@ -631,57 +641,26 @@ struct FillBuffer {
 /// **How the cap is enforced.** The engine's `match_step` always walks
 /// from the front of the opposing side and stops at the first
 /// non-crossing entry. We don't want to consume more than
-/// `MAX_FILLS_PER_TX` opposing entries, so we temporarily move the entries
-/// past the cap **out** of the side, call `match_step`, then re-insert
-/// the survivors. Because the opposing side is sorted best-first, the
-/// entries we moved away are strictly worse-priced than anything we'd
-/// match against, so the outcome is the same as if we'd capped inside
-/// the engine.
+/// `MAX_FILLS_PER_TX` opposing entries, so we temporarily shrink the
+/// visible `len` via `BookSide::trim_to`, call `match_step` (which only
+/// walks `entries[..len]`), then slide the hidden tail forward via
+/// `BookSide::restore_tail`. Because the opposing side is sorted
+/// best-first, entries beyond the cap are strictly worse-priced than
+/// anything we'd match against, so the outcome is identical to capping
+/// inside the engine.
 ///
-/// The re-insertion preserves seq order via `BookSide::insert`'s
-/// comparator (price-asc + seq-asc for asks, price-desc + seq-asc for
-/// bids) — i.e. the entries land back in their original slots.
+/// This zero-copy in/out dance avoids a ~1.8 KB stack-allocated stash
+/// array that previously blew the SBPF 4 KB stack budget once enough
+/// callers (boxed accounts + composed instructions like `buy_no`/
+/// `sell_no`) shared the frame.
 fn match_capped(
     opposite: &mut crate::matching::book_side::BookSide<BOOK_DEPTH>,
     taker: TakerOrder,
 ) -> Result<MatchOutcome> {
-    let opposite_side = taker.side.opposite();
-
-    // Stash entries beyond the cap.
-    let mut stashed: [OrderEntry; BOOK_DEPTH] = [OrderEntry::default(); BOOK_DEPTH];
-    let mut stashed_count = 0usize;
-    while opposite.len() > MAX_FILLS_PER_TX {
-        // pop_front pops the BEST entry, which is wrong — we want to pop
-        // the WORST entries (the tail). Reach in via as_slice + a manual
-        // remove on the last index. The matching module exposes
-        // `pop_front` for the match path but not a pop_back; we
-        // open-code a tail-pop here.
-        //
-        // Use `cancel_by_id` against the last entry's key — that hits
-        // the binary-search path inside the engine and is the only
-        // public removal API.
-        let last_entry = opposite.as_slice()[opposite.len() - 1];
-        let removed = opposite
-            .cancel_by_id(
-                opposite_side,
-                crate::matching::book_side::OrderId(last_entry.key),
-            )
-            .map_err(|_| MeridianError::OrderNotFound)?;
-        stashed[stashed_count] = removed;
-        stashed_count += 1;
-    }
-
+    let prior_len = opposite.trim_to(MAX_FILLS_PER_TX);
     let result = match_step(taker, opposite)
         .map_err(|_| MeridianError::InvalidAmount)?;
-
-    // Restore stashed entries. Inserting in reverse so the worst-priced
-    // (last popped) goes back in first — `BookSide::insert` is
-    // order-agnostic but doing it this way mirrors the original order.
-    for i in (0..stashed_count).rev() {
-        opposite
-            .insert(opposite_side, stashed[i])
-            .map_err(|_| MeridianError::BookFull)?;
-    }
+    opposite.restore_tail(prior_len, MAX_FILLS_PER_TX);
 
     let mut buf = FillBuffer {
         fills: [crate::matching::match_step::Fill {
@@ -693,9 +672,8 @@ fn match_capped(
     };
     let count = result.fills.len();
     debug_assert!(count <= MAX_FILLS_PER_TX);
-    for (i, f) in result.fills.into_iter().enumerate() {
-        buf.fills[i] = f;
-    }
+    // Single memcpy of the matched fills (at most MAX_FILLS_PER_TX entries).
+    buf.fills[..count].copy_from_slice(&result.fills.as_slice()[..count]);
     buf.fill_count = count;
 
     Ok(MatchOutcome {
@@ -704,8 +682,3 @@ fn match_capped(
     })
 }
 
-// Silence the `MatchResult` unused-import lint when only one path uses it
-// (residual handling reads via the destructured local). The type is
-// referenced by the `match_step` return value implicitly.
-#[allow(dead_code)]
-fn _keep_match_result_live<const N: usize>(_: MatchResult<N>) {}

@@ -279,7 +279,7 @@ pub fn buy_no_handler<'info>(
     // the user's pre-state is restored.
     require!(
         outcome.residual_qty == 0,
-        MeridianError::InvalidAmount,
+        MeridianError::SlippageNotMet,
     );
     debug_assert_eq!(outcome.filled_qty, args.amount);
 

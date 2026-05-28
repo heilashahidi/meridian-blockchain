@@ -218,7 +218,7 @@ pub fn sell_no_handler<'info>(
     // Atomic full-fill: same rationale as buy_no.
     require!(
         outcome.residual_qty == 0,
-        MeridianError::InvalidAmount,
+        MeridianError::SlippageNotMet,
     );
     debug_assert_eq!(outcome.filled_qty, args.amount);
 

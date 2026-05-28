@@ -23,6 +23,7 @@
 
 use anchor_lang::prelude::*;
 
+use crate::error::MeridianError;
 use crate::matching::book_side::{BookSide, Side};
 
 /// Book depth per side. Per plan Deferred §"Exact bounded depth per side":
@@ -63,11 +64,21 @@ impl Book {
     /// Allocate the next sequence number, bumping the in-account counter.
     /// Called by every order-placement instruction so resting orders get
     /// a stable FIFO tiebreak across price levels.
+    ///
+    /// Returns an error on `u64` overflow rather than wrapping — `seq == 0`
+    /// is reserved as an invalid sentinel by [`OrderKey`], so a silent wrap
+    /// would collide with `OrderEntry::default()`'s zero-key slots and
+    /// break the FIFO tiebreak invariant.
+    ///
+    /// [`OrderKey`]: crate::matching::order_key::OrderKey
     #[inline]
-    pub fn next_seq(&mut self) -> u64 {
+    pub fn next_seq(&mut self) -> Result<u64> {
         let n = self.next_seq;
-        self.next_seq += 1;
-        n
+        self.next_seq = self
+            .next_seq
+            .checked_add(1)
+            .ok_or(MeridianError::InvariantBroken)?;
+        Ok(n)
     }
 
     /// Returns the [`BookSide`] reference for the given side. Convenience

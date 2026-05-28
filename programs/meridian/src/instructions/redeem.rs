@@ -107,6 +107,12 @@ pub struct Redeem<'info> {
 
 pub fn redeem_handler(ctx: Context<Redeem>, amount: u64) -> Result<()> {
     require!(amount > 0, MeridianError::InvalidAmount);
+    // Gate on the global pause flag like every other user-facing path.
+    // Admin pause means "halt all user activity" — including post-settle
+    // redemptions, so an emergency pause can stop escrow drains while a
+    // discovered settle/outcome bug is investigated. Admin can always
+    // unpause to let redemption proceed once cleared.
+    require!(!ctx.accounts.config.paused, MeridianError::ProgramPaused);
 
     let market = &ctx.accounts.market;
     require!(market.settled, MeridianError::MarketNotSettled);

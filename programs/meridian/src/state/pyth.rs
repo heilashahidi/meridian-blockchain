@@ -157,20 +157,32 @@ impl PriceUpdateV2 {
         if &self.price_message.feed_id != feed_id {
             return Err(GetPriceError::MismatchedFeedId);
         }
-        let max_age_i64 = maximum_age as i64;
-        if self
-            .price_message
-            .publish_time
-            .saturating_add(max_age_i64)
-            < clock.unix_timestamp
-        {
+        let publish_time = self.price_message.publish_time;
+        // Reject degenerate publish_time values up-front. Pyth should never
+        // post a negative or far-future timestamp; treating them as stale
+        // closes a window where `saturating_add` could mask a bypass
+        // (e.g. publish_time = i64::MAX saturates and looks fresh forever).
+        if publish_time <= 0 || publish_time > clock.unix_timestamp {
+            return Err(GetPriceError::PriceTooOld);
+        }
+        // `maximum_age` is bounded by callers to small values (currently
+        // 60s — see `settle_market::MAX_AGE_SECONDS`); use checked_add to
+        // surface any future caller passing something that doesn't fit
+        // in i64 as stale rather than silently saturating.
+        let max_age_i64: i64 = maximum_age
+            .try_into()
+            .map_err(|_| GetPriceError::PriceTooOld)?;
+        let expiry = publish_time
+            .checked_add(max_age_i64)
+            .ok_or(GetPriceError::PriceTooOld)?;
+        if expiry < clock.unix_timestamp {
             return Err(GetPriceError::PriceTooOld);
         }
         Ok(Price {
             price: self.price_message.price,
             conf: self.price_message.conf,
             exponent: self.price_message.exponent,
-            publish_time: self.price_message.publish_time,
+            publish_time,
         })
     }
 }
