@@ -54,6 +54,12 @@ import {
   getMint as getSplMint,
 } from "@solana/spl-token";
 
+// @coral-xyz/anchor is CJS. Under Node's ESM namespace import, statically
+// detectable named exports (Program, Wallet, AnchorProvider…) are hoisted to
+// the namespace, but BN — re-exported dynamically from bn.js — is not, so
+// `anchor.BN` is undefined. Resolve it from the default export as a fallback.
+const BN = anchor.BN ?? anchor.default?.BN;
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
 const IDL_PATH = path.join(REPO_ROOT, "target", "idl", "meridian.json");
@@ -319,8 +325,8 @@ async function main() {
     const sig = await program.methods
       .createStrikeMarket({
         ticker: Array.from(tickerBytes(TICKER)),
-        strikePrice: new anchor.BN(strikeMicro),
-        expiryUnix: new anchor.BN(expiryUnix),
+        strikePrice: new BN(strikeMicro),
+        expiryUnix: new BN(expiryUnix),
         pythFeedId,
       })
       .accounts({
