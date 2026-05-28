@@ -25,7 +25,7 @@ pub use meridian;
 
 /// The on-chain program id declared in `programs/meridian/src/lib.rs`.
 pub const MERIDIAN_PROGRAM_ID: Address = solana_address::address!(
-    "APBHkU44Jtz7CTakjj33XKyDrnAmEoqA7gZ3n1MhYomC"
+    "6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX"
 );
 
 /// SPL Token program id — duplicated here so the test crate stays

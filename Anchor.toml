@@ -6,24 +6,19 @@ resolution = true
 skip-lint = false
 
 [programs.devnet]
-meridian = "APBHkU44Jtz7CTakjj33XKyDrnAmEoqA7gZ3n1MhYomC"
+meridian = "6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX"
 
 [programs.localnet]
-meridian = "APBHkU44Jtz7CTakjj33XKyDrnAmEoqA7gZ3n1MhYomC"
-
-[registry]
-url = "https://api.apr.dev"
+meridian = "6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX"
 
 [provider]
 cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
+[workspace]
+members = ["programs/meridian"]
+
 [scripts]
 test = "cargo test -p meridian --lib matching::tests"
 
-[workspace]
-members = ["programs/meridian"]
-# `tests/litesvm` is deliberately excluded from Anchor's workspace view
-# (it would otherwise try to anchor-build it). It IS part of the Cargo
-# workspace (see top-level `Cargo.toml`) so `cargo test --workspace`
-# picks it up.
+[hooks]

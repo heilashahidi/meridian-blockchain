@@ -78,7 +78,7 @@ fn token_program_id() -> Pubkey {
 // Re-derive the meridian program id at the same address the program
 // declares in `lib.rs` / `Anchor.toml`.
 fn meridian_program_id() -> Pubkey {
-    pubkey!("APBHkU44Jtz7CTakjj33XKyDrnAmEoqA7gZ3n1MhYomC")
+    pubkey!("6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX")
 }
 
 // ---------------------------------------------------------------------------

@@ -53,7 +53,7 @@ pub use instructions::settle_sweep::*;
 // `target/deploy/meridian-keypair.json` (gitignored) and is also reflected in
 // the `[programs.*]` tables of `Anchor.toml`. Regenerate per environment if
 // promoting to a fresh cluster.
-declare_id!("APBHkU44Jtz7CTakjj33XKyDrnAmEoqA7gZ3n1MhYomC");
+declare_id!("6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX");
 
 #[program]
 pub mod meridian {

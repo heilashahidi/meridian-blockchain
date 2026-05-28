@@ -26,7 +26,7 @@ pub mod meridian {
 
     /// Returns the program ID for meridian
     pub fn program_id() -> Pubkey {
-        pubkey!("APBHkU44Jtz7CTakjj33XKyDrnAmEoqA7gZ3n1MhYomC")
+        pubkey!("6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX")
     }
 
     // ------------------------------------------------------------------------

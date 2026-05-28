@@ -3,6 +3,6 @@ enabled = true
 
 
 [[fuzz.programs]]
-address = "APBHkU44Jtz7CTakjj33XKyDrnAmEoqA7gZ3n1MhYomC"
+address = "6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX"
 program = "../target/deploy/meridian.so"
  
