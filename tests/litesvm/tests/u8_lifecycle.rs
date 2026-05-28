@@ -1093,6 +1093,40 @@ fn mint_trade_partial_cancel_burn_roundtrip() {
     );
 }
 
+#[test]
+fn cancel_allowed_between_expiry_and_settle() {
+    // cancel_order intentionally stays OPEN between expiry and settlement so a
+    // maker can pull resting collateral while price-discovery trading is
+    // halted. This invariant lives only in code comments (place_order_inner
+    // halts at expiry; cancel/mint/burn do not) — assert it so a stray
+    // MarketExpired guard on cancel would be caught.
+    let mut env = Env::new(1, 10_000);
+    let pre_usdc = env.balances(0).usdc;
+    env.place_limit(0, /* Bid */ 0, 40, 50, &[])
+        .expect("bid posts");
+    assert_eq!(
+        env.balances(0).usdc,
+        pre_usdc - 2_000,
+        "40 * 50 = 2_000 USDC locked"
+    );
+    let seq = env.book().bids.as_slice()[0].key.seq();
+
+    env.advance_clock(EXPIRY_UNIX + 10); // expired, NOT settled
+
+    // Price-discovery trading is halted...
+    env.place_limit(0, 0, 30, 10, &[])
+        .expect_err("place is halted after expiry");
+    // ...but cancel still works and refunds the full escrow.
+    env.cancel(0, 0, 40, seq)
+        .expect("cancel stays open between expiry and settle");
+    assert_eq!(env.book().bids.len(), 0, "order cancelled");
+    assert_eq!(
+        env.balances(0).usdc,
+        pre_usdc,
+        "escrowed USDC fully refunded on cancel"
+    );
+}
+
 // Keep an `_unused` reference to the helper that's only used in some
 // scenarios so unused-import lints stay quiet when scenarios are
 // re-edited.

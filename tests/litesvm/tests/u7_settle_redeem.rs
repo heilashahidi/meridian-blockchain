@@ -785,6 +785,86 @@ fn admin_settle_twice_rejected() {
 }
 
 #[test]
+fn admin_settle_no_wins_succeeds_and_redeems() {
+    // Mirror of admin_settle_after_grace_succeeds_and_redeems for the NoWins
+    // branch. Previously the yes_wins=false path of admin_settle_market and the
+    // No-side redeem were only hit as the *rejected* second call in
+    // admin_settle_twice_rejected — never as a stamped, redeemed outcome.
+    let mut env = Env::new(1, 10_000);
+    env.seed_yes(0, 50); // 50 Yes + 50 No, 9_950 USDC
+    let admin = env.fx.admin.insecure_clone();
+    env.advance_clock(EXPIRY_UNIX + EMERGENCY_GRACE + 10);
+
+    env.admin_settle(&admin, false)
+        .expect("emergency NoWins settle ok");
+    let m = env.market();
+    assert!(m.settled, "market settled");
+    assert_eq!(
+        m.outcome,
+        Some(meridian::state::Outcome::NoWins),
+        "admin-stamped NoWins"
+    );
+
+    // The No holder redeems; escrow drains, proving NoWins is solvent.
+    env.redeem(0, env.no_mint, env.users[0].no, 50)
+        .expect("No winner redeems after emergency NoWins settle");
+    assert_eq!(env.balances(0).no, 0, "No burned");
+    assert_eq!(env.balances(0).usdc, 9_950 + 50, "USDC restored");
+    assert_eq!(env.usdc_escrow_amount(), 0, "escrow drained — solvent");
+}
+
+#[test]
+fn settle_already_settled_short_circuits_before_oracle_checks() {
+    // Idempotency must win over oracle validation: once settled, a re-submit
+    // returns MarketSettled even when the supplied oracle account would
+    // otherwise be rejected. We re-submit with a Partial-verified update (which
+    // the default require_full_verification rejects with
+    // OracleVerificationInsufficient); the settled short-circuit must fire
+    // first. Guards the reorder that moved the !settled check ahead of the
+    // Pyth owner/deserialize/verification block.
+    let mut env = Env::new(1, 10_000);
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("first settle ok");
+    assert!(env.market().settled);
+
+    // Expire the blockhash so the second settle is a DISTINCT transaction that
+    // actually reaches the program (an identical tx is rejected as
+    // AlreadyProcessed by the runtime before the handler runs).
+    env.fx.svm.expire_blockhash();
+    env.plant_pyth_partial(dollars_to_pyth(700), 1_000, ts);
+    let err = env.settle().expect_err("re-settle on a settled market must fail");
+    let s = format!("{err:?}");
+    // The settled short-circuit must fire BEFORE the Pyth verification gate:
+    // we expect MarketSettled, NOT OracleVerificationInsufficient (which the
+    // planted Partial update would trigger if verification ran first).
+    assert!(
+        s.contains("MarketSettled"),
+        "expected MarketSettled, got {s}"
+    );
+    assert!(
+        !s.contains("OracleVerificationInsufficient"),
+        "settled guard must short-circuit BEFORE the verification check; got {s}"
+    );
+}
+
+#[test]
+fn settle_at_lower_window_bound_succeeds() {
+    // Inclusive lower bound: a price published at exactly `expiry` settles.
+    // settle_fails_price_before_expiry covers expiry-5 (reject) and
+    // settle_at_window_edge_succeeds covers expiry+30 (accept, upper edge);
+    // this pins the lower edge (publish_time == expiry) as inclusive.
+    let mut env = Env::new(1, 10_000);
+    let ts = EXPIRY_UNIX + 10; // clock past expiry so settle is open
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, EXPIRY_UNIX); // published AT expiry
+    env.settle()
+        .expect("price published at exactly expiry settles (inclusive lower bound)");
+    assert!(env.market().settled, "settled at lower window bound");
+}
+
+#[test]
 fn settle_rejects_partial_when_full_required() {
     // require_full_verification defaults ON, so a Partial-verified Pyth price
     // must be rejected.
