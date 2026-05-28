@@ -17,10 +17,11 @@
 //! # Clock manipulation
 //!
 //! `settle_market` requires `clock.unix_timestamp >= market.expiry_unix`
-//! and an oracle `publish_time` within `MAX_AGE_SECONDS = 60` of the
-//! cluster clock. LiteSVM's default `Clock` has a small unix_timestamp;
-//! we advance it via `set_clock_unix_ts` before each settle so the
-//! 60-second freshness window is meaningful.
+//! and an oracle `publish_time` inside the post-expiry window
+//! `[expiry, expiry + SETTLE_WINDOW_SECONDS]` (`SETTLE_WINDOW_SECONDS = 30`).
+//! LiteSVM's default `Clock` has a small unix_timestamp; we advance it via
+//! `set_clock_unix_ts` before each settle so the expiry + window checks are
+//! meaningful.
 
 #![allow(clippy::too_many_arguments)]
 
@@ -517,13 +518,63 @@ fn settle_fails_stale_oracle() {
     let mut env = Env::new(1, 10_000);
     let ts = EXPIRY_UNIX + 1000;
     env.advance_clock(ts);
-    // publish_time is 120 seconds old → fails the 60s freshness window.
-    env.plant_pyth(dollars_to_pyth(700), 1_000, ts - 120);
+    // publish_time is 880s after expiry → far outside the 30s settlement
+    // window, so settle is rejected (OracleStale).
+    env.plant_pyth(dollars_to_pyth(700), 1_000, EXPIRY_UNIX + 880);
     let err = env.settle().expect_err("stale oracle must fail");
     let s = format!("{err:?}");
     assert!(
         s.contains("OracleStale") || s.contains("custom"),
         "expected OracleStale, got {s}"
+    );
+}
+
+#[test]
+fn settle_fails_price_before_expiry() {
+    // A price published before expiry must not settle the option — even
+    // though the clock is past expiry, the settlement price has to track the
+    // expiry moment. This is the lower bound of the [expiry, expiry+window]
+    // pin (anti-cherry-pick: caller can't reach back to a pre-expiry quote).
+    let mut env = Env::new(1, 10_000);
+    env.advance_clock(EXPIRY_UNIX + 10);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, EXPIRY_UNIX - 5);
+    let err = env.settle().expect_err("pre-expiry price must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("OracleStale") || s.contains("custom"),
+        "expected OracleStale, got {s}"
+    );
+}
+
+#[test]
+fn settle_fails_price_after_window() {
+    // A price published more than SETTLE_WINDOW_SECONDS (30) after expiry is
+    // rejected. This is the upper bound that bounds the cherry-pick window
+    // regardless of how late settle is called.
+    let mut env = Env::new(1, 10_000);
+    env.advance_clock(EXPIRY_UNIX + 100);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, EXPIRY_UNIX + 45);
+    let err = env.settle().expect_err("post-window price must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("OracleStale") || s.contains("custom"),
+        "expected OracleStale, got {s}"
+    );
+}
+
+#[test]
+fn settle_at_window_edge_succeeds() {
+    // publish_time exactly at expiry + SETTLE_WINDOW_SECONDS (30) is the last
+    // accepted instant — boundary is inclusive.
+    let mut env = Env::new(1, 10_000);
+    let ts = EXPIRY_UNIX + 30;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, EXPIRY_UNIX + 30);
+    env.settle().expect("settle at window edge should succeed");
+    assert_eq!(
+        env.market().outcome,
+        Some(meridian::state::Outcome::YesWins),
+        "edge-of-window settle should record YesWins"
     );
 }
 

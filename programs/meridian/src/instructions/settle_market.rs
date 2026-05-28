@@ -6,8 +6,13 @@
 //!     from Solana's per-account write lock on the Market.)
 //!   * Refuse if `market.settled` (R15a).
 //!   * Refuse if `clock.unix_timestamp < market.expiry_unix` (`MarketNotExpired`).
-//!   * Reject Pyth price-update accounts whose `publish_time` is older than
-//!     `MAX_AGE_SECONDS = 60` against the cluster's `Clock` (`OracleStale`).
+//!   * Pin the settlement price to the window
+//!     `[market.expiry_unix, market.expiry_unix + SETTLE_WINDOW_SECONDS]`
+//!     (`SETTLE_WINDOW_SECONDS = 30`). A `publish_time` before expiry or more
+//!     than the window past it is rejected (`OracleStale`). This settles the
+//!     option at its expiry price rather than "whenever someone calls settle",
+//!     and bounds a permissionless caller's ability to cherry-pick a favorable
+//!     Pyth update to `SETTLE_WINDOW_SECONDS` regardless of call time.
 //!   * Reject if `conf * 10_000 > price * MAX_CONF_BPS` for
 //!     `MAX_CONF_BPS = 100` (1 %) (`OracleConfidenceTooWide`).
 //!   * Compute outcome by comparing the Pyth-rebased price (microunits) to
@@ -46,8 +51,15 @@ use anchor_lang::AccountDeserialize;
 use crate::error::MeridianError;
 use crate::state::{Config, Market, Outcome, PriceUpdateV2};
 
-/// Maximum allowed age of a Pyth `publish_time` at settle time (seconds).
-pub const MAX_AGE_SECONDS: u64 = 60;
+/// Width of the post-expiry window the settlement price must fall in, in
+/// seconds. The accepted range is `[expiry, expiry + SETTLE_WINDOW_SECONDS]`.
+///
+/// Sized to comfortably cover Pyth's update cadence at expiry (sub-second on
+/// mainnet) while keeping a permissionless caller's cherry-pick window small.
+/// Narrower is safer against settlement manipulation but raises the liveness
+/// risk that no update lands in the window — that deadlock is handled by the
+/// separate admin emergency-settle / pause path (P1), not by widening this.
+pub const SETTLE_WINDOW_SECONDS: u64 = 30;
 
 /// Max acceptable `conf / price` ratio, in basis points. `100 bps = 1 %`.
 pub const MAX_CONF_BPS: u128 = 100;
@@ -134,14 +146,33 @@ pub fn settle_market_handler(ctx: Context<SettleMarket>) -> Result<()> {
         MeridianError::MarketNotExpired
     );
 
-    // Pyth: get_price_no_older_than checks (a) feed id matches, (b)
-    // `publish_time + max_age >= clock.unix_timestamp`. The fixed
-    // PriceUpdateV2 layout is owned by the operator-pinned Pyth Receiver
-    // program (validated above) — see `state/pyth.rs` for why we vendor
-    // the type instead of pulling the SDK.
+    // Pin the settlement price to `[expiry, expiry + SETTLE_WINDOW_SECONDS]`.
+    //
+    // Lower bound (`publish_time >= expiry`): expressed through
+    // `get_price_no_older_than`, whose check is
+    // `publish_time + max_age >= clock`. Passing `max_age = clock - expiry`
+    // makes that exactly `publish_time >= expiry`. The same call still does
+    // the feed-id match and the `publish_time <= clock` / `publish_time > 0`
+    // sanity (a settlement price can't be from the future or degenerate).
+    // See `state/pyth.rs` for why we vendor the PriceUpdateV2 type.
+    let elapsed_since_expiry = clock
+        .unix_timestamp
+        .checked_sub(market.expiry_unix)
+        .ok_or(MeridianError::OracleStale)?; // >= 0: clock >= expiry checked above
+    let max_age = u64::try_from(elapsed_since_expiry).map_err(|_| MeridianError::OracleStale)?;
     let price = price_update
-        .get_price_no_older_than(&clock, MAX_AGE_SECONDS, &market.pyth_feed_id)
+        .get_price_no_older_than(&clock, max_age, &market.pyth_feed_id)
         .map_err(map_oracle_err)?;
+
+    // Upper bound (`publish_time <= expiry + SETTLE_WINDOW_SECONDS`): reject
+    // updates published too long after expiry so settlement tracks the expiry
+    // price and the cherry-pick window stays bounded no matter when settle is
+    // called.
+    let window_end = market
+        .expiry_unix
+        .checked_add(SETTLE_WINDOW_SECONDS as i64)
+        .ok_or(MeridianError::OracleStale)?;
+    require!(price.publish_time <= window_end, MeridianError::OracleStale);
 
     // Sanity: price must be strictly positive for binary equity options.
     require!(price.price > 0, MeridianError::InvalidOraclePrice);

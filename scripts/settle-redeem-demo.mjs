@@ -63,6 +63,12 @@ const ORACLE_STR = args.oracle;
 const FEED_HEX = args["feed-id"] ?? "01".repeat(32);
 const STRIKE_DOLLARS = Number(args["strike-dollars"] ?? 680);
 const TICKER = (args.ticker ?? "SETL").toUpperCase();
+// settle_market pins the settlement price to [expiry, expiry+30s], so the
+// market's expiry must sit just before the forged oracle's publish_time.
+// The orchestrator passes the same timestamp it forged the oracle with.
+const ORACLE_PT = args["oracle-publish-time"] != null
+  ? Number(args["oracle-publish-time"])
+  : Math.floor(Date.now() / 1000) - 5;
 
 if (!USDC_MINT_STR || !ORACLE_STR) {
   console.error("error: --usdc-mint and --oracle are required");
@@ -147,14 +153,17 @@ async function main() {
   }
 
   // ─── 1) past-expiry market ─────────────────────────────────────────────
-  header("1) create market (expiry in the past)");
+  header("1) create market (expiry just before the oracle publish_time)");
   const strikeMicro = Math.round(STRIKE_DOLLARS * 1_000_000);
-  const expiryUnix = Math.floor(Date.now() / 1000) - 3600; // 1h in the past
+  // Expiry one second before the oracle's publish_time so publish_time lands
+  // inside the program's [expiry, expiry + 30s] settlement window.
+  const expiryUnix = ORACLE_PT - 1;
   const market = marketPda(TICKER, strikeMicro, expiryUnix);
   const P = subPdas(market);
   const pythFeedId = Array.from(Buffer.from(FEED_HEX, "hex"));
   kv("Market PDA", market.toBase58());
-  kv("Strike / expiry", `$${STRIKE_DOLLARS} / ${new Date(expiryUnix * 1000).toISOString()} (past)`);
+  kv("Strike / expiry", `$${STRIKE_DOLLARS} / ${new Date(expiryUnix * 1000).toISOString()}`);
+  kv("Oracle publish_time", `${new Date(ORACLE_PT * 1000).toISOString()} (in [expiry, expiry+30s])`);
 
   await program.methods
     .createStrikeMarket({

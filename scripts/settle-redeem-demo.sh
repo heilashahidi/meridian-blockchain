@@ -7,10 +7,11 @@
 # the price-update account's owner == config.pyth_receiver and deserializes a
 # PriceUpdateV2) can't run against a real feed. We fake it: forge a byte-exact
 # PriceUpdateV2 with an arbitrary owner and load it via
-# `solana-test-validator --account`. The whole pipeline runs in one shot so we
-# finish inside the program's 60s oracle-freshness window (the forged
-# publish_time is "now"; create_strike_market doesn't clock-check expiry, so the
-# market is created already-expired and we settle immediately — no waiting).
+# `solana-test-validator --account`. settle_market pins the settlement price to
+# [expiry, expiry + 30s], so we forge the oracle with publish_time = T and
+# create the demo market with expiry = T - 1 (create_strike_market doesn't
+# clock-check expiry). The injected publish_time then lands in the window and we
+# settle immediately — no waiting, no freshness race.
 #
 # This boots a DEDICATED validator (its own ledger + ports) and tears it down at
 # the end. It does not touch any other running validator's ledger, but it does
@@ -36,12 +37,16 @@ echo "════════ 0) stop any running validator + forge oracle ═�
 pkill -f solana-test-validator 2>/dev/null || true
 sleep 1
 rm -f "$ORACLE_KEYPAIR" # fresh oracle address each run
-# Forge with price $700 vs strike $680 -> YesWins. publish_time defaults to now.
+# One shared timestamp: the oracle's publish_time AND the anchor for the demo
+# market's expiry (settle_market pins the price to [expiry, expiry+30s], so the
+# two must agree). settle-redeem-demo.mjs sets expiry = PUBLISH_TIME - 1.
+PUBLISH_TIME="$(date +%s)"
+# Forge with price $700 vs strike $680 -> YesWins.
 ORACLE="$(node "$SCRIPTS/forge-pyth-account.mjs" \
   --owner "$PYTH_RECEIVER" --dollars 700 --expo -8 \
-  --feed-id "$(printf '01%.0s' {1..32})" \
+  --feed-id "$(printf '01%.0s' {1..32})" --publish-time "$PUBLISH_TIME" \
   --out "$ORACLE_FIXTURE" --keypair-out "$ORACLE_KEYPAIR")"
-echo "oracle address: $ORACLE"
+echo "oracle address: $ORACLE  (publish_time $PUBLISH_TIME)"
 
 echo "════════ 1) boot dedicated validator with injected oracle ════════"
 rm -rf "$LEDGER"
@@ -82,6 +87,7 @@ echo "config initialized"
 echo "════════ 4) settle + redeem ════════"
 cd "$SCRIPTS" && node settle-redeem-demo.mjs \
   --usdc-mint "$USDC_MINT" --oracle "$ORACLE" \
+  --oracle-publish-time "$PUBLISH_TIME" \
   --feed-id "$(printf '01%.0s' {1..32})" --rpc "$LOCAL"
 
 echo ""
