@@ -37,12 +37,14 @@ pub use matching::{
 // satisfies the macro without polluting the public API with the
 // `handler` symbol collision (each module has its own `handler`).
 pub use instructions::burn_pair::*;
+pub use instructions::buy_no::*;
 pub use instructions::cancel_order::*;
 pub use instructions::create_strike_market::*;
 pub use instructions::initialize_config::*;
 pub use instructions::mint_pair::*;
 pub use instructions::place_limit_order::*;
 pub use instructions::place_market_order::*;
+pub use instructions::sell_no::*;
 
 // Program keypair generated on first `anchor build`; lives on disk at
 // `target/deploy/meridian-keypair.json` (gitignored) and is also reflected in
@@ -53,8 +55,10 @@ declare_id!("APBHkU44Jtz7CTakjj33XKyDrnAmEoqA7gZ3n1MhYomC");
 #[program]
 pub mod meridian {
     //! U3 wired `initialize_config` and `create_strike_market`. U4 adds
-    //! `mint_pair` and `burn_pair`. U5-U7 add the remaining instructions
-    //! (place/market/cancel, buy_no/sell_no, settle/redeem).
+    //! `mint_pair` and `burn_pair`. U5 adds `place_limit_order`,
+    //! `place_market_order`, `cancel_order`. U6 adds `buy_no` and
+    //! `sell_no` — the atomic single-tx Buy-No / Sell-No trade paths.
+    //! U7 adds the remaining instructions (settle/redeem).
     use super::*;
 
     /// Bootstrap the singleton Config PDA. First caller becomes admin.
@@ -117,5 +121,28 @@ pub mod meridian {
     /// ATA.
     pub fn cancel_order(ctx: Context<CancelOrder>, args: CancelOrderArgs) -> Result<()> {
         instructions::cancel_order::cancel_order_handler(ctx, args)
+    }
+
+    /// Atomic "Buy No" — mint a Yes/No pair against USDC, then market-sell
+    /// the Yes leg in the same tx. User ends holding `amount` No tokens
+    /// + USDC proceeds from the Yes sale. Reverts atomically if the Yes
+    /// sell leg can't fill the full `amount` within `min_yes_sell_price`.
+    pub fn buy_no<'info>(
+        ctx: Context<'info, BuyNo<'info>>,
+        args: BuyNoArgs,
+    ) -> Result<()> {
+        instructions::buy_no::buy_no_handler(ctx, args)
+    }
+
+    /// Atomic "Sell No" — market-buy `amount` Yes, then burn the freshly
+    /// bought Yes + a matching `amount` of the caller's existing No to
+    /// reclaim `amount` USDC. Reverts atomically if the Yes buy leg can't
+    /// fill the full `amount` within `max_yes_buy_price`. User's net USDC
+    /// delta is `amount - sum(fill_price * fill_qty)`.
+    pub fn sell_no<'info>(
+        ctx: Context<'info, SellNo<'info>>,
+        args: SellNoArgs,
+    ) -> Result<()> {
+        instructions::sell_no::sell_no_handler(ctx, args)
     }
 }

@@ -17,24 +17,33 @@
 //!     * [`place_market_order`] — same shape but residual is rejected.
 //!     * [`cancel_order`] — owner-only remove + refund by stable
 //!       `OrderKey`.
+//!   * U6:
+//!     * [`buy_no`] — atomic mint_pair + market-sell-Yes; user ends
+//!       holding `amount` No tokens with the Yes leg off-loaded.
+//!     * [`sell_no`] — atomic market-buy-Yes + burn_pair; symmetric
+//!       Sell-No exit returning USDC immediately.
 //!
-//! U6-U7 add the remaining handlers (buy_no/sell_no, settle, redeem).
+//! U7 adds the remaining handlers (settle, redeem).
 
 pub mod burn_pair;
+pub mod buy_no;
 pub mod cancel_order;
 pub mod create_strike_market;
 pub mod initialize_config;
 pub mod mint_pair;
 pub mod place_limit_order;
 pub mod place_market_order;
+pub mod sell_no;
 
 // Re-export the `Accounts` structs and arg types only; each handler is
 // invoked via its module path in `lib.rs` so the per-module `handler`
 // symbols don't collide in this namespace.
 pub use burn_pair::BurnPair;
+pub use buy_no::{BuyNo, BuyNoArgs};
 pub use cancel_order::{CancelOrder, CancelOrderArgs};
 pub use create_strike_market::{CreateStrikeMarket, CreateStrikeMarketArgs};
 pub use initialize_config::InitializeConfig;
 pub use mint_pair::MintPair;
 pub use place_limit_order::{PlaceLimitOrder, PlaceLimitOrderArgs};
 pub use place_market_order::{PlaceMarketOrder, PlaceMarketOrderArgs};
+pub use sell_no::{SellNo, SellNoArgs};

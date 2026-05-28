@@ -140,5 +140,6 @@ pub fn place_market_order_handler<'info>(
         OrderType::Market,
         args.slippage_bound,
         args.qty,
-    )
+    )?;
+    Ok(())
 }

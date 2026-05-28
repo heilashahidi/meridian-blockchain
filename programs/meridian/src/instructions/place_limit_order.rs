@@ -194,7 +194,26 @@ pub fn place_limit_order_handler<'info>(
         OrderType::Limit,
         args.price,
         args.qty,
-    )
+    )?;
+    Ok(())
+}
+
+/// Result of a [`place_order_inner`] call.
+///
+/// U5 callers (`place_limit_order_handler`, `place_market_order_handler`)
+/// ignore the payload — the on-chain state and post-state is the spec.
+/// U6 (`buy_no` / `sell_no`) uses `residual_qty` to enforce **atomic
+/// full-fill on the market leg**: if the market sell/buy can't fill the
+/// requested `amount` within `slippage_bound`, U6 reverts the whole
+/// instruction rather than letting the user end up with a partial position.
+#[derive(Clone, Copy, Debug)]
+pub struct OrderOutcome {
+    /// How much of the taker order was filled (in Yes-token base units).
+    pub filled_qty: u64,
+    /// How much of the taker order was NOT filled. For limit orders this
+    /// is the qty that got posted to the book. For market orders this is
+    /// the qty that was refunded/skipped (no posting).
+    pub residual_qty: u64,
 }
 
 /// Shared place-order kernel.
@@ -224,7 +243,7 @@ pub(crate) fn place_order_inner<'info>(
     order_type: OrderType,
     price: u64,
     qty: u64,
-) -> Result<()> {
+) -> Result<OrderOutcome> {
     require!(!config.paused, MeridianError::ProgramPaused);
     require!(!market.settled, MeridianError::MarketSettled);
     require!(qty > 0, MeridianError::InvalidAmount);
@@ -586,7 +605,10 @@ pub(crate) fn place_order_inner<'info>(
         }
     }
 
-    Ok(())
+    Ok(OrderOutcome {
+        filled_qty: qty.saturating_sub(residual_qty),
+        residual_qty,
+    })
 }
 
 /// Result of [`match_capped`].
