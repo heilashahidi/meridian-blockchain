@@ -116,4 +116,11 @@ pub enum MeridianError {
     /// can distinguish "wrong account passed" from "Pyth said no."
     #[msg("Oracle account is not owned by the operator-pinned Pyth receiver program.")]
     InvalidOracleOwner,
+
+    /// `admin_settle_market` (the emergency oracle-bypass path) was called
+    /// before `expiry + EMERGENCY_GRACE_SECONDS` elapsed. The grace window
+    /// gives normal Pyth settlement first claim before the admin can stamp
+    /// an outcome by hand.
+    #[msg("Admin emergency-settle grace period has not elapsed yet.")]
+    EmergencyGraceNotElapsed,
 }

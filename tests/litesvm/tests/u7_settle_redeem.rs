@@ -413,6 +413,27 @@ impl Env {
         try_submit(&mut self.fx.svm, ix, &[&user])
     }
 
+    /// Emergency oracle-bypass settle, signed by `signer` (admin or not).
+    fn admin_settle(
+        &mut self,
+        signer: &Keypair,
+        yes_wins: bool,
+    ) -> Result<litesvm::types::TransactionMetadata, litesvm::types::FailedTransactionMetadata>
+    {
+        let metas = vec![
+            AccountMeta::new_readonly(signer.pubkey(), true),
+            AccountMeta::new_readonly(self.config_pda, false),
+            AccountMeta::new(self.market_pda, false),
+        ];
+        let ix = anchor_ix(
+            MERIDIAN_PROGRAM_ID,
+            "admin_settle_market",
+            &[yes_wins as u8],
+            metas,
+        );
+        try_submit(&mut self.fx.svm, ix, &[signer])
+    }
+
     fn balances(&self, i: usize) -> Balances {
         Balances {
             usdc: read_token_account(&self.fx.svm, &self.users[i].usdc).amount,
@@ -655,6 +676,83 @@ fn settle_sweep_when_paused_rejected() {
     assert!(
         s.contains("ProgramPaused") || s.contains("custom"),
         "expected ProgramPaused, got {s}"
+    );
+}
+
+const EMERGENCY_GRACE: i64 = 86_400; // mirror admin::EMERGENCY_GRACE_SECONDS
+
+#[test]
+fn admin_settle_before_grace_rejected() {
+    // Past expiry but inside the 24h grace window: emergency settle is denied
+    // so normal Pyth settlement keeps first claim.
+    let mut env = Env::new(1, 10_000);
+    let admin = env.fx.admin.insecure_clone();
+    env.advance_clock(EXPIRY_UNIX + 1_000); // << EXPIRY + 86_400
+    let err = env
+        .admin_settle(&admin, true)
+        .expect_err("emergency settle before grace must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("EmergencyGraceNotElapsed") || s.contains("custom"),
+        "expected EmergencyGraceNotElapsed, got {s}"
+    );
+    assert!(!env.market().settled, "market must stay unsettled");
+}
+
+#[test]
+fn admin_settle_non_admin_rejected() {
+    let mut env = Env::new(1, 10_000);
+    env.advance_clock(EXPIRY_UNIX + EMERGENCY_GRACE + 10);
+    let user = env.users[0].kp.insecure_clone(); // not the admin
+    let err = env
+        .admin_settle(&user, true)
+        .expect_err("non-admin emergency settle must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("Unauthorized") || s.contains("custom"),
+        "expected Unauthorized, got {s}"
+    );
+    assert!(!env.market().settled, "market must stay unsettled");
+}
+
+#[test]
+fn admin_settle_after_grace_succeeds_and_redeems() {
+    // Pyth never settled; after the 24h grace the admin stamps YesWins by
+    // hand, and the winning side redeems normally — escrow drains, solvent.
+    let mut env = Env::new(1, 10_000);
+    env.seed_yes(0, 50);
+    let admin = env.fx.admin.insecure_clone();
+    env.advance_clock(EXPIRY_UNIX + EMERGENCY_GRACE + 10);
+
+    env.admin_settle(&admin, true).expect("emergency settle ok");
+    let m = env.market();
+    assert!(m.settled, "market settled");
+    assert_eq!(
+        m.outcome,
+        Some(meridian::state::Outcome::YesWins),
+        "admin-stamped outcome"
+    );
+
+    env.redeem(0, env.yes_mint, env.users[0].yes, 50)
+        .expect("winner redeems after emergency settle");
+    assert_eq!(env.balances(0).yes, 0, "Yes burned");
+    assert_eq!(env.balances(0).usdc, 9_950 + 50, "USDC restored");
+    assert_eq!(env.usdc_escrow_amount(), 0, "escrow drained — solvent");
+}
+
+#[test]
+fn admin_settle_twice_rejected() {
+    let mut env = Env::new(1, 10_000);
+    let admin = env.fx.admin.insecure_clone();
+    env.advance_clock(EXPIRY_UNIX + EMERGENCY_GRACE + 10);
+    env.admin_settle(&admin, true).expect("first emergency settle ok");
+    let err = env
+        .admin_settle(&admin, false)
+        .expect_err("second settle must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("MarketSettled") || s.contains("custom"),
+        "expected MarketSettled, got {s}"
     );
 }
 

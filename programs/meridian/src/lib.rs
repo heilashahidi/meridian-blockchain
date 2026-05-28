@@ -91,6 +91,14 @@ pub mod meridian {
         instructions::admin::set_paused_handler(ctx, paused)
     }
 
+    /// Admin-only emergency settlement (P1 stuck-oracle deadlock). Stamps
+    /// `yes_wins`/!`yes_wins` as the outcome WITHOUT reading Pyth, but only
+    /// after `expiry + EMERGENCY_GRACE_SECONDS` (24h) so normal oracle
+    /// settlement always gets first claim. Solvent by the $1 invariant.
+    pub fn admin_settle_market(ctx: Context<AdminSettleMarket>, yes_wins: bool) -> Result<()> {
+        instructions::admin::admin_settle_market_handler(ctx, yes_wins)
+    }
+
     /// Admin-only: create a strike market (Market + Book + Yes/No mints
     /// + USDC/Yes escrows) for a `(ticker, strike, expiry)` triple.
     pub fn create_strike_market(
