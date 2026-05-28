@@ -62,6 +62,27 @@ use crate::state::{Book, Config, Market, BOOK_DEPTH};
 /// and (for limit orders) the leftover quantity posts to the book.
 pub const MAX_FILLS_PER_TX: usize = 4;
 
+/// True iff `info` is a live SPL token account that can actually receive a
+/// transfer right now: its data is the fixed token-account length and the
+/// account-state byte is `Initialized` (1), not `Uninitialized`/closed (0)
+/// or `Frozen` (2).
+///
+/// Why this exists: a transfer CPI to a frozen or closed account fails, and
+/// a failed inner instruction aborts the ENTIRE transaction in the Solana
+/// runtime — the calling program never gets an `Err` back to handle. So any
+/// payout path that wants skip-and-continue semantics (place_order_inner's
+/// maker payouts, settle_sweep's refunds) must detect un-receivable accounts
+/// BEFORE issuing the CPI, not by inspecting its result. The mint/authority
+/// `token_accessor` checks already catch closed/wrong accounts; this adds the
+/// frozen case (notably a Circle-frozen USDC ATA on mainnet).
+///
+/// SPL `spl_token::state::Account` is a fixed 165 bytes with the `state`
+/// enum at offset 108. We read the byte directly rather than unpacking the
+/// whole account to stay cheap and tolerant of garbage/closed data.
+pub(crate) fn token_account_receivable(info: &AccountInfo) -> bool {
+    matches!(info.try_borrow_data(), Ok(d) if d.len() >= 165 && d[108] == 1)
+}
+
 #[derive(Accounts)]
 pub struct PlaceLimitOrder<'info> {
     /// Taker. Pays collateral up front; receives counter-asset on fill.
@@ -362,9 +383,15 @@ pub(crate) fn place_order_inner<'info>(
     //   [2*i + 0]: maker's USDC ATA (mut)
     //   [2*i + 1]: maker's Yes ATA  (mut)
     //
-    // The ATAs are validated against `get_associated_token_address` so a
-    // caller can't redirect maker proceeds to an attacker-controlled
-    // account. Both must be the canonical ATA for the maker.
+    // Each maker payout account is validated by `token_accessor` (mint +
+    // authority) and must be a live, non-frozen token account; a mismatched,
+    // closed, or frozen account causes that maker to be SKIPPED rather than
+    // reverting the whole taker order. NOTE: this is a mint+authority check,
+    // not canonical-ATA derivation — the caller is not required to pass the
+    // maker's associated token account, only some token account the maker
+    // authority owns with the correct mint. (A taker can therefore force a
+    // maker into the skip path by supplying a deliberately-bad account; see
+    // the queue-priority caveat at the re-insert step below.)
     require!(
         remaining.len() >= fills.fill_count * 2,
         MeridianError::InvalidAmount,
@@ -390,10 +417,7 @@ pub(crate) fn place_order_inner<'info>(
     // payout ATA can no longer force every crossing taker to revert — the
     // taker skips past them, and matching at that level resumes once the maker
     // has a valid account again.
-    let opposite_side = match side {
-        Side::Bid => Side::Ask,
-        Side::Ask => Side::Bid,
-    };
+    let opposite_side = side.opposite();
     let mut skipped: Vec<OrderEntry> = Vec::new();
     let mut skipped_qty: u64 = 0;
 
@@ -407,9 +431,11 @@ pub(crate) fn place_order_inner<'info>(
         // account makes the accessor reads fail; a wrong mint/owner is a
         // mismatch. Either way we skip this maker rather than aborting the
         // whole taker order.
-        let usdc_ok = matches!(token_accessor::mint(maker_usdc), Ok(m) if m == usdc_mint_key)
+        let usdc_ok = token_account_receivable(maker_usdc)
+            && matches!(token_accessor::mint(maker_usdc), Ok(m) if m == usdc_mint_key)
             && matches!(token_accessor::authority(maker_usdc), Ok(a) if a == maker_pubkey);
-        let yes_ok = matches!(token_accessor::mint(maker_yes), Ok(m) if m == yes_mint_key)
+        let yes_ok = token_account_receivable(maker_yes)
+            && matches!(token_accessor::mint(maker_yes), Ok(m) if m == yes_mint_key)
             && matches!(token_accessor::authority(maker_yes), Ok(a) if a == maker_pubkey);
 
         if !(usdc_ok && yes_ok) {

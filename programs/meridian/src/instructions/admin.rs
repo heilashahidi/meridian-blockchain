@@ -97,10 +97,14 @@ pub fn admin_settle_market_handler(ctx: Context<AdminSettleMarket>, yes_wins: bo
     require!(!market.settled, MeridianError::MarketSettled);
 
     let clock = Clock::get()?;
+    // Overflow here is only reachable if expiry_unix is within
+    // EMERGENCY_GRACE_SECONDS of i64::MAX — a degenerate market that should
+    // never exist. Map it to InvariantBroken so it is distinguishable from a
+    // genuine "grace window hasn't elapsed yet" rejection.
     let unlock = market
         .expiry_unix
         .checked_add(EMERGENCY_GRACE_SECONDS)
-        .ok_or(MeridianError::EmergencyGraceNotElapsed)?;
+        .ok_or(MeridianError::InvariantBroken)?;
     require!(
         clock.unix_timestamp >= unlock,
         MeridianError::EmergencyGraceNotElapsed

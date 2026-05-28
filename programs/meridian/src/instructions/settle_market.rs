@@ -119,6 +119,15 @@ pub struct SettleMarket<'info> {
 }
 
 pub fn settle_market_handler(ctx: Context<SettleMarket>) -> Result<()> {
+    // Idempotency first: an already-settled market is a no-op reject,
+    // independent of the oracle account. Checking this before the Pyth
+    // validation means a re-submit (or a stale crank) returns MarketSettled
+    // instead of a misleading OracleVerificationInsufficient / oracle error.
+    require!(
+        !ctx.accounts.market.settled,
+        MeridianError::MarketSettled
+    );
+
     // Validate the Pyth account before touching any other state: owner
     // pinned to config.pyth_receiver, then try_deserialize (which checks
     // the discriminator and Borsh-decodes the body). Doing this first
@@ -148,7 +157,6 @@ pub fn settle_market_handler(ctx: Context<SettleMarket>) -> Result<()> {
     }
 
     let market = &mut ctx.accounts.market;
-    require!(!market.settled, MeridianError::MarketSettled);
 
     let clock = Clock::get()?;
     require!(

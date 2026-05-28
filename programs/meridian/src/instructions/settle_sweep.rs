@@ -25,8 +25,11 @@
 //!
 //! Each order being canceled needs to send its escrowed collateral back to
 //! the owner. The off-chain cranker, having simulated the same `pop_front`
-//! sequence we'll execute, supplies one `AccountMeta` per cancellation in
-//! `remaining_accounts`:
+//! sequence we'll execute, supplies one `AccountMeta` per POP ATTEMPT in
+//! `remaining_accounts` — i.e. one per entry dequeued this call, whether or
+//! not its refund succeeds. A skipped (un-receivable) entry still consumes
+//! its slot, so the cranker must supply an account for every entry it
+//! expects to be popped, not only the ones it expects to pay out:
 //!
 //!   * Bid cancellations → owner's USDC ATA (or any USDC token account
 //!     the owner controls — we validate via `token::accessor`).
@@ -243,9 +246,15 @@ pub fn settle_sweep_handler<'info>(
         let owner_pk = Pubkey::new_from_array(entry.owner);
 
         // Validate the recipient WITHOUT reverting: a closed account makes the
-        // accessor reads fail, and a wrong mint/owner is a mismatch. Any of
-        // these means "can't pay this owner right now" → skip, don't abort.
-        let recipient_ok = matches!(token_accessor::mint(recipient), Ok(m) if m == expected_mint)
+        // accessor reads fail, a wrong mint/owner is a mismatch, and a frozen
+        // account (e.g. a Circle-frozen USDC ATA) can't receive a transfer.
+        // Any of these means "can't pay this owner right now" → skip, don't
+        // abort. The frozen/closed check MUST happen before the CPI: a failed
+        // transfer aborts the whole tx in the runtime, so we can't catch it
+        // after the fact (that was the bug in the old `transfer_res.is_err()`
+        // branch — it was unreachable).
+        let recipient_ok = crate::instructions::place_limit_order::token_account_receivable(recipient)
+            && matches!(token_accessor::mint(recipient), Ok(m) if m == expected_mint)
             && matches!(token_accessor::authority(recipient), Ok(a) if a == owner_pk);
 
         if !recipient_ok {
@@ -253,13 +262,14 @@ pub fn settle_sweep_handler<'info>(
             continue;
         }
 
-        // PDA-signed refund. A failed transfer (e.g. frozen account) is also
-        // treated as a skip rather than aborting the whole sweep.
+        // PDA-signed refund. The recipient passed the receivable check above
+        // (live, correct mint+authority, not frozen), so a failure here is a
+        // genuine invariant break — propagate it rather than silently skipping.
         let from = match refund_kind {
             RefundKind::Usdc => ctx.accounts.usdc_escrow.to_account_info(),
             RefundKind::Yes => ctx.accounts.yes_escrow.to_account_info(),
         };
-        let transfer_res = token::transfer(
+        token::transfer(
             CpiContext::new_with_signer(
                 token_program_id,
                 Transfer {
@@ -270,11 +280,7 @@ pub fn settle_sweep_handler<'info>(
                 signer_seeds,
             ),
             refund_amount,
-        );
-        if transfer_res.is_err() {
-            skipped.push((side, entry));
-            continue;
-        }
+        )?;
 
         drained += 1;
     }
