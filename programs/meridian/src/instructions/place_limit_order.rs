@@ -336,7 +336,7 @@ pub(crate) fn place_order_inner<'info>(
     // doesn't change which makers fill.
     let MatchOutcome {
         fills,
-        residual_qty,
+        mut residual_qty,
     } = {
         let mut book = book_loader.load_mut()?;
         let opposite = match side {
@@ -372,42 +372,54 @@ pub(crate) fn place_order_inner<'info>(
     let mut filled_qty_total: u128 = 0;
     let mut filled_notional_total: u128 = 0;
 
+    // Fills whose maker can't be paid (closed / wrong payout account). The
+    // maker's resting order was already consumed by match_step but its
+    // collateral was never moved, so we restore the order afterward and fold
+    // the qty into the taker's residual. This is the ATA-close DoS fix for the
+    // trading path: a maker who rests a best-priced order then closes their
+    // payout ATA can no longer force every crossing taker to revert — the
+    // taker skips past them, and matching at that level resumes once the maker
+    // has a valid account again.
+    let opposite_side = match side {
+        Side::Bid => Side::Ask,
+        Side::Ask => Side::Bid,
+    };
+    let mut skipped: Vec<OrderEntry> = Vec::new();
+    let mut skipped_qty: u64 = 0;
+
     for i in 0..fills.fill_count {
         let fill = fills.fills[i];
+        let maker_pubkey = Pubkey::new_from_array(fill.maker_owner);
+        let maker_usdc = &remaining[i * 2];
+        let maker_yes = &remaining[i * 2 + 1];
+
+        // Validate the maker's payout accounts WITHOUT reverting. A closed
+        // account makes the accessor reads fail; a wrong mint/owner is a
+        // mismatch. Either way we skip this maker rather than aborting the
+        // whole taker order.
+        let usdc_ok = matches!(token_accessor::mint(maker_usdc), Ok(m) if m == usdc_mint_key)
+            && matches!(token_accessor::authority(maker_usdc), Ok(a) if a == maker_pubkey);
+        let yes_ok = matches!(token_accessor::mint(maker_yes), Ok(m) if m == yes_mint_key)
+            && matches!(token_accessor::authority(maker_yes), Ok(a) if a == maker_pubkey);
+
+        if !(usdc_ok && yes_ok) {
+            skipped_qty = skipped_qty
+                .checked_add(fill.qty)
+                .ok_or(MeridianError::InvalidAmount)?;
+            // seq is assigned a fresh value at re-insert time.
+            skipped.push(OrderEntry {
+                key: crate::matching::order_key::OrderKey::new(fill.price, 0),
+                owner: fill.maker_owner,
+                qty: fill.qty,
+            });
+            continue;
+        }
+
         // Compute the per-fill notional once; both `filled_notional_total`
         // and the per-fill SPL transfer use it.
         let fill_notional_u128 = (fill.qty as u128) * (fill.price as u128);
         filled_qty_total += fill.qty as u128;
         filled_notional_total += fill_notional_u128;
-
-        let maker_pubkey = Pubkey::new_from_array(fill.maker_owner);
-        let maker_usdc = &remaining[i * 2];
-        let maker_yes = &remaining[i * 2 + 1];
-
-        // Validate the maker's USDC token account: mint == config.usdc_mint
-        // and owner == maker_pubkey.
-        require_keys_eq!(
-            token_accessor::mint(maker_usdc)?,
-            usdc_mint_key,
-            MeridianError::Unauthorized,
-        );
-        require_keys_eq!(
-            token_accessor::authority(maker_usdc)?,
-            maker_pubkey,
-            MeridianError::Unauthorized,
-        );
-
-        // Same for the maker's Yes token account.
-        require_keys_eq!(
-            token_accessor::mint(maker_yes)?,
-            yes_mint_key,
-            MeridianError::Unauthorized,
-        );
-        require_keys_eq!(
-            token_accessor::authority(maker_yes)?,
-            maker_pubkey,
-            MeridianError::Unauthorized,
-        );
 
         require!(fill_notional_u128 <= u64::MAX as u128, MeridianError::InvalidAmount);
         let fill_notional = fill_notional_u128 as u64;
@@ -479,6 +491,31 @@ pub(crate) fn place_order_inner<'info>(
             }
         }
     }
+
+    // Restore skipped makers' orders with fresh sequence numbers (they go to
+    // the back of their price level — a griefer loses queue priority, which is
+    // acceptable). Their collateral is still escrowed, so the book stays
+    // consistent. Fold the skipped qty into the residual so the taker's
+    // unfilled portion is refunded (market) or posts (limit) by the existing
+    // step-4/step-5 machinery — a skipped fill is economically identical to
+    // unfilled qty from the taker's side.
+    if !skipped.is_empty() {
+        let mut book = book_loader.load_mut()?;
+        for mut entry in skipped.drain(..) {
+            let seq = book.next_seq()?;
+            entry.key = crate::matching::order_key::OrderKey::new(entry.key.price(), seq);
+            let side_ref = match opposite_side {
+                Side::Bid => &mut book.bids,
+                Side::Ask => &mut book.asks,
+            };
+            side_ref
+                .insert(opposite_side, entry)
+                .map_err(|_| MeridianError::BookFull)?;
+        }
+    }
+    residual_qty = residual_qty
+        .checked_add(skipped_qty)
+        .ok_or(MeridianError::InvalidAmount)?;
 
     // -------- Step 4: price-improvement refund (Buy taker only). --------
     //

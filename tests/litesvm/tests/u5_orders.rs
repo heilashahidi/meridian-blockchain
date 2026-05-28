@@ -539,6 +539,43 @@ fn happy_bid_then_crossing_ask_matches() {
 }
 
 #[test]
+fn crossing_taker_skips_unpayable_maker_instead_of_reverting() {
+    // ATA-close DoS regression for the trading path. A rests a bid; B's
+    // crossing ask supplies an INVALID maker payout pair for A (here B's own
+    // accounts, whose authority != A — the same skip branch a closed maker
+    // ATA hits). The taker must NOT revert: A's order is restored to the book
+    // and B's qty falls through to a resting residual. No fill happens.
+    let mut env = Env::new(2, 10_000);
+    env.seed_yes(1, 100); // B gets 100 Yes (+100 No), costs 100 USDC
+
+    env.place_limit(0, 0, 40, 100, &[]).expect("A bid posts");
+
+    // Wrong maker pair: B's own (usdc, yes). authority = B != A → skip.
+    let bad_pair = (env.users[1].usdc, env.users[1].yes);
+    env.place_limit(1, /* side=Ask */ 1, 40, 100, &[bad_pair])
+        .expect("crossing ask must NOT revert on an unpayable maker");
+
+    // No fill: A's bid restored, B's ask posts as residual (crossed book is
+    // fine — it just waits for a payable counterparty).
+    let book = env.book();
+    assert_eq!(book.bids.len(), 1, "A's bid restored (skipped maker)");
+    assert_eq!(book.asks.len(), 1, "B's qty posted as residual");
+    assert_eq!(book.bids.as_slice()[0].owner, env.users[0].kp.pubkey().to_bytes());
+    assert_eq!(book.asks.as_slice()[0].owner, env.users[1].kp.pubkey().to_bytes());
+
+    // Balances unchanged from their pre-match escrow positions (no transfer).
+    let a = env.balances(0);
+    let b = env.balances(1);
+    assert_eq!(a.usdc, 6_000, "A: 10_000 - 4000 bid lock, no fill");
+    assert_eq!(a.yes, 0);
+    assert_eq!(b.usdc, 9_900, "B: 10_000 - 100 mint_pair, no sale proceeds");
+    assert_eq!(b.yes, 0, "B's 100 Yes escrowed behind the residual ask");
+
+    assert_eq!(env.usdc_escrow_amount(), 4_100, "A's 4000 bid + B's 100 mint_pair");
+    assert_eq!(env.yes_escrow_amount(), 100, "B's 100 Yes backing the residual ask");
+}
+
+#[test]
 fn partial_fill_residual_posts() {
     // A bids 100 @ price=40 (microunits/Yes) → escrow locks 100 * 40 =
     // 4000. B asks 60 @ price=40 → 60 fill, A's bid trimmed to 40.
