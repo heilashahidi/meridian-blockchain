@@ -1,0 +1,15 @@
+{
+  "name": "meridian-scripts",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "One-off off-chain scripts for the Meridian on-chain CLOB. Not part of the production lifecycle automation service (separate workstream).",
+  "scripts": {
+    "bootstrap:devnet": "node bootstrap-devnet.mjs"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@solana/spl-token": "^0.4.8",
+    "@solana/web3.js": "^1.95.3"
+  }
+}
