@@ -36,8 +36,10 @@ pub use matching::{
 // instruction module's contents (including those generated modules)
 // satisfies the macro without polluting the public API with the
 // `handler` symbol collision (each module has its own `handler`).
+pub use instructions::burn_pair::*;
 pub use instructions::create_strike_market::*;
 pub use instructions::initialize_config::*;
+pub use instructions::mint_pair::*;
 
 // Program keypair generated on first `anchor build`; lives on disk at
 // `target/deploy/meridian-keypair.json` (gitignored) and is also reflected in
@@ -47,9 +49,9 @@ declare_id!("APBHkU44Jtz7CTakjj33XKyDrnAmEoqA7gZ3n1MhYomC");
 
 #[program]
 pub mod meridian {
-    //! U3 wires `initialize_config` and `create_strike_market`. U4-U7 add
-    //! the remaining instructions (mint_pair/burn_pair, place/market/cancel,
-    //! buy_no/sell_no, settle/redeem).
+    //! U3 wired `initialize_config` and `create_strike_market`. U4 adds
+    //! `mint_pair` and `burn_pair`. U5-U7 add the remaining instructions
+    //! (place/market/cancel, buy_no/sell_no, settle/redeem).
     use super::*;
 
     /// Bootstrap the singleton Config PDA. First caller becomes admin.
@@ -67,5 +69,18 @@ pub mod meridian {
         args: CreateStrikeMarketArgs,
     ) -> Result<()> {
         instructions::create_strike_market::create_strike_market_handler(ctx, args)
+    }
+
+    /// Deposit `amount` USDC into the per-market escrow and mint `amount`
+    /// Yes + `amount` No tokens to the caller. Preserves the $1.00
+    /// invariant `yes_supply == no_supply == usdc_escrow`.
+    pub fn mint_pair(ctx: Context<MintPair>, amount: u64) -> Result<()> {
+        instructions::mint_pair::mint_pair_handler(ctx, amount)
+    }
+
+    /// Burn `amount` Yes + `amount` No from the caller and return `amount`
+    /// USDC from the per-market escrow. The symmetric inverse of `mint_pair`.
+    pub fn burn_pair(ctx: Context<BurnPair>, amount: u64) -> Result<()> {
+        instructions::burn_pair::burn_pair_handler(ctx, amount)
     }
 }
