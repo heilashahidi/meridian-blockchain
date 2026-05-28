@@ -172,7 +172,11 @@ impl Env {
 
         // ----- initialize_config -----
         let fee_authority = Keypair::new().pubkey();
-        let init_args = fee_authority.to_bytes().to_vec();
+        let mut init_args = fee_authority.to_bytes().to_vec();
+        // pyth_receiver: pin to our own program ID so the LiteSVM fixture
+        // (which set_account()s PriceUpdateV2 with owner=meridian) passes the
+        // settle_market owner check.
+        init_args.extend_from_slice(MERIDIAN_PROGRAM_ID.as_ref());
         let init_ix = anchor_ix(
             MERIDIAN_PROGRAM_ID,
             "initialize_config",

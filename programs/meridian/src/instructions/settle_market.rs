@@ -41,9 +41,10 @@
 //! near `-8` and price is large.
 
 use anchor_lang::prelude::*;
+use anchor_lang::AccountDeserialize;
 
 use crate::error::MeridianError;
-use crate::state::{Market, Outcome, PriceUpdateV2};
+use crate::state::{Config, Market, Outcome, PriceUpdateV2};
 
 /// Maximum allowed age of a Pyth `publish_time` at settle time (seconds).
 pub const MAX_AGE_SECONDS: u64 = 60;
@@ -63,6 +64,15 @@ pub struct SettleMarket<'info> {
     #[account(mut)]
     pub caller: Signer<'info>,
 
+    /// Global config — read for the operator-set `pyth_receiver` pubkey
+    /// that the price-update account must be owned by. Boxed for stack
+    /// hygiene (Config is ~130 bytes; inline copies inflate try_accounts).
+    #[account(
+        seeds = [Config::SEED],
+        bump = config.bump,
+    )]
+    pub config: Box<Account<'info, Config>>,
+
     /// Market to settle. Mutated.
     #[account(
         mut,
@@ -76,38 +86,45 @@ pub struct SettleMarket<'info> {
     )]
     pub market: Account<'info, Market>,
 
-    /// Pyth `PriceUpdateV2` account. The off-chain lifecycle service posts
-    /// this via Pyth Hermes/Wormhole infrastructure before calling
-    /// `settle_market`. Anchor's `Account` wrapper verifies the
-    /// discriminator + Borsh-deserializes the body.
+    /// Pyth `PriceUpdateV2` account. Validated manually in the handler:
     ///
-    /// # KNOWN GAP: production owner check
+    ///   1. `owner == config.pyth_receiver` — operator-pinned per cluster
+    ///      (Pyth's real receiver on devnet/mainnet; this program's ID in
+    ///      LiteSVM fixtures).
+    ///   2. First 8 bytes match the vendored `PriceUpdateV2` discriminator
+    ///      (Anchor `try_deserialize` enforces this).
+    ///   3. The Borsh-decoded `PriceFeedMessage` survives the freshness +
+    ///      feed-id + confidence checks below.
     ///
-    /// Anchor's `#[account]` macro on the vendored `PriceUpdateV2` generates
-    /// `impl Owner { fn owner() -> Pubkey { crate::ID } }` — pinning the
-    /// allowed owner to **this** program. Real Pyth `PriceUpdateV2` accounts
-    /// are owned by Pyth's on-chain Receiver program, not by us, so this
-    /// constraint will **reject every real Pyth-posted account** on devnet
-    /// and mainnet with `AccountOwnedByWrongProgram`.
+    /// `UncheckedAccount` is required because Anchor's `Account<T>` for
+    /// types declared with `#[account]` pins the owner check to
+    /// `crate::ID`, which would reject real Pyth-owned accounts. We
+    /// reproduce the discriminator check ourselves via `try_deserialize`
+    /// after the manual owner check below.
     ///
-    /// LiteSVM tests pass because the test fixture (`set_pyth_price` in
-    /// `tests/litesvm/src/lib.rs`) constructs the account with
-    /// `owner = meridian::ID` — that path works in tests but is not the
-    /// production wire layout.
-    ///
-    /// To deploy against real Pyth feeds: switch this field to
-    /// `UncheckedAccount<'info>` + an explicit `#[account(owner = <pyth
-    /// receiver program id>)]` constraint (or a Config-stored expected
-    /// owner pubkey that operators set per cluster), and `try_deserialize`
-    /// the body manually in the handler. The vendored layout is still
-    /// wire-compatible; only the owner check needs to change.
-    ///
-    /// Tracked as a residual code-review finding rather than auto-fixed
-    /// because the test fixture would also need updating in lockstep.
-    pub price_update: Account<'info, PriceUpdateV2>,
+    /// CHECK: see manual validation in the handler.
+    pub price_update: UncheckedAccount<'info>,
 }
 
 pub fn settle_market_handler(ctx: Context<SettleMarket>) -> Result<()> {
+    // Validate the Pyth account before touching any other state: owner
+    // pinned to config.pyth_receiver, then try_deserialize (which checks
+    // the discriminator and Borsh-decodes the body). Doing this first
+    // means a wrong-owner / wrong-discriminator account fails fast with
+    // a meridian-side error variant instead of leaking through later.
+    let price_update_info = ctx.accounts.price_update.to_account_info();
+    require_keys_eq!(
+        *price_update_info.owner,
+        ctx.accounts.config.pyth_receiver,
+        MeridianError::InvalidOracleOwner,
+    );
+    let price_update = {
+        let data = price_update_info.try_borrow_data()?;
+        let mut slice: &[u8] = &data;
+        PriceUpdateV2::try_deserialize(&mut slice)
+            .map_err(|_| MeridianError::InvalidOraclePrice)?
+    };
+
     let market = &mut ctx.accounts.market;
     require!(!market.settled, MeridianError::MarketSettled);
 
@@ -119,12 +136,10 @@ pub fn settle_market_handler(ctx: Context<SettleMarket>) -> Result<()> {
 
     // Pyth: get_price_no_older_than checks (a) feed id matches, (b)
     // `publish_time + max_age >= clock.unix_timestamp`. The fixed
-    // PriceUpdateV2 layout is owned by the on-chain Pyth receiver
-    // program — see `state/pyth.rs` for why we vendor the type instead
-    // of pulling the SDK.
-    let price = ctx
-        .accounts
-        .price_update
+    // PriceUpdateV2 layout is owned by the operator-pinned Pyth Receiver
+    // program (validated above) — see `state/pyth.rs` for why we vendor
+    // the type instead of pulling the SDK.
+    let price = price_update
         .get_price_no_older_than(&clock, MAX_AGE_SECONDS, &market.pyth_feed_id)
         .map_err(map_oracle_err)?;
 

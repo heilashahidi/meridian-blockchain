@@ -28,7 +28,8 @@ use anchor_lang::AnchorSerialize;
 use litesvm::LiteSVM;
 use meridian_litesvm_tests::{
     anchor_ix, load_anchor_account, load_zero_copy_account, read_mint, read_token_account,
-    set_clock_unix_ts, set_pyth_price, Fixture, MERIDIAN_PROGRAM_ID, RENT_SYSVAR_ID,
+    set_clock_unix_ts, set_pyth_price, set_pyth_price_with_owner, Fixture,
+    MERIDIAN_PROGRAM_ID, RENT_SYSVAR_ID,
     SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
 };
 use solana_address::Address;
@@ -157,10 +158,15 @@ impl Env {
 
         // initialize_config
         let fee_authority = Keypair::new().pubkey();
+        let mut init_args = fee_authority.to_bytes().to_vec();
+        // pyth_receiver: pin to our own program ID so the LiteSVM fixture
+        // (which set_account()s PriceUpdateV2 with owner=meridian) passes the
+        // settle_market owner check.
+        init_args.extend_from_slice(MERIDIAN_PROGRAM_ID.as_ref());
         let init_ix = anchor_ix(
             MERIDIAN_PROGRAM_ID,
             "initialize_config",
-            &fee_authority.to_bytes().to_vec(),
+            &init_args,
             vec![
                 AccountMeta::new(fx.admin.pubkey(), true),
                 AccountMeta::new(config_pda, false),
@@ -318,6 +324,7 @@ impl Env {
         let caller = self.users[0].kp.insecure_clone();
         let metas = vec![
             AccountMeta::new(caller.pubkey(), true),
+            AccountMeta::new_readonly(self.config_pda, false),
             AccountMeta::new(self.market_pda, false),
             AccountMeta::new_readonly(self.pyth_account, false),
         ];
@@ -549,6 +556,42 @@ fn settle_fails_twice() {
     assert!(
         s.contains("MarketSettled") || s.contains("custom"),
         "expected MarketSettled, got {s}"
+    );
+}
+
+#[test]
+fn settle_fails_when_pyth_account_owned_by_wrong_program() {
+    // Regression test for the P0 production-deployment finding: settle_market
+    // must validate that the price_update account is owned by
+    // config.pyth_receiver. The LiteSVM fixture's default initialize_config
+    // sets pyth_receiver = MERIDIAN_PROGRAM_ID; plant a Pyth-shaped account
+    // owned by some OTHER program and assert settle rejects with
+    // InvalidOracleOwner.
+    let mut env = Env::new(1, 10_000);
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+
+    // Construct an "imposter" owner — any pubkey that isn't MERIDIAN_PROGRAM_ID.
+    // Use a deterministic non-zero pubkey so a regression is easy to trace.
+    let imposter_owner = anchor_lang::prelude::Pubkey::new_from_array([7u8; 32]);
+    set_pyth_price_with_owner(
+        &mut env.fx.svm,
+        env.pyth_account,
+        imposter_owner,
+        FEED_ID,
+        dollars_to_pyth(700),
+        1_000,
+        PYTH_EXPONENT,
+        ts,
+    );
+
+    let err = env
+        .settle()
+        .expect_err("settle must reject Pyth account owned by wrong program");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("InvalidOracleOwner"),
+        "expected InvalidOracleOwner, got {s}",
     );
 }
 

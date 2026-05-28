@@ -65,11 +65,22 @@ pub mod meridian {
     use super::*;
 
     /// Bootstrap the singleton Config PDA. First caller becomes admin.
+    ///
+    /// `pyth_receiver` is the on-chain Pyth Receiver program ID that
+    /// `settle_market` will validate against — operator-set so the same
+    /// `.so` works on devnet (Pyth's real receiver), mainnet (same), and
+    /// LiteSVM tests (`MERIDIAN_PROGRAM_ID`, since fixtures mint
+    /// meridian-owned `PriceUpdateV2` accounts).
     pub fn initialize_config(
         ctx: Context<InitializeConfig>,
         fee_authority: Pubkey,
+        pyth_receiver: Pubkey,
     ) -> Result<()> {
-        instructions::initialize_config::initialize_config_handler(ctx, fee_authority)
+        instructions::initialize_config::initialize_config_handler(
+            ctx,
+            fee_authority,
+            pyth_receiver,
+        )
     }
 
     /// Admin-only: create a strike market (Market + Book + Yes/No mints

@@ -29,6 +29,20 @@ pub struct Config {
     /// `initialize_config` time; markets reference it indirectly via the
     /// program's escrow PDAs.
     pub usdc_mint: Pubkey,
+    /// Pyth Receiver program ID — the expected owner for every
+    /// `PriceUpdateV2` account `settle_market` accepts. Operator sets this
+    /// at `initialize_config` time:
+    ///
+    ///   * Devnet / mainnet: Pyth's on-chain Receiver program
+    ///     (`rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ` as of 2026).
+    ///   * LiteSVM / test fixtures: this program's own ID
+    ///     (`MERIDIAN_PROGRAM_ID`), because test code mints owner-meridian
+    ///     accounts via `set_account`.
+    ///
+    /// Pinning this in Config (rather than hardcoding the Pyth Receiver
+    /// pubkey in code) lets the same `.so` work in both environments
+    /// without a feature flag.
+    pub pyth_receiver: Pubkey,
 }
 
 impl Config {

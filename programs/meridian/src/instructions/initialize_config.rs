@@ -44,6 +44,7 @@ pub struct InitializeConfig<'info> {
 pub fn initialize_config_handler(
     ctx: Context<InitializeConfig>,
     fee_authority: Pubkey,
+    pyth_receiver: Pubkey,
 ) -> Result<()> {
     let config = &mut ctx.accounts.config;
     config.bump = ctx.bumps.config;
@@ -51,5 +52,6 @@ pub fn initialize_config_handler(
     config.admin = ctx.accounts.payer.key();
     config.fee_authority = fee_authority;
     config.usdc_mint = ctx.accounts.usdc_mint.key();
+    config.pyth_receiver = pyth_receiver;
     Ok(())
 }
