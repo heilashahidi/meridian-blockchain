@@ -43,6 +43,14 @@ pub struct Config {
     /// pubkey in code) lets the same `.so` work in both environments
     /// without a feature flag.
     pub pyth_receiver: Pubkey,
+
+    /// When `true`, `settle_market` requires the Pyth price update to carry
+    /// `VerificationLevel::Full` (two-thirds of the Wormhole guardian set
+    /// signed). Secure-by-default: `initialize_config` sets this `true`, so a
+    /// fresh deployment is mainnet-correct without anyone flipping a switch.
+    /// An operator can relax it (e.g. on devnet where only `Partial` updates
+    /// are posted) via `set_require_full_verification`.
+    pub require_full_verification: bool,
 }
 
 impl Config {

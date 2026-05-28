@@ -123,4 +123,10 @@ pub enum MeridianError {
     /// an outcome by hand.
     #[msg("Admin emergency-settle grace period has not elapsed yet.")]
     EmergencyGraceNotElapsed,
+
+    /// `settle_market` requires `VerificationLevel::Full` (per
+    /// `Config.require_full_verification`) but the supplied Pyth update was
+    /// only `Partial`-verified.
+    #[msg("Oracle price update is not fully verified; refusing to settle.")]
+    OracleVerificationInsufficient,
 }

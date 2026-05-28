@@ -43,6 +43,19 @@ pub fn set_paused_handler(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
     Ok(())
 }
 
+/// Admin-only: toggle the Pyth `VerificationLevel::Full` requirement on
+/// `settle_market`. Reuses the [`SetPaused`] account context (same admin +
+/// Config check). Default is `true` (set at `initialize_config`); operators
+/// relax it on devnet where only `Partial` updates are posted.
+pub fn set_require_full_verification_handler(
+    ctx: Context<SetPaused>,
+    require_full: bool,
+) -> Result<()> {
+    ctx.accounts.config.require_full_verification = require_full;
+    msg!("set_require_full_verification: require_full={}", require_full);
+    Ok(())
+}
+
 #[derive(Accounts)]
 pub struct AdminSettleMarket<'info> {
     /// Admin authority. Must equal `config.admin`.

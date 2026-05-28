@@ -91,6 +91,17 @@ pub mod meridian {
         instructions::admin::set_paused_handler(ctx, paused)
     }
 
+    /// Admin-only: toggle whether `settle_market` requires a fully
+    /// Wormhole-verified (`VerificationLevel::Full`) Pyth price. Defaults to
+    /// `true` at `initialize_config`; relax on devnet if only `Partial`
+    /// updates are available.
+    pub fn set_require_full_verification(
+        ctx: Context<SetPaused>,
+        require_full: bool,
+    ) -> Result<()> {
+        instructions::admin::set_require_full_verification_handler(ctx, require_full)
+    }
+
     /// Admin-only emergency settlement (P1 stuck-oracle deadlock). Stamps
     /// `yes_wins`/!`yes_wins` as the outcome WITHOUT reading Pyth, but only
     /// after `expiry + EMERGENCY_GRACE_SECONDS` (24h) so normal oracle

@@ -137,6 +137,16 @@ pub fn settle_market_handler(ctx: Context<SettleMarket>) -> Result<()> {
             .map_err(|_| MeridianError::InvalidOraclePrice)?
     };
 
+    // Verification-level gate. Secure-by-default (Config.require_full_verification
+    // is true at init): only a fully Wormhole-verified price may settle. An
+    // operator can relax this on devnet, where Partial updates are common.
+    if ctx.accounts.config.require_full_verification {
+        require!(
+            price_update.verification_level == crate::state::pyth::VerificationLevel::Full,
+            MeridianError::OracleVerificationInsufficient,
+        );
+    }
+
     let market = &mut ctx.accounts.market;
     require!(!market.settled, MeridianError::MarketSettled);
 

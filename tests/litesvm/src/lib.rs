@@ -386,6 +386,51 @@ pub fn set_pyth_price(
         .expect("set_account PriceUpdateV2");
 }
 
+/// Plant a `PriceUpdateV2` with `VerificationLevel::Partial` (owned by
+/// `MERIDIAN_PROGRAM_ID`). Used to test `Config.require_full_verification`:
+/// settle must reject this when the flag is on, accept it when relaxed.
+#[allow(clippy::too_many_arguments)]
+pub fn set_pyth_price_partial(
+    svm: &mut LiteSVM,
+    address: Address,
+    feed_id: [u8; 32],
+    price: i64,
+    conf: u64,
+    exponent: i32,
+    publish_time: i64,
+) {
+    use anchor_lang::AccountSerialize;
+    use meridian::state::pyth::{PriceFeedMessage, PriceUpdateV2, VerificationLevel};
+
+    let pu = PriceUpdateV2 {
+        write_authority: anchor_lang::prelude::Pubkey::default(),
+        verification_level: VerificationLevel::Partial { num_signatures: 1 },
+        price_message: PriceFeedMessage {
+            feed_id,
+            price,
+            conf,
+            exponent,
+            publish_time,
+            prev_publish_time: publish_time.saturating_sub(1),
+            ema_price: price,
+            ema_conf: conf,
+        },
+        posted_slot: 0,
+    };
+    let mut data: Vec<u8> = Vec::with_capacity(256);
+    pu.try_serialize(&mut data).expect("serialize PriceUpdateV2");
+    let rent = svm.minimum_balance_for_rent_exemption(data.len());
+    let account = solana_account::Account {
+        lamports: rent,
+        data,
+        owner: MERIDIAN_PROGRAM_ID,
+        executable: false,
+        rent_epoch: 0,
+    };
+    svm.set_account(address, account)
+        .expect("set_account PriceUpdateV2");
+}
+
 /// Plant a `PriceUpdateV2` account owned by `owner` instead of the default
 /// `MERIDIAN_PROGRAM_ID`. Used by regression tests that verify
 /// `settle_market`'s owner check rejects accounts owned by anything other

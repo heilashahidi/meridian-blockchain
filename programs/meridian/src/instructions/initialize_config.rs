@@ -53,5 +53,8 @@ pub fn initialize_config_handler(
     config.fee_authority = fee_authority;
     config.usdc_mint = ctx.accounts.usdc_mint.key();
     config.pyth_receiver = pyth_receiver;
+    // Secure-by-default: require fully Wormhole-verified Pyth prices at
+    // settle. Operators relax this on devnet via set_require_full_verification.
+    config.require_full_verification = true;
     Ok(())
 }

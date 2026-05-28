@@ -29,7 +29,7 @@ use anchor_lang::{AccountSerialize, AnchorSerialize};
 use litesvm::LiteSVM;
 use meridian_litesvm_tests::{
     anchor_ix, load_anchor_account, load_zero_copy_account, read_mint, read_token_account,
-    set_clock_unix_ts, set_pyth_price, set_pyth_price_with_owner, Fixture,
+    set_clock_unix_ts, set_pyth_price, set_pyth_price_partial, set_pyth_price_with_owner, Fixture,
     MERIDIAN_PROGRAM_ID, RENT_SYSVAR_ID,
     SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
 };
@@ -479,8 +479,36 @@ impl Env {
         );
     }
 
+    fn plant_pyth_partial(&mut self, price: i64, conf: u64, publish_time: i64) {
+        set_pyth_price_partial(
+            &mut self.fx.svm,
+            self.pyth_account,
+            FEED_ID,
+            price,
+            conf,
+            PYTH_EXPONENT,
+            publish_time,
+        );
+    }
+
     fn advance_clock(&mut self, new_ts: i64) {
         set_clock_unix_ts(&mut self.fx.svm, new_ts);
+    }
+
+    /// Admin toggles `Config.require_full_verification` (reuses SetPaused ctx).
+    fn set_require_full(&mut self, require_full: bool) {
+        let admin = self.fx.admin.insecure_clone();
+        let metas = vec![
+            AccountMeta::new_readonly(admin.pubkey(), true),
+            AccountMeta::new(self.config_pda, false),
+        ];
+        let ix = anchor_ix(
+            MERIDIAN_PROGRAM_ID,
+            "set_require_full_verification",
+            &[require_full as u8],
+            metas,
+        );
+        submit(&mut self.fx.svm, ix, &[&admin]);
     }
 }
 
@@ -753,6 +781,59 @@ fn admin_settle_twice_rejected() {
     assert!(
         s.contains("MarketSettled") || s.contains("custom"),
         "expected MarketSettled, got {s}"
+    );
+}
+
+#[test]
+fn settle_rejects_partial_when_full_required() {
+    // require_full_verification defaults ON, so a Partial-verified Pyth price
+    // must be rejected.
+    let mut env = Env::new(1, 10_000);
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth_partial(dollars_to_pyth(700), 1_000, ts);
+    let err = env.settle().expect_err("partial price must be rejected by default");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("OracleVerificationInsufficient") || s.contains("custom"),
+        "expected OracleVerificationInsufficient, got {s}"
+    );
+    assert!(!env.market().settled, "market must stay unsettled");
+}
+
+#[test]
+fn settle_accepts_partial_when_relaxed() {
+    // Operator relaxes the flag (e.g. devnet); a Partial price then settles.
+    let mut env = Env::new(1, 10_000);
+    env.set_require_full(false);
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth_partial(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("partial price accepted once full not required");
+    assert!(env.market().settled, "market settled with relaxed flag");
+    assert_eq!(env.market().outcome, Some(meridian::state::Outcome::YesWins));
+}
+
+#[test]
+fn set_require_full_non_admin_rejected() {
+    let mut env = Env::new(1, 10_000);
+    let user = env.users[0].kp.insecure_clone(); // not the admin
+    let metas = vec![
+        AccountMeta::new_readonly(user.pubkey(), true),
+        AccountMeta::new(env.config_pda, false),
+    ];
+    let ix = anchor_ix(
+        MERIDIAN_PROGRAM_ID,
+        "set_require_full_verification",
+        &[0u8],
+        metas,
+    );
+    let err = try_submit(&mut env.fx.svm, ix, &[&user])
+        .expect_err("non-admin must not toggle verification requirement");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("Unauthorized") || s.contains("custom"),
+        "expected Unauthorized, got {s}"
     );
 }
 
