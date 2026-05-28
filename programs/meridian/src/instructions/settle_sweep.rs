@@ -31,14 +31,19 @@
 //! its slot, so the cranker must supply an account for every entry it
 //! expects to be popped, not only the ones it expects to pay out:
 //!
-//!   * Bid cancellations → owner's USDC ATA (or any USDC token account
-//!     the owner controls — we validate via `token::accessor`).
-//!   * Ask cancellations → owner's Yes ATA.
+//!   * Bid cancellations → owner's canonical USDC ATA.
+//!   * Ask cancellations → owner's canonical Yes ATA.
 //!
-//! Per-order validation mirrors U5's `place_order_inner`:
-//!   * `token::accessor::mint` matches the expected mint (USDC for bids,
-//!     Yes for asks).
-//!   * `token::accessor::authority` matches the resting order's `owner`.
+//! Per-order validation mirrors `place_order_inner`'s canonical-ATA binding:
+//! the recipient must be the order owner's canonical associated token account
+//! for the expected mint (derived on-chain), and must be receivable (live,
+//! not frozen, SPL-owned). The asymmetry with the trading path is deliberate:
+//!   * trading path REVERTS on a non-canonical taker-supplied account (the
+//!     taker is the actor and bears its own error);
+//!   * sweep SKIPS on a non-canonical recipient (the cranker is an untrusted
+//!     public actor and must not be able to abort other owners' refunds).
+//! A skipped entry is re-inserted at a fresh seq (see below) and paid by a
+//! correct re-crank.
 //!
 //! # `max_orders` cap
 //!
@@ -49,10 +54,12 @@
 //! check.
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, accessor as token_accessor, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::associated_token::get_associated_token_address;
+use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 use crate::error::MeridianError;
 use crate::matching::book_side::{OrderEntry, Side};
+use crate::matching::order_key::OrderKey;
 use crate::state::{Book, Config, Market};
 
 /// Per-tx hard cap on how many resting orders one sweep call may drain.
@@ -245,17 +252,22 @@ pub fn settle_sweep_handler<'info>(
         };
         let owner_pk = Pubkey::new_from_array(entry.owner);
 
-        // Validate the recipient WITHOUT reverting: a closed account makes the
-        // accessor reads fail, a wrong mint/owner is a mismatch, and a frozen
-        // account (e.g. a Circle-frozen USDC ATA) can't receive a transfer.
-        // Any of these means "can't pay this owner right now" → skip, don't
-        // abort. The frozen/closed check MUST happen before the CPI: a failed
-        // transfer aborts the whole tx in the runtime, so we can't catch it
-        // after the fact (that was the bug in the old `transfer_res.is_err()`
-        // branch — it was unreachable).
-        let recipient_ok = crate::instructions::place_limit_order::token_account_receivable(recipient)
-            && matches!(token_accessor::mint(recipient), Ok(m) if m == expected_mint)
-            && matches!(token_accessor::authority(recipient), Ok(a) if a == owner_pk);
+        // Bind the refund recipient to the order owner's CANONICAL ATA, derived
+        // on-chain (consistent with place_order_inner's maker payouts). The
+        // sweep cranker is an untrusted PUBLIC caller, so unlike the trading
+        // path — which reverts on a non-canonical taker-supplied account — a
+        // non-canonical recipient here is SKIPPED, not reverted: a malicious or
+        // sloppy cranker must not be able to abort the whole batch and starve
+        // other owners' refunds. The skipped entry is re-inserted (fresh seq)
+        // and a correct re-crank pays it.
+        //
+        // We still need `token_account_receivable` for liveness: the canonical
+        // ATA may be closed/frozen/uninitialized. The frozen/closed check MUST
+        // precede the CPI — a failed transfer aborts the whole tx in the
+        // runtime, so it can't be caught after the fact.
+        let canonical = get_associated_token_address(&owner_pk, &expected_mint);
+        let recipient_ok = recipient.key() == canonical
+            && crate::instructions::place_limit_order::token_account_receivable(recipient);
 
         if !recipient_ok {
             skipped.push((side, entry));
@@ -285,12 +297,24 @@ pub fn settle_sweep_handler<'info>(
         drained += 1;
     }
 
-    // Re-insert skipped entries so their escrowed collateral stays owed. They
-    // came out of the book, so capacity is guaranteed; a BookFull here would
-    // be a real invariant break.
+    // Re-insert skipped entries (fresh seq) so their escrowed collateral stays
+    // owed. They came out of the book, so capacity is guaranteed; a BookFull
+    // here would be a real invariant break.
+    //
+    // Fresh seq (finding #4): re-inserting at the ORIGINAL seq sorted skipped
+    // orders straight back to the FRONT of their price level, so each later
+    // sweep call popped and re-attempted the same un-refundable orders first,
+    // burning its per-call attempt budget on them and throttling drain
+    // throughput. A fresh seq sends them to the BACK — consistent with
+    // place_order_inner — so the cranker drains payable orders first and the
+    // skipped owner is refunded once they re-open a valid canonical ATA. The
+    // sweep only ever pops whole entries (no partial fills), so there is no
+    // remnant-merge case here, unlike the trading path.
     if !skipped.is_empty() {
         let mut book = ctx.accounts.book.load_mut()?;
-        for (side, entry) in skipped.drain(..) {
+        for (side, mut entry) in skipped.drain(..) {
+            let seq = book.next_seq()?;
+            entry.key = OrderKey::new(entry.key.price(), seq);
             let side_ref = match side {
                 Side::Bid => &mut book.bids,
                 Side::Ask => &mut book.asks,
