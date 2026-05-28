@@ -49,7 +49,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, accessor as token_accessor, Mint, Token, TokenAccount, Transfer};
 
 use crate::error::MeridianError;
-use crate::matching::book_side::Side;
+use crate::matching::book_side::{OrderEntry, Side};
 use crate::state::{Book, Config, Market};
 
 /// Per-tx hard cap on how many resting orders one sweep call may drain.
@@ -175,11 +175,26 @@ pub fn settle_sweep_handler<'info>(
     // pops the best entry from the relevant side.
 
     let mut drained: usize = 0;
+    let mut attempts: usize = 0;
     let mut accounts_idx: usize = 0;
 
-    while drained < cap {
+    // Entries whose refund couldn't be delivered this call (recipient account
+    // closed / wrong mint / wrong owner / transfer failed). We pop them out of
+    // the book so the loop can make progress on the entries behind them, then
+    // re-insert them at the end so their escrowed collateral stays owed to the
+    // owner. This is the ATA-close DoS fix: a single griefed order (place a
+    // tiny order, close the payout ATA) can no longer permanently wedge the
+    // sweep — valid orders still drain, and the griefer's order is simply
+    // skipped (recoverable once they re-open a valid token account and the
+    // crank re-runs). Bounded by `cap` (<= MAX_SWEEP_PER_TX), so the stash is
+    // small.
+    let mut skipped: Vec<(Side, OrderEntry)> = Vec::with_capacity(cap);
+
+    while attempts < cap {
         // Decide which side to drain this step (re-check each iteration
-        // because the book mutates between pops). Bids first.
+        // because the book mutates between pops). Bids first. Skipped entries
+        // are out of the book during the loop, so emptiness here reflects
+        // only entries still pending a drain attempt this call.
         let (side, refund_kind) = {
             let book = ctx.accounts.book.load()?;
             if !book.bids.is_empty() {
@@ -187,7 +202,7 @@ pub fn settle_sweep_handler<'info>(
             } else if !book.asks.is_empty() {
                 (Side::Ask, RefundKind::Yes)
             } else {
-                break; // both sides empty — sweep complete.
+                break; // nothing left to attempt this call.
             }
         };
 
@@ -201,6 +216,7 @@ pub fn settle_sweep_handler<'info>(
             };
             side_ref.pop_front().expect("non-empty side guard above")
         };
+        attempts += 1;
 
         // Compute refund amount.
         let refund_amount: u64 = match side {
@@ -214,11 +230,9 @@ pub fn settle_sweep_handler<'info>(
             Side::Ask => entry.qty,
         };
 
-        // Locate the recipient ATA in remaining_accounts and validate.
-        require!(
-            accounts_idx < remaining.len(),
-            MeridianError::InvalidAmount,
-        );
+        // One recipient account per attempt, in pop order (the off-chain
+        // cranker simulated the same sequence).
+        require!(accounts_idx < remaining.len(), MeridianError::InvalidAmount);
         let recipient = &remaining[accounts_idx];
         accounts_idx += 1;
 
@@ -226,24 +240,26 @@ pub fn settle_sweep_handler<'info>(
             RefundKind::Usdc => usdc_mint,
             RefundKind::Yes => yes_mint,
         };
-        require_keys_eq!(
-            token_accessor::mint(recipient)?,
-            expected_mint,
-            MeridianError::Unauthorized,
-        );
         let owner_pk = Pubkey::new_from_array(entry.owner);
-        require_keys_eq!(
-            token_accessor::authority(recipient)?,
-            owner_pk,
-            MeridianError::Unauthorized,
-        );
 
-        // PDA-signed refund.
+        // Validate the recipient WITHOUT reverting: a closed account makes the
+        // accessor reads fail, and a wrong mint/owner is a mismatch. Any of
+        // these means "can't pay this owner right now" → skip, don't abort.
+        let recipient_ok = matches!(token_accessor::mint(recipient), Ok(m) if m == expected_mint)
+            && matches!(token_accessor::authority(recipient), Ok(a) if a == owner_pk);
+
+        if !recipient_ok {
+            skipped.push((side, entry));
+            continue;
+        }
+
+        // PDA-signed refund. A failed transfer (e.g. frozen account) is also
+        // treated as a skip rather than aborting the whole sweep.
         let from = match refund_kind {
             RefundKind::Usdc => ctx.accounts.usdc_escrow.to_account_info(),
             RefundKind::Yes => ctx.accounts.yes_escrow.to_account_info(),
         };
-        token::transfer(
+        let transfer_res = token::transfer(
             CpiContext::new_with_signer(
                 token_program_id,
                 Transfer {
@@ -254,9 +270,29 @@ pub fn settle_sweep_handler<'info>(
                 signer_seeds,
             ),
             refund_amount,
-        )?;
+        );
+        if transfer_res.is_err() {
+            skipped.push((side, entry));
+            continue;
+        }
 
         drained += 1;
+    }
+
+    // Re-insert skipped entries so their escrowed collateral stays owed. They
+    // came out of the book, so capacity is guaranteed; a BookFull here would
+    // be a real invariant break.
+    if !skipped.is_empty() {
+        let mut book = ctx.accounts.book.load_mut()?;
+        for (side, entry) in skipped.drain(..) {
+            let side_ref = match side {
+                Side::Bid => &mut book.bids,
+                Side::Ask => &mut book.asks,
+            };
+            side_ref
+                .insert(side, entry)
+                .map_err(|_| MeridianError::InvariantBroken)?;
+        }
     }
 
     // Update the cursor with however many we drained this call. The

@@ -918,6 +918,44 @@ fn ae1_settle_then_sweep_refunds_open_orders() {
 }
 
 #[test]
+fn sweep_skips_unrefundable_order_and_continues() {
+    // ATA-close DoS regression: a resting order whose payout recipient can't
+    // receive (here, an account whose authority != the order owner — same
+    // skip branch a closed ATA hits) must NOT wedge the sweep. The valid
+    // order still drains; the bad one is skipped and stays in the book.
+    let mut env = Env::new(2, 10_000);
+    // Two resting bids. Best bid (price 50, user1) pops first, then user0 (40).
+    env.place_limit(1, 0, 50, 10, &[]).expect("user1 bid posts");
+    env.place_limit(0, 0, 40, 10, &[]).expect("user0 bid posts");
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle");
+
+    let escrow_pre = env.usdc_escrow_amount(); // 10*50 + 10*40 = 900
+    // Recipients in pop order: [user1-slot, user0-slot]. user1's slot gets
+    // user0's USDC ATA (authority = user0 != user1) → recipient_ok=false →
+    // skip. user0's slot is valid → refund 400.
+    env.sweep(2, &[env.users[0].usdc, env.users[0].usdc])
+        .expect("sweep must not revert on an unrefundable entry");
+
+    assert_eq!(
+        env.usdc_escrow_amount(),
+        escrow_pre - 400,
+        "only user0 (40*10) refunded; user1's 500 still escrowed"
+    );
+    let book = env.book();
+    assert_eq!(book.bids.len(), 1, "user1's bid remains (skipped, re-inserted)");
+    assert_eq!(
+        book.bids.as_slice()[0].key.price(),
+        50,
+        "the skipped entry is user1's price-50 bid"
+    );
+    // Cursor only counts successful drains.
+    assert_eq!(env.market().sweep_cursor, 1);
+}
+
+#[test]
 fn sweep_partial_then_resume() {
     // Post 5 orders (all bids by A); sweep with max_orders=3, then sweep
     // with max_orders=3 again. Second call cleans the rest; cursor
