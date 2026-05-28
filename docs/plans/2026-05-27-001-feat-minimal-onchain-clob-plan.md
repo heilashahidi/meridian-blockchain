@@ -1,7 +1,7 @@
 ---
 date: 2026-05-27
 type: feat
-status: active
+status: completed
 origin: docs/brainstorms/minimal-clob-scope-requirements.md
 ---
 
