@@ -27,9 +27,22 @@ arrayvec = { version = "0.7", default-features = false }
 # the local crate's bytemuck (Anchor 1.0 references `::bytemuck::Pod`, not
 # its private re-export, so the crate must be in scope).
 bytemuck = { version = "1.16", features = ["derive"] }
-# TODO(U7): re-enable pyth-solana-receiver-sdk once we wire `settle_market`.
-# Attempted at U1: version not pinned here to avoid blocking the scaffold.
-# pyth-solana-receiver-sdk = "0.6"
+# U7: Pyth pull-oracle receiver SDK is **intentionally vendored as a thin
+# layout-compatible struct** in `oracle/pyth.rs` rather than pulled as a
+# dependency. Rationale:
+#
+#   * `pyth-solana-receiver-sdk = "0.6"` requires `solana-program < 2`,
+#     which conflicts with Anchor 1.0's `solana-program ~3`.
+#   * `pyth-solana-receiver-sdk = "1.2"` requires `borsh < 1` transitively
+#     (via `pythnet-sdk`'s `PriceFeedMessage`), which conflicts with
+#     Anchor 1.0's `borsh 1.x` — `PriceUpdateV2` fails to satisfy
+#     `BorshDeserialize` in our context.
+#
+# The receiver program's account layout is stable wire-format; vendoring
+# the struct lets us speak the same bytes Pyth's Hermes/Wormhole posters
+# write, without dragging in the SDK's incompatible toolchain. See the
+# module docs in `state/pyth.rs` for the exact field layout and the
+# discriminator we match against.
 
 [dev-dependencies]
 proptest = "1.5"

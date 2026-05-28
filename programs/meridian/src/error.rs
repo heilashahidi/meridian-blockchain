@@ -72,4 +72,25 @@ pub enum MeridianError {
     /// `cancel_order` could not find the given order id on the book.
     #[msg("Order not found on the book.")]
     OrderNotFound,
+
+    /// Pyth `PriceUpdateV2` account's `feed_id` does not match the market's
+    /// pinned `pyth_feed_id`.
+    #[msg("Oracle account feed id does not match the market's pinned feed id.")]
+    OracleFeedIdMismatch,
+
+    /// Caller passed the losing-side token to `redeem`. The instruction
+    /// only accepts the side that matches `market.outcome`.
+    #[msg("Redeem called with the losing side; only the winning token is redeemable.")]
+    WrongRedeemSide,
+
+    /// `redeem` was called with the wrong mint pubkey for the winning side
+    /// (e.g. user passed the No mint when YesWins). Validated against
+    /// `market.{yes,no}_mint` based on the recorded outcome.
+    #[msg("Redeem-side mint does not match the market's recorded outcome.")]
+    WrongRedeemMint,
+
+    /// Pyth price was non-positive (`<= 0`). For binary options on equity
+    /// underlyings this is degenerate — refuse to settle.
+    #[msg("Oracle returned a non-positive price; refusing to settle.")]
+    InvalidOraclePrice,
 }

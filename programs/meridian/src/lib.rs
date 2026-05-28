@@ -44,7 +44,10 @@ pub use instructions::initialize_config::*;
 pub use instructions::mint_pair::*;
 pub use instructions::place_limit_order::*;
 pub use instructions::place_market_order::*;
+pub use instructions::redeem::*;
 pub use instructions::sell_no::*;
+pub use instructions::settle_market::*;
+pub use instructions::settle_sweep::*;
 
 // Program keypair generated on first `anchor build`; lives on disk at
 // `target/deploy/meridian-keypair.json` (gitignored) and is also reflected in
@@ -144,5 +147,33 @@ pub mod meridian {
         args: SellNoArgs,
     ) -> Result<()> {
         instructions::sell_no::sell_no_handler(ctx, args)
+    }
+
+    /// Read the Pyth `PriceUpdateV2` account and stamp the market's
+    /// outcome (R15a). Public — anyone can call once the expiry is past
+    /// and the oracle is fresh enough. Atomically sets
+    /// `settled = true` + `outcome = Some(_)` so any subsequent reader
+    /// sees the invariant `settled → outcome.is_some()`.
+    pub fn settle_market(ctx: Context<SettleMarket>) -> Result<()> {
+        instructions::settle_market::settle_market_handler(ctx)
+    }
+
+    /// Iteratively drain resting orders on a settled market and refund
+    /// their escrowed collateral to the owners (R15b). Public crank;
+    /// reentrant-safe across multiple calls. `max_orders = 0` is a no-op,
+    /// as is calling on an already-empty book.
+    pub fn settle_sweep<'info>(
+        ctx: Context<'info, SettleSweep<'info>>,
+        args: SettleSweepArgs,
+    ) -> Result<()> {
+        instructions::settle_sweep::settle_sweep_handler(ctx, args)
+    }
+
+    /// Burn `amount` of the **winning** token from the caller's ATA and
+    /// PDA-signed transfer `amount` USDC from escrow back to the caller.
+    /// Requires `market.settled` + `outcome.is_some()`. Caller-supplied
+    /// `winning_mint` must match the outcome (`WrongRedeemMint` otherwise).
+    pub fn redeem(ctx: Context<Redeem>, amount: u64) -> Result<()> {
+        instructions::redeem::redeem_handler(ctx, amount)
     }
 }

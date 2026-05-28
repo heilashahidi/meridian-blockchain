@@ -325,6 +325,76 @@ pub fn read_mint(svm: &LiteSVM, address: &Address) -> MintState {
     solana_program_pack::Pack::unpack(&account.data).expect("unpack SPL Mint")
 }
 
+/// Plant a fake Pyth `PriceUpdateV2` account at `address` so `settle_market`
+/// can read it. Used by U7 LiteSVM tests where the real Pyth Hermes /
+/// Wormhole posting path isn't available.
+///
+/// The byte layout matches what Pyth's on-chain receiver writes — see
+/// `programs/meridian/src/state/pyth.rs` module docs. We construct the
+/// payload by calling our vendored `PriceUpdateV2::try_serialize`, which
+/// emits Anchor's 8-byte discriminator (matching upstream) + Borsh body.
+pub fn set_pyth_price(
+    svm: &mut LiteSVM,
+    address: Address,
+    feed_id: [u8; 32],
+    price: i64,
+    conf: u64,
+    exponent: i32,
+    publish_time: i64,
+) {
+    use anchor_lang::AccountSerialize;
+    use meridian::state::pyth::{PriceFeedMessage, PriceUpdateV2, VerificationLevel};
+
+    let pu = PriceUpdateV2 {
+        // `write_authority` and `posted_slot` aren't checked by our
+        // `settle_market`; any valid Pubkey / u64 works.
+        write_authority: anchor_lang::prelude::Pubkey::default(),
+        verification_level: VerificationLevel::Full,
+        price_message: PriceFeedMessage {
+            feed_id,
+            price,
+            conf,
+            exponent,
+            publish_time,
+            prev_publish_time: publish_time.saturating_sub(1),
+            ema_price: price,
+            ema_conf: conf,
+        },
+        posted_slot: 0,
+    };
+    let mut data: Vec<u8> = Vec::with_capacity(256);
+    pu.try_serialize(&mut data).expect("serialize PriceUpdateV2");
+
+    // Anchor's `Account<'info, T>` requires the account be owned by the
+    // declaring program. Our vendored `PriceUpdateV2` has `#[account]`
+    // applied **inside** the meridian crate, so its owner check is
+    // `owner == meridian::ID`. Real-world deployments would have the
+    // pyth_solana_receiver program as owner, but our `settle_market`
+    // happily reads any account whose discriminator + body match — and
+    // Anchor's `Account::try_from` does check the owner. The simplest
+    // path: own the account by the meridian program (this is the only
+    // place the vendored discriminator is meaningful anyway).
+    let rent = svm.minimum_balance_for_rent_exemption(data.len());
+    let account = solana_account::Account {
+        lamports: rent,
+        data,
+        owner: MERIDIAN_PROGRAM_ID,
+        executable: false,
+        rent_epoch: 0,
+    };
+    svm.set_account(address, account)
+        .expect("set_account PriceUpdateV2");
+}
+
+/// Advance the LiteSVM `Clock` sysvar's `unix_timestamp` to `new_ts`.
+/// Doesn't change the slot — slot-based fees and rent still tick on
+/// `expire_blockhash`, but block time is independent.
+pub fn set_clock_unix_ts(svm: &mut LiteSVM, new_ts: i64) {
+    let mut clock = svm.get_sysvar::<solana_clock::Clock>();
+    clock.unix_timestamp = new_ts;
+    svm.set_sysvar(&clock);
+}
+
 /// Helper to enforce a no-op use of `Account` to keep the import live
 /// when test scenarios don't directly reference it.
 #[allow(dead_code)]

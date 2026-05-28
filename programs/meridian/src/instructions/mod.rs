@@ -22,8 +22,13 @@
 //!       holding `amount` No tokens with the Yes leg off-loaded.
 //!     * [`sell_no`] — atomic market-buy-Yes + burn_pair; symmetric
 //!       Sell-No exit returning USDC immediately.
-//!
-//! U7 adds the remaining handlers (settle, redeem).
+//!   * U7:
+//!     * [`settle_market`] — read Pyth oracle, stamp outcome, set
+//!       `settled = true` (R15a, atomic via Solana write-lock).
+//!     * [`settle_sweep`] — public crank that drains resting orders
+//!       on a settled market and refunds escrowed collateral (R15b).
+//!     * [`redeem`] — winning-token holders burn for $1 USDC; no
+//!       deadline.
 
 pub mod burn_pair;
 pub mod buy_no;
@@ -33,7 +38,10 @@ pub mod initialize_config;
 pub mod mint_pair;
 pub mod place_limit_order;
 pub mod place_market_order;
+pub mod redeem;
 pub mod sell_no;
+pub mod settle_market;
+pub mod settle_sweep;
 
 // Re-export the `Accounts` structs and arg types only; each handler is
 // invoked via its module path in `lib.rs` so the per-module `handler`
@@ -46,4 +54,7 @@ pub use initialize_config::InitializeConfig;
 pub use mint_pair::MintPair;
 pub use place_limit_order::{PlaceLimitOrder, PlaceLimitOrderArgs};
 pub use place_market_order::{PlaceMarketOrder, PlaceMarketOrderArgs};
+pub use redeem::Redeem;
 pub use sell_no::{SellNo, SellNoArgs};
+pub use settle_market::SettleMarket;
+pub use settle_sweep::{SettleSweep, SettleSweepArgs};

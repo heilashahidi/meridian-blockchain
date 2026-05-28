@@ -17,7 +17,11 @@
 pub mod book;
 pub mod config;
 pub mod market;
+pub mod pyth;
 
 pub use book::{Book, BOOK_DEPTH};
 pub use config::Config;
 pub use market::{Market, Outcome};
+pub use pyth::{
+    GetPriceError, Price, PriceFeedMessage, PriceUpdateV2, VerificationLevel,
+};
