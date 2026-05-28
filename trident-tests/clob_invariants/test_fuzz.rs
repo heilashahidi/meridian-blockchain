@@ -69,6 +69,21 @@ const INITIAL_USDC_PER_USER: u64 = 10_000_000_000; // 10_000 USDC
 const NUM_USERS: usize = 3;
 const NUM_MARKETS: usize = 2;
 
+/// Mirror of `place_limit_order::MAX_FILLS_PER_TX`: a taker walks at most
+/// this many opposing entries per tx. `place_order_inner` reads the maker
+/// payout accounts from `remaining_accounts[i*2]` (maker USDC) and
+/// `[i*2 + 1]` (maker Yes) for each fill `i`. Every "user" here is the
+/// admin keypair, so every maker's payout ATAs are the admin's USDC + this
+/// market's Yes ATA; we always supply MAX_FILLS_PER_TX pairs and the
+/// handler ignores any tail slots beyond the actual fill count.
+const MAX_FILLS_PER_TX: usize = 4;
+
+/// Mid price used for liquidity-seeding orders, in USDC microunits per Yes
+/// token. Deliberately small so `qty * price` locks stay affordable from
+/// the shared bankroll even at large qty — the R13 invariant uses the same
+/// `qty * price` product, so economic realism is irrelevant to correctness.
+const MID_PRICE: u64 = 1_000;
+
 // Token program ID (classic SPL Token). Matches the program's
 // declare_id! in spl_token_interface.
 fn token_program_id() -> Pubkey {
@@ -158,8 +173,13 @@ impl FuzzTest {
         }
         let user_idx = self.trident.random_from_range(0..NUM_USERS);
         let market_idx = self.trident.random_from_range(0..NUM_MARKETS);
-        // Bound the mint amount so we don't drain a user in one shot.
-        let amount = self.trident.random_from_range(1..50_000_000u64);
+        // Mint locks `amount` USDC. Bound to a quarter of the live (shared)
+        // bankroll so the mint clears and leaves room for other flows.
+        let cap = (self.usdc_bal(user_idx) / 4).max(1);
+        if cap < 2 {
+            return;
+        }
+        let amount = self.trident.random_from_range(1u64..cap);
         let _ = self.do_mint_pair(user_idx, market_idx, amount);
         self.assert_all_invariants();
     }
@@ -171,7 +191,29 @@ impl FuzzTest {
         }
         let user_idx = self.trident.random_from_range(0..NUM_USERS);
         let market_idx = self.trident.random_from_range(0..NUM_MARKETS);
-        let amount = self.trident.random_from_range(1..10_000_000u64);
+        // burn_pair needs `amount` of BOTH Yes and No on hand. If the user
+        // holds neither, mint a pair first so the burn path actually runs.
+        let mut cap = self
+            .yes_bal(user_idx, market_idx)
+            .min(self.no_bal(user_idx, market_idx));
+        if cap == 0 {
+            let mint_cap = (self.usdc_bal(user_idx) / 4).max(1);
+            if mint_cap >= 2 {
+                let a = self.trident.random_from_range(1u64..mint_cap);
+                let _ = self.do_mint_pair(user_idx, market_idx, a);
+            }
+            cap = self
+                .yes_bal(user_idx, market_idx)
+                .min(self.no_bal(user_idx, market_idx));
+        }
+        if cap == 0 {
+            return;
+        }
+        let amount = if cap == 1 {
+            1
+        } else {
+            self.trident.random_from_range(1u64..cap.saturating_add(1))
+        };
         let _ = self.do_burn_pair(user_idx, market_idx, amount);
         self.assert_all_invariants();
     }
@@ -183,11 +225,44 @@ impl FuzzTest {
         }
         let user_idx = self.trident.random_from_range(0..NUM_USERS);
         let market_idx = self.trident.random_from_range(0..NUM_MARKETS);
-        let side: u8 = if self.trident.random_bool() { 0 } else { 1 };
-        // Prices in the [1, 999_999] range — strictly inside (0, $1).
-        let price = self.trident.random_from_range(1u64..1_000_000u64);
-        let qty = self.trident.random_from_range(1u64..5_000_000u64);
-        let _ = self.do_place_limit(user_idx, market_idx, side, price, qty);
+        // Price band straddles MID_PRICE so bids and asks overlap and
+        // genuinely cross sometimes (exercising the fill path) and rest
+        // otherwise. Strictly inside (0, $1).
+        let price = self.trident.random_from_range(1u64..(4 * MID_PRICE));
+        if self.trident.random_bool() {
+            // Bid (buy Yes): up-front lock = qty * price. Clamp qty so the
+            // lock fits an eighth of the live bankroll.
+            let usdc = self.usdc_bal(user_idx);
+            let qmax = (usdc / 8 / price).clamp(1, 2_000_000);
+            let qty = if qmax <= 1 {
+                1
+            } else {
+                self.trident.random_from_range(1u64..qmax.saturating_add(1))
+            };
+            let _ = self.do_place_limit(user_idx, market_idx, 0, price, qty);
+        } else {
+            // Ask (sell Yes): up-front lock = qty Yes. Ensure the user holds
+            // some Yes (mint a pair if empty), then clamp qty to holdings.
+            let mut yes = self.yes_bal(user_idx, market_idx);
+            if yes == 0 {
+                let mc = (self.usdc_bal(user_idx) / 8).max(1);
+                if mc >= 2 {
+                    let a = self.trident.random_from_range(1u64..mc);
+                    let _ = self.do_mint_pair(user_idx, market_idx, a);
+                }
+                yes = self.yes_bal(user_idx, market_idx);
+            }
+            if yes == 0 {
+                return;
+            }
+            let qmax = yes.min(2_000_000);
+            let qty = if qmax <= 1 {
+                1
+            } else {
+                self.trident.random_from_range(1u64..qmax.saturating_add(1))
+            };
+            let _ = self.do_place_limit(user_idx, market_idx, 1, price, qty);
+        }
         self.assert_all_invariants();
     }
 
@@ -198,12 +273,39 @@ impl FuzzTest {
         }
         let user_idx = self.trident.random_from_range(0..NUM_USERS);
         let market_idx = self.trident.random_from_range(0..NUM_MARKETS);
-        let side: u8 = if self.trident.random_bool() { 0 } else { 1 };
-        let qty = self.trident.random_from_range(1u64..5_000_000u64);
-        // slippage_bound is "worst-acceptable" — for bids that's max, for
-        // asks that's min; the fuzzer just picks something in-range.
-        let slippage_bound = self.trident.random_from_range(1u64..1_000_000u64);
-        let _ = self.do_place_market(user_idx, market_idx, side, qty, slippage_bound);
+        // slippage_bound is the worst acceptable price; for a Bid taker the
+        // up-front lock = qty * slippage_bound, for an Ask taker = qty Yes.
+        let slippage_bound = self.trident.random_from_range(1u64..(4 * MID_PRICE));
+        if self.trident.random_bool() {
+            let usdc = self.usdc_bal(user_idx);
+            let qmax = (usdc / 8 / slippage_bound).clamp(1, 2_000_000);
+            let qty = if qmax <= 1 {
+                1
+            } else {
+                self.trident.random_from_range(1u64..qmax.saturating_add(1))
+            };
+            let _ = self.do_place_market(user_idx, market_idx, 0, qty, slippage_bound);
+        } else {
+            let mut yes = self.yes_bal(user_idx, market_idx);
+            if yes == 0 {
+                let mc = (self.usdc_bal(user_idx) / 8).max(1);
+                if mc >= 2 {
+                    let a = self.trident.random_from_range(1u64..mc);
+                    let _ = self.do_mint_pair(user_idx, market_idx, a);
+                }
+                yes = self.yes_bal(user_idx, market_idx);
+            }
+            if yes == 0 {
+                return;
+            }
+            let qmax = yes.min(2_000_000);
+            let qty = if qmax <= 1 {
+                1
+            } else {
+                self.trident.random_from_range(1u64..qmax.saturating_add(1))
+            };
+            let _ = self.do_place_market(user_idx, market_idx, 1, qty, slippage_bound);
+        }
         self.assert_all_invariants();
     }
 
@@ -252,9 +354,27 @@ impl FuzzTest {
         }
         let user_idx = self.trident.random_from_range(0..NUM_USERS);
         let market_idx = self.trident.random_from_range(0..NUM_MARKETS);
-        let amount = self.trident.random_from_range(1u64..2_000_000u64);
-        let min_yes_sell_price = self.trident.random_from_range(1u64..500_000u64);
-        let _ = self.do_buy_no(user_idx, market_idx, amount, min_yes_sell_price);
+        // buy_no mints `amount` (locks `amount` USDC) then market-sells the
+        // Yes leg, which MUST fully fill against resting bids or the whole
+        // tx reverts. Bound amount so both the mint and a seeded MID-priced
+        // bid (lock = amount * MID_PRICE) fit the bankroll.
+        let usdc = self.usdc_bal(user_idx);
+        let cap = (usdc / 8 / MID_PRICE).clamp(1, 1_000_000);
+        if cap < 1 {
+            return;
+        }
+        let amount = if cap <= 1 {
+            1
+        } else {
+            self.trident.random_from_range(1u64..cap.saturating_add(1))
+        };
+        // Best-effort: guarantee a crossable bid of at least `amount`. A
+        // MID-priced bid crosses any Ask taker with limit price <= MID.
+        if self.side_qty(market_idx, true) < amount {
+            let _ = self.seed_bid(user_idx, market_idx, amount);
+        }
+        // min_yes_sell_price = 1 so the MID-priced maker bid always crosses.
+        let _ = self.do_buy_no(user_idx, market_idx, amount, 1);
         self.assert_all_invariants();
     }
 
@@ -265,10 +385,40 @@ impl FuzzTest {
         }
         let user_idx = self.trident.random_from_range(0..NUM_USERS);
         let market_idx = self.trident.random_from_range(0..NUM_MARKETS);
-        let amount = self.trident.random_from_range(1u64..2_000_000u64);
-        let max_yes_buy_price =
-            self.trident.random_from_range(500_001u64..1_000_000u64);
-        let _ = self.do_sell_no(user_idx, market_idx, amount, max_yes_buy_price);
+        // sell_no buys `amount` Yes (Bid taker, lock = amount * max_price)
+        // then burns the pair, so the user must hold `amount` No. Mint a
+        // pair first if the user holds no No.
+        let mut no = self.no_bal(user_idx, market_idx);
+        if no == 0 {
+            let mc = (self.usdc_bal(user_idx) / 8).max(1);
+            if mc >= 2 {
+                let a = self.trident.random_from_range(1u64..mc);
+                let _ = self.do_mint_pair(user_idx, market_idx, a);
+            }
+            no = self.no_bal(user_idx, market_idx);
+        }
+        if no == 0 {
+            return;
+        }
+        // Buy the Yes leg at up to MID_PRICE; clamp amount by No held and by
+        // the Bid-taker lock (amount * MID_PRICE).
+        let max_price = MID_PRICE;
+        let aff = (self.usdc_bal(user_idx) / 8 / max_price).max(1);
+        let cap = no.min(aff).min(1_000_000);
+        if cap < 1 {
+            return;
+        }
+        let amount = if cap <= 1 {
+            1
+        } else {
+            self.trident.random_from_range(1u64..cap.saturating_add(1))
+        };
+        // Best-effort: guarantee a crossable ask of at least `amount`. A
+        // MID-priced ask crosses a Bid taker with limit price >= MID.
+        if self.side_qty(market_idx, false) < amount {
+            let _ = self.seed_ask(user_idx, market_idx, amount);
+        }
+        let _ = self.do_sell_no(user_idx, market_idx, amount, max_price);
         self.assert_all_invariants();
     }
 
@@ -502,10 +652,14 @@ impl FuzzTest {
 
     fn build_initialize_config_ix(&self, config: Pubkey) -> Instruction {
         let admin_pk = solana_sdk::signer::Signer::pubkey(&self.admin);
-        // Anchor wire: discriminator || borsh(fee_authority: Pubkey)
-        let mut data = Vec::with_capacity(8 + 32);
+        // Anchor wire: discriminator || borsh(fee_authority: Pubkey, pyth_receiver: Pubkey)
+        // pyth_receiver gained a second arg in 4785807 (Pyth Full-verification).
+        // settle is out-of-scope for this harness, so any valid pubkey works;
+        // use the program's own ID (the LiteSVM/test-fixture convention).
+        let mut data = Vec::with_capacity(8 + 32 + 32);
         data.extend_from_slice(&anchor_disc("initialize_config"));
         data.extend_from_slice(admin_pk.as_ref());
+        data.extend_from_slice(meridian_program_id().as_ref());
         Instruction {
             program_id: meridian_program_id(),
             accounts: vec![
@@ -643,7 +797,7 @@ impl FuzzTest {
         data.push(side);
         data.extend_from_slice(&price.to_le_bytes());
         data.extend_from_slice(&qty.to_le_bytes());
-        let ix = Instruction {
+        let mut ix = Instruction {
             program_id: meridian_program_id(),
             accounts: vec![
                 AccountMeta::new(user_pk, true),
@@ -660,6 +814,7 @@ impl FuzzTest {
             ],
             data,
         };
+        ix.accounts.extend(self.maker_remaining(market_idx));
         self.trident
             .process_transaction(&[ix], Some("place_limit_order"))
             .is_success()
@@ -682,7 +837,7 @@ impl FuzzTest {
         data.push(side);
         data.extend_from_slice(&qty.to_le_bytes());
         data.extend_from_slice(&slippage_bound.to_le_bytes());
-        let ix = Instruction {
+        let mut ix = Instruction {
             program_id: meridian_program_id(),
             accounts: vec![
                 AccountMeta::new(user_pk, true),
@@ -699,6 +854,7 @@ impl FuzzTest {
             ],
             data,
         };
+        ix.accounts.extend(self.maker_remaining(market_idx));
         self.trident
             .process_transaction(&[ix], Some("place_market_order"))
             .is_success()
@@ -759,7 +915,7 @@ impl FuzzTest {
         data.extend_from_slice(&anchor_disc("buy_no"));
         data.extend_from_slice(&amount.to_le_bytes());
         data.extend_from_slice(&min_yes_sell_price.to_le_bytes());
-        let ix = Instruction {
+        let mut ix = Instruction {
             program_id: meridian_program_id(),
             accounts: vec![
                 AccountMeta::new(user_pk, true),
@@ -778,6 +934,7 @@ impl FuzzTest {
             ],
             data,
         };
+        ix.accounts.extend(self.maker_remaining(market_idx));
         self.trident
             .process_transaction(&[ix], Some("buy_no"))
             .is_success()
@@ -799,7 +956,7 @@ impl FuzzTest {
         data.extend_from_slice(&anchor_disc("sell_no"));
         data.extend_from_slice(&amount.to_le_bytes());
         data.extend_from_slice(&max_yes_buy_price.to_le_bytes());
-        let ix = Instruction {
+        let mut ix = Instruction {
             program_id: meridian_program_id(),
             accounts: vec![
                 AccountMeta::new(user_pk, true),
@@ -818,6 +975,7 @@ impl FuzzTest {
             ],
             data,
         };
+        ix.accounts.extend(self.maker_remaining(market_idx));
         self.trident
             .process_transaction(&[ix], Some("sell_no"))
             .is_success()
@@ -928,6 +1086,95 @@ impl FuzzTest {
     fn read_resting(&mut self, market_idx: usize) -> RestingState {
         let book = self.markets[market_idx].book;
         self.read_book_raw(&book)
+    }
+
+    // -------------------------------------------------------------------
+    // Liveness helpers — keep flows inside the feasible region so the
+    // matching / fund-movement paths actually execute (rather than
+    // bouncing off insufficient-funds / empty-book reverts).
+    // -------------------------------------------------------------------
+
+    fn usdc_bal(&mut self, user_idx: usize) -> u64 {
+        let a = self.user_usdc[user_idx];
+        self.read_token_balance(&a)
+    }
+
+    fn yes_bal(&mut self, user_idx: usize, market_idx: usize) -> u64 {
+        let a = self.markets[market_idx].user_yes_ata[user_idx];
+        self.read_token_balance(&a)
+    }
+
+    fn no_bal(&mut self, user_idx: usize, market_idx: usize) -> u64 {
+        let a = self.markets[market_idx].user_no_ata[user_idx];
+        self.read_token_balance(&a)
+    }
+
+    /// Ensure the user holds at least `want` Yes (and, since mint_pair is a
+    /// pair mint, at least `want` No too) in this market. Mints a pair if
+    /// short, clamped to a quarter of the shared bankroll. Returns the
+    /// resulting Yes balance.
+    fn ensure_yes(&mut self, user_idx: usize, market_idx: usize, want: u64) -> u64 {
+        let have = self.yes_bal(user_idx, market_idx);
+        if have >= want {
+            return have;
+        }
+        let need = want - have;
+        let usdc = self.usdc_bal(user_idx);
+        let mint_amt = need.min((usdc / 4).max(1));
+        if mint_amt > 0 && usdc >= mint_amt {
+            let _ = self.do_mint_pair(user_idx, market_idx, mint_amt);
+        }
+        self.yes_bal(user_idx, market_idx)
+    }
+
+    /// Total resting qty on a side of the book.
+    fn side_qty(&mut self, market_idx: usize, bids: bool) -> u64 {
+        let r = self.read_resting(market_idx);
+        let entries = if bids { r.bids } else { r.asks };
+        entries.iter().map(|e| e.qty).fold(0u64, |a, e| a.saturating_add(e))
+    }
+
+    /// Seed a resting bid (buy Yes) at `MID_PRICE` so a later Ask-side
+    /// taker (e.g. `buy_no`) has something to cross. Affordable-guarded.
+    fn seed_bid(&mut self, user_idx: usize, market_idx: usize, qty: u64) -> bool {
+        if qty == 0 {
+            return false;
+        }
+        let usdc = self.usdc_bal(user_idx);
+        let lock = qty.saturating_mul(MID_PRICE);
+        if lock == 0 || lock > usdc / 2 {
+            return false;
+        }
+        self.do_place_limit(user_idx, market_idx, 0, MID_PRICE, qty)
+    }
+
+    /// Seed a resting ask (sell Yes) at `MID_PRICE` so a later Bid-side
+    /// taker (e.g. `sell_no`) has something to cross. Mints Yes first.
+    fn seed_ask(&mut self, user_idx: usize, market_idx: usize, qty: u64) -> bool {
+        if qty == 0 {
+            return false;
+        }
+        if self.ensure_yes(user_idx, market_idx, qty) < qty {
+            return false;
+        }
+        self.do_place_limit(user_idx, market_idx, 1, MID_PRICE, qty)
+    }
+
+    /// Maker payout accounts for fills. Every maker is the admin keypair,
+    /// so each fill pays the admin's USDC + this market's Yes ATA. We
+    /// supply `MAX_FILLS_PER_TX` writable pairs; `place_order_inner` reads
+    /// only `0..fill_count` and ignores the rest. Appending these to any
+    /// order that might cross is what lets fills actually settle — without
+    /// them every crossing order reverts on the first fill.
+    fn maker_remaining(&self, market_idx: usize) -> Vec<AccountMeta> {
+        let maker_usdc = self.user_usdc[0];
+        let maker_yes = self.markets[market_idx].user_yes_ata[0];
+        let mut metas = Vec::with_capacity(MAX_FILLS_PER_TX * 2);
+        for _ in 0..MAX_FILLS_PER_TX {
+            metas.push(AccountMeta::new(maker_usdc, false));
+            metas.push(AccountMeta::new(maker_yes, false));
+        }
+        metas
     }
 
     /// Parse the zero-copy `Book` account by raw bytes — we can't borsh-
