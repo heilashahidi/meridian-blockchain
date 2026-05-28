@@ -45,6 +45,119 @@ pub const RENT_SYSVAR_ID: Address = solana_address::address!(
     "SysvarRent111111111111111111111111111111111"
 );
 
+/// Associated Token Account program id. Used to derive a maker's / order
+/// owner's canonical ATA, which the post-U5 ABI now binds maker payouts and
+/// sweep refund recipients to (see `place_order_inner` / `settle_sweep`).
+pub const ASSOCIATED_TOKEN_PROGRAM_ID: Address = solana_address::address!(
+    "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+);
+
+/// Derive the canonical associated token account address for `(owner, mint)`
+/// under the classic SPL Token program — the exact derivation the on-chain
+/// `get_associated_token_address` performs. The post-U5 ABI requires maker
+/// payout accounts (trading path) and sweep refund recipients to equal this
+/// address.
+pub fn canonical_ata(owner: &Address, mint: &Address) -> Address {
+    Address::find_program_address(
+        &[owner.as_ref(), TOKEN_PROGRAM_ID.as_ref(), mint.as_ref()],
+        &ASSOCIATED_TOKEN_PROGRAM_ID,
+    )
+    .0
+}
+
+/// Pack an SPL Token `Account` state into the canonical 165-byte layout and
+/// plant it at `address` (rent-exempt, owned by the SPL Token program). Lets a
+/// test create a token account at a *derived* (PDA) address — e.g. a canonical
+/// ATA — without the ATA program CPI, and with full control over the account
+/// `state` (Initialized vs Frozen) and `amount`.
+fn plant_token_account(
+    svm: &mut LiteSVM,
+    address: Address,
+    mint: &Address,
+    owner: &Address,
+    amount: u64,
+    state: spl_token_interface::state::AccountState,
+) {
+    use solana_program_option::COption;
+    use spl_token_interface::state::Account as TokenAccountState;
+
+    let acct = TokenAccountState {
+        mint: solana_address::Address::from(*mint),
+        owner: solana_address::Address::from(*owner),
+        amount,
+        delegate: COption::None,
+        state,
+        is_native: COption::None,
+        delegated_amount: 0,
+        close_authority: COption::None,
+    };
+    let len = <TokenAccountState as solana_program_pack::Pack>::LEN;
+    let mut data = vec![0u8; len];
+    solana_program_pack::Pack::pack(acct, &mut data).expect("pack SPL token account");
+    let rent = svm.minimum_balance_for_rent_exemption(len);
+    svm.set_account(
+        address,
+        Account {
+            lamports: rent,
+            data,
+            owner: TOKEN_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .expect("plant token account");
+}
+
+/// Create the canonical ATA for `(owner, mint)` as a live, initialized,
+/// zero-balance token account and return its address. Mirrors what a real
+/// `create_associated_token_account` would leave on-chain.
+pub fn create_canonical_ata(svm: &mut LiteSVM, owner: &Address, mint: &Address) -> Address {
+    let ata = canonical_ata(owner, mint);
+    plant_token_account(
+        svm,
+        ata,
+        mint,
+        owner,
+        0,
+        spl_token_interface::state::AccountState::Initialized,
+    );
+    ata
+}
+
+/// Freeze the token account at `address` in place (preserving its `mint` /
+/// `owner` / `amount`), so it can no longer receive a transfer. Drives the
+/// "legitimate skip" path: a *canonical* ATA that is frozen is skipped (not
+/// reverted) by both the trading and sweep paths.
+pub fn freeze_token_account(svm: &mut LiteSVM, address: &Address) {
+    let st = read_token_account(svm, address);
+    plant_token_account(
+        svm,
+        *address,
+        &Address::from(st.mint),
+        &Address::from(st.owner),
+        st.amount,
+        spl_token_interface::state::AccountState::Frozen,
+    );
+}
+
+/// Close the token account at `address` by zeroing it out of existence
+/// (lamports 0, empty data, system-owned) — the post-state of an SPL
+/// `close_account`. A closed canonical ATA is `token_account_receivable ==
+/// false`, so it drives the legitimate-skip path just like a frozen one.
+pub fn close_token_account(svm: &mut LiteSVM, address: &Address) {
+    svm.set_account(
+        *address,
+        Account {
+            lamports: 0,
+            data: Vec::new(),
+            owner: SYSTEM_PROGRAM_ID,
+            executable: false,
+            rent_epoch: 0,
+        },
+    )
+    .expect("close token account");
+}
+
 /// A `LiteSVM` instance with the Meridian program preloaded, plus a
 /// freshly-airdropped admin/payer keypair and a USDC mint owned by the
 /// admin.
