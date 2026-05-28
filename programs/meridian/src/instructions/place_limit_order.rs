@@ -79,8 +79,18 @@ pub const MAX_FILLS_PER_TX: usize = 4;
 /// SPL `spl_token::state::Account` is a fixed 165 bytes with the `state`
 /// enum at offset 108. We read the byte directly rather than unpacking the
 /// whole account to stay cheap and tolerant of garbage/closed data.
+///
+/// The account MUST be owned by the SPL Token program. Without this check the
+/// predicate (and the `token_accessor::mint`/`authority` reads alongside it)
+/// are pure byte reads that any account can spoof: a caller could supply a
+/// 165-byte account owned by an arbitrary program with `mint`/`authority`/
+/// `state` bytes forged to pass every check, yet `token::transfer` (pinned to
+/// classic Token) would then reject the foreign-owned account and fail the
+/// CPI. Pinning the owner here keeps the un-payable account in the skip path
+/// instead of letting it reach — and abort on — the transfer.
 pub(crate) fn token_account_receivable(info: &AccountInfo) -> bool {
-    matches!(info.try_borrow_data(), Ok(d) if d.len() >= 165 && d[108] == 1)
+    info.owner == &anchor_spl::token::ID
+        && matches!(info.try_borrow_data(), Ok(d) if d.len() >= 165 && d[108] == 1)
 }
 
 #[derive(Accounts)]
