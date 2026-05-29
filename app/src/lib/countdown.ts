@@ -1,0 +1,50 @@
+// Pure settlement-countdown time math (U8). Kept framework-free so the
+// "time-to-expiry / closed" logic is unit-testable in the node vitest env; the
+// `Countdown` component renders `countdownState(Date.now()/1000, expiry)`.
+//
+// Markets expire at 4PM ET; `expiryUnix` already encodes that absolute instant
+// (unix seconds), so the countdown is just `expiry − now` with no timezone math
+// needed here.
+
+export interface CountdownState {
+  /** True once now >= expiry (trading is closed / awaiting settlement). */
+  closed: boolean;
+  /** Whole seconds remaining, clamped to 0 once closed. */
+  remainingSeconds: number;
+  /** Display label: "Closed", "mm:ss", or "h:mm:ss". */
+  label: string;
+}
+
+function pad2(n: number): string {
+  return n.toString().padStart(2, "0");
+}
+
+/** Format a remaining-seconds count as mm:ss (<1h) or h:mm:ss (>=1h). */
+export function formatRemaining(remainingSeconds: number): string {
+  const s = Math.max(0, Math.floor(remainingSeconds));
+  const hours = Math.floor(s / 3600);
+  const mins = Math.floor((s % 3600) / 60);
+  const secs = s % 60;
+  return hours > 0
+    ? `${hours}:${pad2(mins)}:${pad2(secs)}`
+    : `${pad2(mins)}:${pad2(secs)}`;
+}
+
+/**
+ * Pure countdown state from a `now` and an `expiry` (both unix seconds). At or
+ * past expiry the market is closed (remaining 0, label "Closed").
+ */
+export function countdownState(
+  nowUnix: number,
+  expiryUnix: number,
+): CountdownState {
+  const remaining = Math.floor(expiryUnix - nowUnix);
+  if (remaining <= 0) {
+    return { closed: true, remainingSeconds: 0, label: "Closed" };
+  }
+  return {
+    closed: false,
+    remainingSeconds: remaining,
+    label: formatRemaining(remaining),
+  };
+}
