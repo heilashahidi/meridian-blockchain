@@ -270,12 +270,17 @@ impl<const N: usize> BookSide<N> {
     /// reabsorbs the unpaid qty rather than the caller inserting a duplicate
     /// entry. `delta` does not touch the key, so the sort order and FIFO
     /// position are preserved.
-    pub fn increment_front(&mut self, delta: u64) {
+    ///
+    /// Returns `None` on `u64` overflow rather than panicking — the caller
+    /// maps that to a loud `InvariantBroken` (the restored qty equals the qty
+    /// previously decremented from an originally-valid order, so overflow is
+    /// unreachable in practice, but a typed error beats a BPF panic that the
+    /// runtime reports as an indistinguishable program crash).
+    #[must_use]
+    pub fn increment_front(&mut self, delta: u64) -> Option<()> {
         debug_assert!(self.len > 0);
-        self.entries[0].qty = self.entries[0]
-            .qty
-            .checked_add(delta)
-            .expect("increment_front qty overflow");
+        self.entries[0].qty = self.entries[0].qty.checked_add(delta)?;
+        Some(())
     }
 
     /// Front entry, mutable (for the match loop).
@@ -461,7 +466,7 @@ mod book_side_tests {
         b.insert(Side::Bid, mk(50, 1, 10)).unwrap();
         b.insert(Side::Bid, mk(50, 2, 4)).unwrap();
         b.decrement_front(3);
-        b.increment_front(3);
+        b.increment_front(3).unwrap();
         // Front qty and seq restored to the original; second entry unmoved.
         assert_eq!(b.best().unwrap().qty, 10);
         assert_eq!(b.best().unwrap().key.seq(), 1);
@@ -476,9 +481,20 @@ mod book_side_tests {
         a.insert(Side::Ask, mk(30, 1, 5)).unwrap();
         a.decrement_front(2);
         assert_eq!(a.total_qty(), 3);
-        a.increment_front(2);
+        a.increment_front(2).unwrap();
         assert_eq!(a.best().unwrap().qty, 5);
         assert_eq!(a.total_qty(), 5);
         assert_eq!(a.len(), 1);
+    }
+
+    #[test]
+    fn increment_front_overflow_returns_none() {
+        // u64 overflow yields None (caller maps to InvariantBroken) rather
+        // than panicking. Unreachable in practice but defensively typed.
+        let mut a: BookSide<4> = BookSide::new(Side::Ask);
+        a.insert(Side::Ask, mk(10, 1, u64::MAX)).unwrap();
+        assert_eq!(a.increment_front(1), None);
+        // Front qty unchanged on the overflow no-op.
+        assert_eq!(a.best().unwrap().qty, u64::MAX);
     }
 }

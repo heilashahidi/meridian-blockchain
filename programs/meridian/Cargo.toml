@@ -1,6 +1,6 @@
 [package]
 name = "meridian"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Meridian on-chain CLOB for binary outcome markets — Anchor program wrapping a pure-Rust matching engine."
 license = "Apache-2.0"

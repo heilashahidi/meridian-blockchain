@@ -54,13 +54,13 @@
 //! check.
 
 use anchor_lang::prelude::*;
-use anchor_spl::associated_token::get_associated_token_address;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 use crate::error::MeridianError;
 use crate::matching::book_side::{OrderEntry, Side};
 use crate::matching::order_key::OrderKey;
 use crate::state::{Book, Config, Market};
+use crate::token_util::is_canonical_and_receivable;
 
 /// Per-tx hard cap on how many resting orders one sweep call may drain.
 ///
@@ -268,11 +268,7 @@ pub fn settle_sweep_handler<'info>(
         // ATA may be closed/frozen/uninitialized. The frozen/closed check MUST
         // precede the CPI — a failed transfer aborts the whole tx in the
         // runtime, so it can't be caught after the fact.
-        let canonical = get_associated_token_address(&owner_pk, &expected_mint);
-        let recipient_ok = recipient.key() == canonical
-            && crate::instructions::place_limit_order::token_account_receivable(recipient);
-
-        if !recipient_ok {
+        if !is_canonical_and_receivable(recipient, &owner_pk, &expected_mint) {
             skipped.push((side, entry));
             continue;
         }

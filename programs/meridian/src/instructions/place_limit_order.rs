@@ -55,13 +55,13 @@
 //! max offset of 4096" warnings during `cargo build-sbf`.
 
 use anchor_lang::prelude::*;
-use anchor_spl::associated_token::get_associated_token_address;
 use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 use crate::error::MeridianError;
 use crate::matching::book_side::{OrderEntry, Side};
 use crate::matching::match_step::{match_step, OrderType, TakerOrder};
 use crate::state::{Book, Config, Market, BOOK_DEPTH};
+use crate::token_util::{is_canonical_ata, token_account_receivable};
 
 /// Per-tx hard cap on how many opposing entries one taker may walk.
 ///
@@ -72,38 +72,10 @@ use crate::state::{Book, Config, Market, BOOK_DEPTH};
 /// and (for limit orders) the leftover quantity posts to the book.
 pub const MAX_FILLS_PER_TX: usize = 4;
 
-/// True iff `info` is a live SPL token account that can actually receive a
-/// transfer right now: its data is the fixed token-account length and the
-/// account-state byte is `Initialized` (1), not `Uninitialized`/closed (0)
-/// or `Frozen` (2).
-///
-/// Why this exists: a transfer CPI to a frozen or closed account fails, and
-/// a failed inner instruction aborts the ENTIRE transaction in the Solana
-/// runtime — the calling program never gets an `Err` back to handle. So any
-/// payout path that wants skip-and-continue semantics (place_order_inner's
-/// maker payouts, settle_sweep's refunds) must detect un-receivable accounts
-/// BEFORE issuing the CPI, not by inspecting its result. Callers pair this
-/// predicate with a canonical-ATA key check (which binds the (owner, mint)
-/// pair); this predicate adds the liveness dimension those callers can't get
-/// from the address alone — notably the frozen case (a Circle-frozen USDC ATA
-/// on mainnet) and the uninitialized/closed case.
-///
-/// SPL `spl_token::state::Account` is a fixed 165 bytes with the `state`
-/// enum at offset 108. We read the byte directly rather than unpacking the
-/// whole account to stay cheap and tolerant of garbage/closed data.
-///
-/// The account MUST be owned by the SPL Token program. Without this check the
-/// predicate is a pure byte read that any account can spoof: a caller could
-/// supply a 165-byte account owned by an arbitrary program with `mint`/
-/// `authority`/`state` bytes forged to pass every check, yet `token::transfer`
-/// (pinned to
-/// classic Token) would then reject the foreign-owned account and fail the
-/// CPI. Pinning the owner here keeps the un-payable account in the skip path
-/// instead of letting it reach — and abort on — the transfer.
-pub(crate) fn token_account_receivable(info: &AccountInfo) -> bool {
-    info.owner == &anchor_spl::token::ID
-        && matches!(info.try_borrow_data(), Ok(d) if d.len() >= 165 && d[108] == 1)
-}
+// The maker-payout receivability predicate (`token_account_receivable`) and
+// the canonical-ATA key check (`is_canonical_ata`) now live in
+// [`crate::token_util`] so this instruction and `settle_sweep` share one
+// definition instead of `settle_sweep` reaching into this module's namespace.
 
 #[derive(Accounts)]
 pub struct PlaceLimitOrder<'info> {
@@ -470,9 +442,8 @@ pub(crate) fn place_order_inner<'info>(
         // REVERT (the taker only harms its own tx). This is what makes the
         // force-skip griefing impossible — there is no bad-but-accepted account
         // the taker can substitute for an honest maker.
-        let canonical = get_associated_token_address(&maker_pubkey, &payout_mint);
         require!(
-            maker_payout.key() == canonical,
+            is_canonical_ata(maker_payout, &maker_pubkey, &payout_mint),
             MeridianError::BadMakerAccount
         );
 
@@ -621,7 +592,9 @@ pub(crate) fn place_order_inner<'info>(
                 "partial-skip remnant must rest at the front of the opposing side"
             );
             if front_matches {
-                side_ref.increment_front(entry.qty);
+                side_ref
+                    .increment_front(entry.qty)
+                    .ok_or(MeridianError::InvariantBroken)?;
             } else {
                 // Unreachable per the match invariant; in release we recover the
                 // qty via a fresh-seq insert (a duplicate, but escrow-correct)
