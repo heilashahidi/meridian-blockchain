@@ -87,7 +87,8 @@ pub struct AdminSettleMarket<'info> {
 /// Emergency oracle-bypass settlement (P1 stuck-oracle deadlock).
 ///
 /// If Pyth never posts an update inside `settle_market`'s
-/// `[expiry, expiry+30s]` window, the market can never settle the normal way
+/// `[expiry, expiry + SETTLE_WINDOW_SECONDS]` window (900s / 15min), the market
+/// can never settle the normal way
 /// and all escrowed USDC is stranded. This admin-only path lets the operator
 /// stamp an outcome by hand, but only after `expiry + EMERGENCY_GRACE_SECONDS`
 /// so normal settlement always gets first claim. Same atomic

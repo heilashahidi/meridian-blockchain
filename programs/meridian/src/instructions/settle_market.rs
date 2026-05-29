@@ -8,11 +8,12 @@
 //!   * Refuse if `clock.unix_timestamp < market.expiry_unix` (`MarketNotExpired`).
 //!   * Pin the settlement price to the window
 //!     `[market.expiry_unix, market.expiry_unix + SETTLE_WINDOW_SECONDS]`
-//!     (`SETTLE_WINDOW_SECONDS = 30`). A `publish_time` before expiry or more
-//!     than the window past it is rejected (`OracleStale`). This settles the
-//!     option at its expiry price rather than "whenever someone calls settle",
-//!     and bounds a permissionless caller's ability to cherry-pick a favorable
-//!     Pyth update to `SETTLE_WINDOW_SECONDS` regardless of call time.
+//!     (`SETTLE_WINDOW_SECONDS = 900`, i.e. 15 minutes). A `publish_time`
+//!     before expiry or more than the window past it is rejected
+//!     (`OracleStale`). This settles the option close to its expiry price
+//!     rather than "whenever someone calls settle", and bounds a permissionless
+//!     caller's ability to cherry-pick a favorable Pyth update to
+//!     `SETTLE_WINDOW_SECONDS` regardless of call time.
 //!   * Reject if `conf * 10_000 > price * MAX_CONF_BPS` for
 //!     `MAX_CONF_BPS = 100` (1 %) (`OracleConfidenceTooWide`).
 //!   * Compute outcome by comparing the Pyth-rebased price (microunits) to
@@ -54,12 +55,33 @@ use crate::state::{Config, Market, Outcome, PriceUpdateV2};
 /// Width of the post-expiry window the settlement price must fall in, in
 /// seconds. The accepted range is `[expiry, expiry + SETTLE_WINDOW_SECONDS]`.
 ///
-/// Sized to comfortably cover Pyth's update cadence at expiry (sub-second on
-/// mainnet) while keeping a permissionless caller's cherry-pick window small.
+/// **= 900s (15 minutes).** This is a compile-time module constant rather than
+/// a `Config`/`Market` field by design — widening the window must not change
+/// any account layout (per the U2 plan, a layout change is deferred). Bumping
+/// the value is a code change + redeploy, which is acceptable: it is the most
+/// safety-critical instruction and a layout-free constant keeps the change
+/// auditable and the on-chain accounts stable.
+///
+/// **Why 900s, not the original 30s:** real Pyth pull-oracle settlement on
+/// devnet does not happen at the instant of expiry. After a market's 4PM ET
+/// expiry an operator (or the U5 settle job) must fetch the latest update from
+/// Hermes, post it through the Solana receiver (creating the `PriceUpdateV2`),
+/// then call `settle_market`. That round-trip — plus retry/backoff on transient
+/// RPC/Hermes failures — routinely lands minutes after expiry, OUTSIDE the
+/// demo-shaped 30s window, so settlement would have failed `OracleStale`. 15
+/// minutes comfortably absorbs the post-and-settle latency and a few retries
+/// while keeping the option's settlement price anchored near its expiry value
+/// (equity prices don't move far in 15 minutes of regular-session trading) and
+/// bounding a permissionless caller's cherry-pick window to 15 minutes.
+///
 /// Narrower is safer against settlement manipulation but raises the liveness
-/// risk that no update lands in the window — that deadlock is handled by the
-/// separate admin emergency-settle / pause path (P1), not by widening this.
-pub const SETTLE_WINDOW_SECONDS: u64 = 30;
+/// risk that no update lands in the window. Wider drifts settlement away from
+/// the true expiry price. 15 minutes balances the two for real devnet
+/// operation. The staleness check (`publish_time >= expiry`, lower bound) and
+/// the confidence check are unchanged — only the upper bound widened. If no
+/// update ever lands in the window, the separate admin emergency-settle path
+/// (after its 24h grace) remains the documented fallback.
+pub const SETTLE_WINDOW_SECONDS: u64 = 900;
 
 /// Max acceptable `conf / price` ratio, in basis points. `100 bps = 1 %`.
 pub const MAX_CONF_BPS: u128 = 100;
