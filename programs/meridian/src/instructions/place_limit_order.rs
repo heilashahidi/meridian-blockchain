@@ -456,6 +456,10 @@ pub(crate) fn place_order_inner<'info>(
     let mut skipped: Vec<(bool, OrderEntry)> = Vec::new();
     let mut skipped_qty: u64 = 0;
 
+    // `i` indexes two parallel arrays in lockstep (the matched `fills` and the
+    // caller-supplied `remaining` payout accounts), so a range loop is the
+    // clearest correct form here.
+    #[allow(clippy::needless_range_loop)]
     for i in 0..fills.fill_count {
         let fill = fills.fills[i];
         let maker_pubkey = Pubkey::new_from_array(fill.maker_owner);
@@ -609,9 +613,9 @@ pub(crate) fn place_order_inner<'info>(
                 Side::Bid => &mut book.bids,
                 Side::Ask => &mut book.asks,
             };
-            let front_matches = side_ref.best().map_or(false, |f| {
-                f.owner == entry.owner && f.key.price() == entry.key.price()
-            });
+            let front_matches = side_ref
+                .best()
+                .is_some_and(|f| f.owner == entry.owner && f.key.price() == entry.key.price());
             debug_assert!(
                 front_matches,
                 "partial-skip remnant must rest at the front of the opposing side"
