@@ -30,6 +30,18 @@
 //! is `amount` (from burn_pair) minus the actual notional paid on the buy
 //! leg (= `sum(fill_qty * fill_price)`).
 //!
+//! # Maker payouts via `remaining_accounts`
+//!
+//! The Yes-leg market-buy is a **Bid taker**, so makers are paid **USDC**.
+//! `sell_no` forwards `ctx.remaining_accounts` into `place_order_inner`,
+//! inheriting its ABI: **one account per fill**, in fill order, each the
+//! maker's **canonical USDC ATA**. A non-canonical account reverts
+//! ([`crate::error::MeridianError::BadMakerAccount`]) — and because the whole
+//! `sell_no` tx is atomic, that rolls back nothing yet placed but aborts the
+//! trade; a canonical-but-frozen/closed account skips that fill (folding into
+//! the residual, which then trips the atomic-full-fill check below). See
+//! [`super::place_limit_order`]'s module docs for the full contract.
+//!
 //! # Slippage parameter naming
 //!
 //! `max_yes_buy_price` is the highest price-per-Yes the taker accepts on

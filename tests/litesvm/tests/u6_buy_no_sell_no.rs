@@ -45,8 +45,9 @@
 use anchor_lang::{AccountSerialize, AnchorSerialize};
 use litesvm::LiteSVM;
 use meridian_litesvm_tests::{
-    anchor_ix, load_anchor_account, load_zero_copy_account, read_mint, read_token_account,
-    Fixture, MERIDIAN_PROGRAM_ID, RENT_SYSVAR_ID, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
+    anchor_ix, create_canonical_ata, load_anchor_account, load_zero_copy_account, read_mint,
+    read_token_account, Fixture, MERIDIAN_PROGRAM_ID, RENT_SYSVAR_ID, SYSTEM_PROGRAM_ID,
+    TOKEN_PROGRAM_ID,
 };
 use solana_address::Address;
 use solana_instruction::{account_meta::AccountMeta, Instruction};
@@ -62,6 +63,7 @@ fn airdrop_sol(svm: &mut LiteSVM, who: &Address, lamports: u64) {
     svm.airdrop(who, lamports).expect("airdrop SOL");
 }
 
+#[allow(dead_code)]
 fn create_token_account(
     svm: &mut LiteSVM,
     payer: &Keypair,
@@ -226,24 +228,24 @@ impl Env {
         for _ in 0..n_users {
             let kp = Keypair::new();
             airdrop_sol(&mut fx.svm, &kp.pubkey(), 10_000_000_000);
-            let usdc_kp =
-                create_token_account(&mut fx.svm, &kp, &kp.pubkey(), &fx.usdc_mint.pubkey());
-            let yes_kp = create_token_account(&mut fx.svm, &kp, &kp.pubkey(), &yes_mint);
-            let no_kp = create_token_account(&mut fx.svm, &kp, &kp.pubkey(), &no_mint);
+            // Post-U5 ABI: maker payouts bind to the maker's canonical ATA.
+            let usdc = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &fx.usdc_mint.pubkey());
+            let yes = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &yes_mint);
+            let no = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &no_mint);
             if usdc_each > 0 {
                 mint_usdc(
                     &mut fx.svm,
                     &fx.admin.insecure_clone(),
                     &fx.usdc_mint.pubkey(),
-                    &usdc_kp.pubkey(),
+                    &usdc,
                     usdc_each,
                 );
             }
             users.push(UserAccounts {
                 kp,
-                usdc: usdc_kp.pubkey(),
-                yes: yes_kp.pubkey(),
-                no: no_kp.pubkey(),
+                usdc,
+                yes,
+                no,
             });
         }
 
@@ -288,7 +290,12 @@ impl Env {
     /// because both share the union of mint_pair + place_market_order
     /// accounts. `maker_pairs` is the per-fill `(usdc, yes)` ATA list the
     /// place_order_inner kernel needs in fill order.
-    fn trade_metas(&self, i: usize, maker_pairs: &[(Address, Address)]) -> Vec<AccountMeta> {
+    fn trade_metas(
+        &self,
+        i: usize,
+        taker_side: u8,
+        maker_pairs: &[(Address, Address)],
+    ) -> Vec<AccountMeta> {
         let mut v = vec![
             AccountMeta::new(self.users[i].kp.pubkey(), true),
             AccountMeta::new_readonly(self.config_pda, false),
@@ -304,9 +311,12 @@ impl Env {
             AccountMeta::new_readonly(self.mint_authority, false),
             AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
         ];
+        // Post-U5 ABI: ONE canonical maker payout per fill, payout mint fixed
+        // by the inner taker side. buy_no runs an Ask leg (taker pays makers
+        // Yes); sell_no runs a Bid leg (taker pays makers USDC).
         for (usdc, yes) in maker_pairs {
-            v.push(AccountMeta::new(*usdc, false));
-            v.push(AccountMeta::new(*yes, false));
+            let payout = if taker_side == 0 { *usdc } else { *yes };
+            v.push(AccountMeta::new(payout, false));
         }
         v
     }
@@ -325,7 +335,8 @@ impl Env {
         };
         let mut data = Vec::new();
         args.serialize(&mut data).unwrap();
-        let metas = self.trade_metas(i, maker_pairs);
+        // buy_no's inner leg is an Ask taker (side=1) → makers paid Yes.
+        let metas = self.trade_metas(i, /* taker_side=Ask */ 1, maker_pairs);
         let ix = anchor_ix(MERIDIAN_PROGRAM_ID, "buy_no", &data, metas);
         let kp = self.users[i].kp.insecure_clone();
         try_submit(&mut self.fx.svm, ix, &[&kp])
@@ -345,7 +356,8 @@ impl Env {
         };
         let mut data = Vec::new();
         args.serialize(&mut data).unwrap();
-        let metas = self.trade_metas(i, maker_pairs);
+        // sell_no's inner leg is a Bid taker (side=0) → makers paid USDC.
+        let metas = self.trade_metas(i, /* taker_side=Bid */ 0, maker_pairs);
         let ix = anchor_ix(MERIDIAN_PROGRAM_ID, "sell_no", &data, metas);
         let kp = self.users[i].kp.insecure_clone();
         try_submit(&mut self.fx.svm, ix, &[&kp])
@@ -365,13 +377,13 @@ impl Env {
         let args = meridian::PlaceLimitOrderArgs { side, price, qty };
         let mut data = Vec::new();
         args.serialize(&mut data).unwrap();
-        let metas = self.place_metas(i, maker_pairs);
+        let metas = self.place_metas(i, side, maker_pairs);
         let ix = anchor_ix(MERIDIAN_PROGRAM_ID, "place_limit_order", &data, metas);
         let kp = self.users[i].kp.insecure_clone();
         try_submit(&mut self.fx.svm, ix, &[&kp])
     }
 
-    fn place_metas(&self, i: usize, maker_pairs: &[(Address, Address)]) -> Vec<AccountMeta> {
+    fn place_metas(&self, i: usize, taker_side: u8, maker_pairs: &[(Address, Address)]) -> Vec<AccountMeta> {
         let mut v = vec![
             AccountMeta::new(self.users[i].kp.pubkey(), true),
             AccountMeta::new_readonly(self.config_pda, false),
@@ -385,9 +397,11 @@ impl Env {
             AccountMeta::new_readonly(self.mint_authority, false),
             AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
         ];
+        // ONE canonical maker payout per fill: USDC for a Bid taker, Yes for an
+        // Ask taker.
         for (usdc, yes) in maker_pairs {
-            v.push(AccountMeta::new(*usdc, false));
-            v.push(AccountMeta::new(*yes, false));
+            let payout = if taker_side == 0 { *usdc } else { *yes };
+            v.push(AccountMeta::new(payout, false));
         }
         v
     }

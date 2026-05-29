@@ -24,21 +24,30 @@
 //! # Maker token-account resolution via `remaining_accounts`
 //!
 //! Each fill needs to pay the maker. The handler walks
-//! `ctx.remaining_accounts` consuming **two accounts per fill**: the
-//! maker's USDC token account and the maker's Yes token account. Each is
-//! validated by reading the SPL `mint` + `owner/authority` fields directly
-//! off the account data via [`token::accessor`]:
+//! `ctx.remaining_accounts` consuming **one account per fill**: the maker's
+//! canonical associated token account (ATA) for the payout mint. The payout
+//! mint is fixed by the taker's side for the whole order:
 //!
-//!   * `mint` must equal the canonical USDC mint (`config.usdc_mint`) or
-//!     the Yes mint (`market.yes_mint`) respectively.
-//!   * `owner` (token-account authority) must equal `fill.maker_owner`.
+//!   * Bid taker (hit a resting ask) pays the maker USDC → canonical USDC ATA.
+//!   * Ask taker (hit a resting bid) pays the maker Yes  → canonical Yes ATA.
 //!
-//! We **don't** require the canonical ATA address derivation — only that
-//! the funds end up in a token account the maker controls and whose mint
-//! matches. (A maker could place via an ATA and receive into a different
-//! Yes account they own; both are safe.) The caller pre-sorts the
-//! token-account pairs in fill order (best price first, FIFO within a
-//! price) by simulating the same match the program will perform.
+//! The account is bound to the maker's **canonical ATA**, derived on-chain via
+//! [`get_associated_token_address`] and checked for an exact key match:
+//!
+//!   * key **≠** canonical ATA → **revert** ([`MeridianError::BadMakerAccount`]).
+//!     The taker controls what it passes, so a non-canonical account is a
+//!     malformed call; reverting means the taker can never force an honest
+//!     maker into the skip path (the queue-priority griefing vector).
+//!   * key **=** canonical ATA but not receivable (closed / frozen /
+//!     uninitialized / not SPL-owned) → **skip** the fill and restore the
+//!     maker's resting order. The maker genuinely can't be paid right now;
+//!     this preserves the original ATA-close DoS fix.
+//!   * key **=** canonical ATA and receivable → pay.
+//!
+//! The caller supplies one canonical ATA per fill in fill order (best price
+//! first, FIFO within a price) by simulating the same match the program will
+//! perform. Requiring the canonical ATA reverses the earlier "any maker-owned
+//! token account" tolerance: makers must receive into their canonical ATA.
 //!
 //! For Anchor's `Accounts` struct we **box every SPL `Account<...>` field**
 //! to avoid blowing the 4 KB SBPF stack — same workaround as `mint_pair`,
@@ -46,12 +55,13 @@
 //! max offset of 4096" warnings during `cargo build-sbf`.
 
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, accessor as token_accessor, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
 
 use crate::error::MeridianError;
 use crate::matching::book_side::{OrderEntry, Side};
 use crate::matching::match_step::{match_step, OrderType, TakerOrder};
 use crate::state::{Book, Config, Market, BOOK_DEPTH};
+use crate::token_util::{is_canonical_ata, token_account_receivable};
 
 /// Per-tx hard cap on how many opposing entries one taker may walk.
 ///
@@ -62,36 +72,10 @@ use crate::state::{Book, Config, Market, BOOK_DEPTH};
 /// and (for limit orders) the leftover quantity posts to the book.
 pub const MAX_FILLS_PER_TX: usize = 4;
 
-/// True iff `info` is a live SPL token account that can actually receive a
-/// transfer right now: its data is the fixed token-account length and the
-/// account-state byte is `Initialized` (1), not `Uninitialized`/closed (0)
-/// or `Frozen` (2).
-///
-/// Why this exists: a transfer CPI to a frozen or closed account fails, and
-/// a failed inner instruction aborts the ENTIRE transaction in the Solana
-/// runtime — the calling program never gets an `Err` back to handle. So any
-/// payout path that wants skip-and-continue semantics (place_order_inner's
-/// maker payouts, settle_sweep's refunds) must detect un-receivable accounts
-/// BEFORE issuing the CPI, not by inspecting its result. The mint/authority
-/// `token_accessor` checks already catch closed/wrong accounts; this adds the
-/// frozen case (notably a Circle-frozen USDC ATA on mainnet).
-///
-/// SPL `spl_token::state::Account` is a fixed 165 bytes with the `state`
-/// enum at offset 108. We read the byte directly rather than unpacking the
-/// whole account to stay cheap and tolerant of garbage/closed data.
-///
-/// The account MUST be owned by the SPL Token program. Without this check the
-/// predicate (and the `token_accessor::mint`/`authority` reads alongside it)
-/// are pure byte reads that any account can spoof: a caller could supply a
-/// 165-byte account owned by an arbitrary program with `mint`/`authority`/
-/// `state` bytes forged to pass every check, yet `token::transfer` (pinned to
-/// classic Token) would then reject the foreign-owned account and fail the
-/// CPI. Pinning the owner here keeps the un-payable account in the skip path
-/// instead of letting it reach — and abort on — the transfer.
-pub(crate) fn token_account_receivable(info: &AccountInfo) -> bool {
-    info.owner == &anchor_spl::token::ID
-        && matches!(info.try_borrow_data(), Ok(d) if d.len() >= 165 && d[108] == 1)
-}
+// The maker-payout receivability predicate (`token_account_receivable`) and
+// the canonical-ATA key check (`is_canonical_ata`) now live in
+// [`crate::token_util`] so this instruction and `settle_sweep` share one
+// definition instead of `settle_sweep` reaching into this module's namespace.
 
 #[derive(Accounts)]
 pub struct PlaceLimitOrder<'info> {
@@ -389,26 +373,33 @@ pub(crate) fn place_order_inner<'info>(
 
     // -------- Step 3: settle fills. --------
     //
-    // For each fill we expect TWO remaining_accounts in order:
-    //   [2*i + 0]: maker's USDC ATA (mut)
-    //   [2*i + 1]: maker's Yes ATA  (mut)
+    // For each fill we expect ONE remaining_account: the maker's canonical
+    // associated token account for the payout mint, in fill order.
+    //   * Bid taker (hit a resting ask) pays the maker USDC → canonical USDC ATA.
+    //   * Ask taker (hit a resting bid) pays the maker Yes  → canonical Yes ATA.
     //
-    // Each maker payout account is validated by `token_accessor` (mint +
-    // authority) and must be a live, non-frozen token account; a mismatched,
-    // closed, or frozen account causes that maker to be SKIPPED rather than
-    // reverting the whole taker order. NOTE: this is a mint+authority check,
-    // not canonical-ATA derivation — the caller is not required to pass the
-    // maker's associated token account, only some token account the maker
-    // authority owns with the correct mint. (A taker can therefore force a
-    // maker into the skip path by supplying a deliberately-bad account; see
-    // the queue-priority caveat at the re-insert step below.)
+    // The taker only ever pays makers on one mint, so a single payout account
+    // per fill is sufficient (the old two-account `[usdc, yes]` pair carried a
+    // dead slot and an extra force-skip surface).
+    //
+    // Each payout account is bound to the maker's CANONICAL ATA: we derive it
+    // on-chain and require an exact key match. A non-canonical account is a
+    // malformed call by the taker and REVERTS — the taker can no longer force
+    // an honest maker into the skip path by supplying a deliberately-bad
+    // account (that was the queue-priority griefing vector). A canonical ATA
+    // that is closed/frozen/uninitialized still SKIPS (the maker genuinely
+    // can't be paid right now), which preserves the original ATA-close DoS fix.
     require!(
-        remaining.len() >= fills.fill_count * 2,
+        remaining.len() >= fills.fill_count,
         MeridianError::InvalidAmount,
     );
 
-    let usdc_mint_key = config.usdc_mint;
-    let yes_mint_key = market.yes_mint;
+    // The mint the maker is paid in is fixed by the taker's side for the whole
+    // order (every fill on the opposing side pays the same mint).
+    let payout_mint = match side {
+        Side::Bid => config.usdc_mint,
+        Side::Ask => market.yes_mint,
+    };
     let seeds: &[&[u8]] = &[
         Market::MINT_AUTH_SEED_PREFIX,
         market_key.as_ref(),
@@ -419,7 +410,7 @@ pub(crate) fn place_order_inner<'info>(
     let mut filled_qty_total: u128 = 0;
     let mut filled_notional_total: u128 = 0;
 
-    // Fills whose maker can't be paid (closed / wrong payout account). The
+    // Fills whose maker can't be paid (canonical ATA closed / frozen). The
     // maker's resting order was already consumed by match_step but its
     // collateral was never moved, so we restore the order afterward and fold
     // the qty into the taker's residual. This is the ATA-close DoS fix for the
@@ -427,37 +418,55 @@ pub(crate) fn place_order_inner<'info>(
     // payout ATA can no longer force every crossing taker to revert — the
     // taker skips past them, and matching at that level resumes once the maker
     // has a valid account again.
+    //
+    // We carry each skipped fill's `fully_consumed` flag alongside the entry so
+    // the restore step can tell a fully-consumed maker (popped from the book —
+    // re-insert a fresh entry) from a partially-consumed one (decremented
+    // remnant still resting — just restore the unpaid qty, never insert a
+    // second entry for the same order; see review finding #2).
     let opposite_side = side.opposite();
-    let mut skipped: Vec<OrderEntry> = Vec::new();
+    let mut skipped: Vec<(bool, OrderEntry)> = Vec::new();
     let mut skipped_qty: u64 = 0;
 
+    // `i` indexes two parallel arrays in lockstep (the matched `fills` and the
+    // caller-supplied `remaining` payout accounts), so a range loop is the
+    // clearest correct form here.
+    #[allow(clippy::needless_range_loop)]
     for i in 0..fills.fill_count {
         let fill = fills.fills[i];
         let maker_pubkey = Pubkey::new_from_array(fill.maker_owner);
-        let maker_usdc = &remaining[i * 2];
-        let maker_yes = &remaining[i * 2 + 1];
+        let maker_payout = &remaining[i];
 
-        // Validate the maker's payout accounts WITHOUT reverting. A closed
-        // account makes the accessor reads fail; a wrong mint/owner is a
-        // mismatch. Either way we skip this maker rather than aborting the
-        // whole taker order.
-        let usdc_ok = token_account_receivable(maker_usdc)
-            && matches!(token_accessor::mint(maker_usdc), Ok(m) if m == usdc_mint_key)
-            && matches!(token_accessor::authority(maker_usdc), Ok(a) if a == maker_pubkey);
-        let yes_ok = token_account_receivable(maker_yes)
-            && matches!(token_accessor::mint(maker_yes), Ok(m) if m == yes_mint_key)
-            && matches!(token_accessor::authority(maker_yes), Ok(a) if a == maker_pubkey);
+        // Bind the payout to the maker's CANONICAL ATA. The taker controls the
+        // accounts it passes, so a non-canonical account is a malformed call:
+        // REVERT (the taker only harms its own tx). This is what makes the
+        // force-skip griefing impossible — there is no bad-but-accepted account
+        // the taker can substitute for an honest maker.
+        require!(
+            is_canonical_ata(maker_payout, &maker_pubkey, &payout_mint),
+            MeridianError::BadMakerAccount
+        );
 
-        if !(usdc_ok && yes_ok) {
+        // The canonical ATA exists in the address space but may be closed,
+        // uninitialized, frozen, or not SPL-owned. `token_account_receivable`
+        // pins the SPL Token owner and checks the account-state byte; if it
+        // can't receive a transfer right now, SKIP this maker (don't revert) —
+        // a failed transfer CPI would abort the whole taker tx, so the check
+        // MUST precede the CPI. The maker's resting order is restored below.
+        if !token_account_receivable(maker_payout) {
             skipped_qty = skipped_qty
                 .checked_add(fill.qty)
                 .ok_or(MeridianError::InvalidAmount)?;
-            // seq is assigned a fresh value at re-insert time.
-            skipped.push(OrderEntry {
-                key: crate::matching::order_key::OrderKey::new(fill.price, 0),
-                owner: fill.maker_owner,
-                qty: fill.qty,
-            });
+            // seq is assigned a fresh value at re-insert time (full fills only;
+            // partial fills restore into the existing remnant — see below).
+            skipped.push((
+                fill.fully_consumed,
+                OrderEntry {
+                    key: crate::matching::order_key::OrderKey::new(fill.price, 0),
+                    owner: fill.maker_owner,
+                    qty: fill.qty,
+                },
+            ));
             continue;
         }
 
@@ -476,13 +485,13 @@ pub(crate) fn place_order_inner<'info>(
                 // (from when they placed their ask); we pay the maker
                 // USDC from escrow and pay the taker Yes from escrow.
                 //
-                // USDC escrow → maker_usdc.
+                // USDC escrow → maker's canonical USDC ATA.
                 token::transfer(
                     CpiContext::new_with_signer(
                         token_program_id,
                         Transfer {
                             from: usdc_escrow.to_account_info(),
-                            to: maker_usdc.clone(),
+                            to: maker_payout.clone(),
                             authority: mint_authority.to_account_info(),
                         },
                         signer_seeds,
@@ -508,13 +517,13 @@ pub(crate) fn place_order_inner<'info>(
                 // escrowed (from when they placed their bid); we pay the
                 // maker Yes from escrow and pay the taker USDC from escrow.
                 //
-                // Yes escrow → maker_yes.
+                // Yes escrow → maker's canonical Yes ATA.
                 token::transfer(
                     CpiContext::new_with_signer(
                         token_program_id,
                         Transfer {
                             from: yes_escrow.to_account_info(),
-                            to: maker_yes.clone(),
+                            to: maker_payout.clone(),
                             authority: mint_authority.to_account_info(),
                         },
                         signer_seeds,
@@ -538,16 +547,64 @@ pub(crate) fn place_order_inner<'info>(
         }
     }
 
-    // Restore skipped makers' orders with fresh sequence numbers (they go to
-    // the back of their price level — a griefer loses queue priority, which is
-    // acceptable). Their collateral is still escrowed, so the book stays
-    // consistent. Fold the skipped qty into the residual so the taker's
-    // unfilled portion is refunded (market) or posts (limit) by the existing
-    // step-4/step-5 machinery — a skipped fill is economically identical to
-    // unfilled qty from the taker's side.
+    // Restore the skipped makers' orders. With the canonical-ATA binding above,
+    // a skip now only happens when the maker's OWN canonical ATA is genuinely
+    // closed/frozen — a taker can no longer force the skip, so this is no
+    // longer a griefing-induced demotion. Their collateral is still escrowed,
+    // so restoring the resting qty keeps the book consistent (R13). Fold the
+    // skipped qty into the residual so the taker's unfilled portion is refunded
+    // (market) or posts (limit) by the existing step-4/step-5 machinery — a
+    // skipped fill is economically identical to unfilled qty from the taker's
+    // side.
+    //
+    // Two cases, distinguished by the fill's `fully_consumed` flag (finding #2):
+    //   * Partial fill skipped: match_step left the maker's decremented remnant
+    //     resting at the FRONT of the opposing side (it only ever partial-fills
+    //     the front, on its last iteration, and no book mutation has happened
+    //     since). Add the unpaid qty straight back onto that remnant —
+    //     inserting a new entry would DUPLICATE the maker's order. Done first,
+    //     before any fresh-seq insert displaces the front.
+    //   * Fully-consumed fill skipped: the maker was popped, so re-enter a
+    //     fresh entry at the back of its price level (fresh seq). Sending a
+    //     genuinely-unpayable maker to the back is the right DoS-avoidance
+    //     behavior: it stops a maker with a closed ATA from pinning the level.
     if !skipped.is_empty() {
         let mut book = book_loader.load_mut()?;
-        for mut entry in skipped.drain(..) {
+        let mut to_insert: Vec<OrderEntry> = Vec::new();
+
+        // Pass 1: partial restores (front of opposing side). Full skips — and,
+        // defensively, any partial whose front guard fails — are queued for
+        // fresh-seq insertion in pass 2.
+        for (fully_consumed, entry) in skipped.drain(..) {
+            if fully_consumed {
+                to_insert.push(entry);
+                continue;
+            }
+            let side_ref = match opposite_side {
+                Side::Bid => &mut book.bids,
+                Side::Ask => &mut book.asks,
+            };
+            let front_matches = side_ref
+                .best()
+                .is_some_and(|f| f.owner == entry.owner && f.key.price() == entry.key.price());
+            debug_assert!(
+                front_matches,
+                "partial-skip remnant must rest at the front of the opposing side"
+            );
+            if front_matches {
+                side_ref
+                    .increment_front(entry.qty)
+                    .ok_or(MeridianError::InvariantBroken)?;
+            } else {
+                // Unreachable per the match invariant; in release we recover the
+                // qty via a fresh-seq insert (a duplicate, but escrow-correct)
+                // rather than silently dropping it.
+                to_insert.push(entry);
+            }
+        }
+
+        // Pass 2: fresh-seq re-inserts at the back of the price level.
+        for mut entry in to_insert.drain(..) {
             let seq = book.next_seq()?;
             entry.key = crate::matching::order_key::OrderKey::new(entry.key.price(), seq);
             let side_ref = match opposite_side {
@@ -750,6 +807,7 @@ fn match_capped(
             maker_owner: [0; 32],
             price: 0,
             qty: 0,
+            fully_consumed: false,
         }; MAX_FILLS_PER_TX],
         fill_count: 0,
     };

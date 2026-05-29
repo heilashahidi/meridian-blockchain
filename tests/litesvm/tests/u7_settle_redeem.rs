@@ -28,9 +28,9 @@
 use anchor_lang::{AccountSerialize, AnchorSerialize};
 use litesvm::LiteSVM;
 use meridian_litesvm_tests::{
-    anchor_ix, load_anchor_account, load_zero_copy_account, read_mint, read_token_account,
-    set_clock_unix_ts, set_pyth_price, set_pyth_price_partial, set_pyth_price_with_owner, Fixture,
-    MERIDIAN_PROGRAM_ID, RENT_SYSVAR_ID,
+    anchor_ix, create_canonical_ata, freeze_token_account, load_anchor_account,
+    load_zero_copy_account, read_mint, read_token_account, set_clock_unix_ts, set_pyth_price,
+    set_pyth_price_partial, set_pyth_price_with_owner, Fixture, MERIDIAN_PROGRAM_ID, RENT_SYSVAR_ID,
     SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
 };
 use solana_address::Address;
@@ -47,6 +47,7 @@ fn airdrop_sol(svm: &mut LiteSVM, who: &Address, lamports: u64) {
     svm.airdrop(who, lamports).expect("airdrop SOL");
 }
 
+#[allow(dead_code)]
 fn create_token_account(
     svm: &mut LiteSVM,
     payer: &Keypair,
@@ -228,24 +229,25 @@ impl Env {
         for _ in 0..n_users {
             let kp = Keypair::new();
             airdrop_sol(&mut fx.svm, &kp.pubkey(), 10_000_000_000);
-            let usdc_kp =
-                create_token_account(&mut fx.svm, &kp, &kp.pubkey(), &fx.usdc_mint.pubkey());
-            let yes_kp = create_token_account(&mut fx.svm, &kp, &kp.pubkey(), &yes_mint);
-            let no_kp = create_token_account(&mut fx.svm, &kp, &kp.pubkey(), &no_mint);
+            // Post-U5 ABI: maker payouts + sweep refund recipients bind to the
+            // owner's canonical ATA.
+            let usdc = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &fx.usdc_mint.pubkey());
+            let yes = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &yes_mint);
+            let no = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &no_mint);
             if usdc_each > 0 {
                 mint_usdc(
                     &mut fx.svm,
                     &fx.admin.insecure_clone(),
                     &fx.usdc_mint.pubkey(),
-                    &usdc_kp.pubkey(),
+                    &usdc,
                     usdc_each,
                 );
             }
             users.push(UserAccounts {
                 kp,
-                usdc: usdc_kp.pubkey(),
-                yes: yes_kp.pubkey(),
-                no: no_kp.pubkey(),
+                usdc,
+                yes,
+                no,
             });
         }
 
@@ -332,9 +334,11 @@ impl Env {
             AccountMeta::new_readonly(self.mint_authority, false),
             AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
         ];
+        // Post-U5 ABI: one canonical maker payout per fill — USDC for a Bid
+        // taker, Yes for an Ask taker.
         for (usdc, yes) in maker_pairs {
-            metas.push(AccountMeta::new(*usdc, false));
-            metas.push(AccountMeta::new(*yes, false));
+            let payout = if side == 0 { *usdc } else { *yes };
+            metas.push(AccountMeta::new(payout, false));
         }
         let ix = anchor_ix(MERIDIAN_PROGRAM_ID, "place_limit_order", &data, metas);
         let kp = self.users[i].kp.insecure_clone();
@@ -1399,6 +1403,204 @@ fn end_to_end_dollar_invariant() {
     // No side won zero; A's redemption pulled out the 50 that funded the
     // Yes side at mint time).
     assert_eq!(env.usdc_escrow_amount(), 0);
+}
+
+#[test]
+fn sweep_throughput_not_throttled_by_frozen_front_order() {
+    // #4 sweep throughput not throttled + R15b reentrancy. Four resting bids;
+    // the FRONT order's owner has a FROZEN canonical USDC recipient. A single
+    // sweep call with enough budget must drain the THREE payable orders behind
+    // it (skipped one re-inserted at a FRESH seq → back of the level) — it does
+    // NOT burn the whole call re-attempting the bad front order each time. Then
+    // after unfreezing, one more call drains the last → converges in 2 calls.
+    // R15b: re-running after convergence is a no-op success; cursor monotonic.
+    let mut env = Env::new(4, 10_000);
+    // Distinct prices so pop order is deterministic: user0 best (price 50),
+    // then user1 (45), user2 (44), user3 (43). user0 is the frozen front.
+    env.place_limit(0, 0, 50, 10, &[]).expect("u0 bid");
+    env.place_limit(1, 0, 45, 10, &[]).expect("u1 bid");
+    env.place_limit(2, 0, 44, 10, &[]).expect("u2 bid");
+    env.place_limit(3, 0, 43, 10, &[]).expect("u3 bid");
+
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle");
+
+    let escrow_pre = env.usdc_escrow_amount();
+    assert_eq!(escrow_pre, 10 * 50 + 10 * 45 + 10 * 44 + 10 * 43, "all four bids escrowed");
+
+    // Freeze user0's canonical USDC recipient (bid refunds go to USDC ATA).
+    freeze_token_account(&mut env.fx.svm, &env.users[0].usdc);
+
+    // One sweep call, budget 4, recipients in pop order: u0(frozen), u1, u2, u3.
+    env.sweep(
+        4,
+        &[
+            env.users[0].usdc,
+            env.users[1].usdc,
+            env.users[2].usdc,
+            env.users[3].usdc,
+        ],
+    )
+    .expect("sweep must not revert; drains payable orders behind the frozen front");
+
+    // The 3 payable orders drained in this single call (not throttled); only
+    // user0's frozen order remains, re-inserted at the back (fresh seq).
+    let book = env.book();
+    assert_eq!(book.bids.len(), 1, "only the frozen front order remains");
+    assert_eq!(book.bids.as_slice()[0].owner, env.users[0].kp.pubkey().to_bytes());
+    assert_eq!(
+        env.usdc_escrow_amount(),
+        10 * 50, // only user0's 500 still owed
+        "u1+u2+u3 refunded in ONE call; only frozen u0 still escrowed",
+    );
+    // Cursor counts only successful drains.
+    assert_eq!(env.market().sweep_cursor, 3, "3 successful drains");
+
+    // Unfreeze user0 and re-crank → the last order drains. Converges (2 calls).
+    env.fx.svm.expire_blockhash();
+    // Re-create user0's canonical USDC ATA live again (un-freeze == replant as
+    // an Initialized, zero-balance ATA at the same canonical address).
+    let u0 = env.users[0].kp.pubkey();
+    let usdc_mint = env.fx.usdc_mint.pubkey();
+    let relived = create_canonical_ata(&mut env.fx.svm, &u0, &usdc_mint);
+    assert_eq!(relived, env.users[0].usdc, "same canonical address re-created live");
+    env.sweep(4, &[env.users[0].usdc]).expect("re-crank drains last");
+    assert_eq!(env.book().bids.len(), 0, "all orders drained — converged");
+    assert_eq!(env.usdc_escrow_amount(), 0, "escrow fully drained");
+    assert_eq!(env.market().sweep_cursor, 4, "cursor monotonic: 4 total drains");
+
+    // R15b reentrancy: re-running after convergence is a no-op success and the
+    // cursor stays put (monotonic, never rewinds).
+    env.fx.svm.expire_blockhash();
+    env.sweep(4, &[]).expect("post-convergence sweep is a no-op success");
+    assert_eq!(env.market().sweep_cursor, 4, "cursor unchanged on no-op re-crank");
+    assert_eq!(env.usdc_escrow_amount(), 0);
+}
+
+#[test]
+fn sweep_skips_non_canonical_recipient_and_recrank_pays() {
+    // #4 sweep canonical recipient + skip-on-bad. The cranker is an untrusted
+    // PUBLIC caller, so a NON-canonical recipient is SKIPPED (not a tx revert):
+    // other refunds in the same batch still succeed. A correct re-crank then
+    // pays the skipped owner. (Asymmetry vs the trading path, which reverts.)
+    let mut env = Env::new(2, 10_000);
+    // Two resting bids: user0 best (price 50), user1 behind (price 45).
+    env.place_limit(0, 0, 50, 10, &[]).expect("u0 bid");
+    env.place_limit(1, 0, 45, 10, &[]).expect("u1 bid");
+
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle");
+
+    let escrow_pre = env.usdc_escrow_amount();
+    assert_eq!(escrow_pre, 10 * 50 + 10 * 45);
+
+    // Pop order: [u0-slot, u1-slot]. Supply a NON-canonical recipient for u0's
+    // slot (user1's USDC ATA, which is canonical for user1, != canonical(u0)).
+    // u0's refund must SKIP (not revert); u1's slot is correct → refunded.
+    env.sweep(2, &[env.users[1].usdc, env.users[1].usdc])
+        .expect("non-canonical recipient must be SKIPPED, not revert the batch");
+
+    // Only u1 (45*10=450) refunded; u0 skipped and re-inserted (fresh seq).
+    assert_eq!(
+        env.usdc_escrow_amount(),
+        escrow_pre - 450,
+        "u1 refunded; u0's 500 still escrowed (skipped, not reverted)",
+    );
+    let book = env.book();
+    assert_eq!(book.bids.len(), 1, "u0's bid re-inserted after skip");
+    assert_eq!(book.bids.as_slice()[0].owner, env.users[0].kp.pubkey().to_bytes());
+    assert_eq!(env.market().sweep_cursor, 1, "only the successful drain counted");
+
+    // Re-crank with u0's CORRECT canonical recipient → pays the skipped owner.
+    env.fx.svm.expire_blockhash();
+    env.sweep(2, &[env.users[0].usdc]).expect("correct re-crank pays u0");
+    assert_eq!(env.book().bids.len(), 0, "u0 finally refunded");
+    assert_eq!(env.usdc_escrow_amount(), 0, "escrow fully drained");
+    assert_eq!(env.market().sweep_cursor, 2, "cursor monotonic to 2");
+}
+
+#[test]
+fn sweep_ask_side_not_throttled_by_frozen_front_yes_refund() {
+    // Symmetric to sweep_throughput_not_throttled_by_frozen_front_order, but for
+    // the ASK side (RefundKind::Yes). The existing sweep tests only freeze the
+    // Bid side (USDC refund); this pins the Yes/ask refund path. Four resting
+    // ASKS (Yes collateral); the FRONT (best-priced) ask's owner has a FROZEN
+    // canonical YES recipient. A single sweep with enough budget must drain the
+    // THREE payable asks behind it in ONE call (skipped one re-inserted at a
+    // FRESH seq → back of the level) — not throttled by re-attempting the bad
+    // front. After thawing, one more call drains the last → converges in 2 calls.
+    let mut env = Env::new(4, 10_000);
+    // Each maker mints a pair then rests an ask (sells Yes). Ascending prices so
+    // pop order is deterministic: user0 best (40, frozen front), then user1 (45),
+    // user2 (46), user3 (47). No bids → sweep drains the ask side.
+    for i in 0..4 {
+        env.seed_yes(i, 10);
+    }
+    env.place_limit(0, /* Ask */ 1, 40, 10, &[]).expect("u0 ask (front)");
+    env.place_limit(1, 1, 45, 10, &[]).expect("u1 ask");
+    env.place_limit(2, 1, 46, 10, &[]).expect("u2 ask");
+    env.place_limit(3, 1, 47, 10, &[]).expect("u3 ask");
+
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle");
+
+    // Ask collateral is Yes: 10 from each of the 4 makers = 40 Yes escrowed.
+    assert_eq!(env.book().bids.len(), 0, "no bids → ask-side sweep");
+    assert_eq!(env.yes_escrow_amount(), 40, "all four asks' Yes escrowed");
+
+    // Freeze user0's canonical YES recipient (ask refunds go to the Yes ATA).
+    freeze_token_account(&mut env.fx.svm, &env.users[0].yes);
+
+    // One sweep call, budget 4, recipients in pop order: u0(frozen), u1, u2, u3.
+    // Ask refunds bind to each owner's canonical YES ATA.
+    env.sweep(
+        4,
+        &[
+            env.users[0].yes,
+            env.users[1].yes,
+            env.users[2].yes,
+            env.users[3].yes,
+        ],
+    )
+    .expect("sweep must not revert; drains payable asks behind the frozen front");
+
+    // The 3 payable asks drained in this single call (not throttled); only u0's
+    // frozen order remains, re-inserted at the back (fresh seq).
+    let book = env.book();
+    assert_eq!(book.asks.len(), 1, "only the frozen front ask remains");
+    assert_eq!(book.asks.as_slice()[0].owner, env.users[0].kp.pubkey().to_bytes());
+    // yes_escrow drains PARTIALLY: u1+u2+u3 (10 each = 30) refunded; u0's 10 owed.
+    assert_eq!(
+        env.yes_escrow_amount(),
+        10,
+        "u1+u2+u3 Yes refunded in ONE call; only frozen u0's 10 still escrowed",
+    );
+    // The three refunded owners got their 10 Yes back.
+    assert_eq!(env.balances(1).yes, 10, "u1 Yes refunded");
+    assert_eq!(env.balances(2).yes, 10, "u2 Yes refunded");
+    assert_eq!(env.balances(3).yes, 10, "u3 Yes refunded");
+    assert_eq!(env.balances(0).yes, 0, "u0 frozen — not yet refunded");
+    // Cursor counts only successful drains.
+    assert_eq!(env.market().sweep_cursor, 3, "3 successful drains");
+
+    // Thaw user0 (replant a live, zero-balance canonical Yes ATA) and re-crank →
+    // the last ask drains and the previously-frozen owner is paid. Converges.
+    env.fx.svm.expire_blockhash();
+    let u0 = env.users[0].kp.pubkey();
+    let yes_mint = env.yes_mint;
+    let relived = create_canonical_ata(&mut env.fx.svm, &u0, &yes_mint);
+    assert_eq!(relived, env.users[0].yes, "same canonical Yes address re-created live");
+    env.sweep(4, &[env.users[0].yes]).expect("re-crank drains the thawed ask");
+    assert_eq!(env.book().asks.len(), 0, "all asks drained — converged");
+    assert_eq!(env.yes_escrow_amount(), 0, "Yes escrow fully drained");
+    assert_eq!(env.balances(0).yes, 10, "previously-frozen u0 now refunded");
+    assert_eq!(env.market().sweep_cursor, 4, "cursor monotonic: 4 total drains");
 }
 
 /// Sum USDC across both users + the per-market USDC escrow. The total

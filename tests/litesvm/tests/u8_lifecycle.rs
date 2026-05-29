@@ -42,8 +42,8 @@
 use anchor_lang::AnchorSerialize;
 use litesvm::LiteSVM;
 use meridian_litesvm_tests::{
-    anchor_ix, assert_invariants, load_anchor_account, load_zero_copy_account, read_mint,
-    read_token_account, set_clock_unix_ts, set_pyth_price, Fixture, MERIDIAN_PROGRAM_ID,
+    anchor_ix, assert_invariants, create_canonical_ata, load_anchor_account, load_zero_copy_account,
+    read_mint, read_token_account, set_clock_unix_ts, set_pyth_price, Fixture, MERIDIAN_PROGRAM_ID,
     RENT_SYSVAR_ID, SYSTEM_PROGRAM_ID, TOKEN_PROGRAM_ID,
 };
 use solana_address::Address;
@@ -261,7 +261,7 @@ impl Env {
         submit(&mut self.fx.svm, ix, &[&kp]);
     }
 
-    fn place_metas(&self, i: usize, maker_pairs: &[(Address, Address)]) -> Vec<AccountMeta> {
+    fn place_metas(&self, i: usize, taker_side: u8, maker_pairs: &[(Address, Address)]) -> Vec<AccountMeta> {
         let mut v = vec![
             AccountMeta::new(self.users[i].kp.pubkey(), true),
             AccountMeta::new_readonly(self.config_pda, false),
@@ -275,9 +275,11 @@ impl Env {
             AccountMeta::new_readonly(self.market.mint_authority, false),
             AccountMeta::new_readonly(TOKEN_PROGRAM_ID, false),
         ];
+        // Post-U5 ABI: one canonical maker payout per fill — USDC for a Bid
+        // taker, Yes for an Ask taker.
         for (usdc, yes) in maker_pairs {
-            v.push(AccountMeta::new(*usdc, false));
-            v.push(AccountMeta::new(*yes, false));
+            let payout = if taker_side == 0 { *usdc } else { *yes };
+            v.push(AccountMeta::new(payout, false));
         }
         v
     }
@@ -294,7 +296,7 @@ impl Env {
         let args = meridian::PlaceLimitOrderArgs { side, price, qty };
         let mut data = Vec::new();
         args.serialize(&mut data).unwrap();
-        let metas = self.place_metas(i, maker_pairs);
+        let metas = self.place_metas(i, side, maker_pairs);
         let ix = anchor_ix(MERIDIAN_PROGRAM_ID, "place_limit_order", &data, metas);
         let kp = self.users[i].kp.insecure_clone();
         try_submit(&mut self.fx.svm, ix, &[&kp])
@@ -316,7 +318,7 @@ impl Env {
         };
         let mut data = Vec::new();
         args.serialize(&mut data).unwrap();
-        let metas = self.place_metas(i, maker_pairs);
+        let metas = self.place_metas(i, side, maker_pairs);
         let ix = anchor_ix(MERIDIAN_PROGRAM_ID, "place_market_order", &data, metas);
         let kp = self.users[i].kp.insecure_clone();
         try_submit(&mut self.fx.svm, ix, &[&kp])
@@ -535,23 +537,24 @@ fn create_user(
 ) -> UserAccounts {
     let kp = Keypair::new();
     airdrop_sol(&mut fx.svm, &kp.pubkey(), 10_000_000_000);
-    let usdc_kp = create_token_account(&mut fx.svm, &kp, &kp.pubkey(), &fx.usdc_mint.pubkey());
-    let yes_kp = create_token_account(&mut fx.svm, &kp, &kp.pubkey(), yes_mint);
-    let no_kp = create_token_account(&mut fx.svm, &kp, &kp.pubkey(), no_mint);
+    // Post-U5 ABI: maker payouts + sweep recipients bind to the canonical ATA.
+    let usdc = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &fx.usdc_mint.pubkey());
+    let yes = create_canonical_ata(&mut fx.svm, &kp.pubkey(), yes_mint);
+    let no = create_canonical_ata(&mut fx.svm, &kp.pubkey(), no_mint);
     if usdc_each > 0 {
         mint_usdc(
             &mut fx.svm,
             &fx.admin.insecure_clone(),
             &fx.usdc_mint.pubkey(),
-            &usdc_kp.pubkey(),
+            &usdc,
             usdc_each,
         );
     }
     UserAccounts {
         kp,
-        usdc: usdc_kp.pubkey(),
-        yes: yes_kp.pubkey(),
-        no: no_kp.pubkey(),
+        usdc,
+        yes,
+        no,
     }
 }
 
@@ -756,16 +759,11 @@ fn multi_market_isolation() {
     // One user; we'll exercise both markets from the same wallet.
     let kp = Keypair::new();
     airdrop_sol(&mut fx.svm, &kp.pubkey(), 10_000_000_000);
-    let user_usdc =
-        create_token_account(&mut fx.svm, &kp, &kp.pubkey(), &fx.usdc_mint.pubkey()).pubkey();
-    let user_yes_a =
-        create_token_account(&mut fx.svm, &kp, &kp.pubkey(), &market_a.yes_mint).pubkey();
-    let user_no_a =
-        create_token_account(&mut fx.svm, &kp, &kp.pubkey(), &market_a.no_mint).pubkey();
-    let user_yes_b =
-        create_token_account(&mut fx.svm, &kp, &kp.pubkey(), &market_b.yes_mint).pubkey();
-    let user_no_b =
-        create_token_account(&mut fx.svm, &kp, &kp.pubkey(), &market_b.no_mint).pubkey();
+    let user_usdc = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &fx.usdc_mint.pubkey());
+    let user_yes_a = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &market_a.yes_mint);
+    let user_no_a = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &market_a.no_mint);
+    let user_yes_b = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &market_b.yes_mint);
+    let user_no_b = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &market_b.no_mint);
     mint_usdc(
         &mut fx.svm,
         &fx.admin.insecure_clone(),

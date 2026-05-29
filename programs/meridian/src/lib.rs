@@ -21,6 +21,7 @@ pub mod error;
 pub mod instructions;
 pub mod matching;
 pub mod state;
+pub(crate) mod token_util;
 
 // Re-export the matching engine surface so future instruction modules
 // (U3-U7) can `use crate::matching::...` or just `use crate::*` cleanly.

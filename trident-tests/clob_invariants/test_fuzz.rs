@@ -1,27 +1,66 @@
 //! Trident multi-instruction fuzz harness for the Meridian on-chain CLOB.
 //!
-//! Per plan §U9:
-//!   * #[flow] randomized sequences of `mint_pair`, `burn_pair`,
-//!     `place_limit_order`, `place_market_order`, `cancel_order`, `buy_no`,
-//!     `sell_no`.
-//!   * After every flow step, assert invariants:
-//!       - R13: usdc_escrow == sum(open_bid.qty * open_bid.price)
-//!              AND yes_escrow == sum(open_ask.qty)
-//!       - R14: yes_mint.supply == no_mint.supply
-//!       - Token conservation: sum(USDC across all named accounts) ==
-//!         initial total seeded.
+//! Flows: randomized sequences of `mint_pair`, `burn_pair`,
+//! `place_limit_order`, `place_market_order`, `cancel_order`, `buy_no`,
+//! `sell_no`, plus two CONTROLLED probes (`flow_skip_probe`,
+//! `flow_sweep_convergence`) described below.
 //!
-//! ## Deviation from plan: settle / sweep / redeem are out-of-scope here
+//! ## Program ABI this harness targets (1-account canonical-ATA, U1–U5)
 //!
-//! Plan §U9's instruction list includes `settle_market`, `settle_sweep`, and
-//! `redeem`. Planting a fake `PriceUpdateV2` account for `settle_market`
-//! requires (a) the meridian program as account owner and (b) the vendored
-//! `PriceUpdateV2` Borsh layout — both doable but expensive in Trident's
-//! flow API, and crucially `settle_market` is the *only* instruction here
-//! that needs that machinery. The plan explicitly authorizes scoping this
-//! out: U9's value is the *non*-settle invariants (R13/R14/conservation)
-//! that ride through the matching/escrow code paths. Settle-race scenarios
-//! are already covered by the LiteSVM `settle_race_test.rs` in U8.
+//! `place_limit_order` / `place_market_order` / `buy_no` / `sell_no` consume
+//! **ONE** `remaining_accounts` entry per fill: the maker's CANONICAL
+//! associated token account for the payout mint, in fill order. The payout
+//! mint is fixed by the taker's side for the whole order:
+//!
+//!   * Bid taker (hits a resting ask) pays the maker USDC → canonical USDC ATA.
+//!   * Ask taker (hits a resting bid) pays the maker Yes  → canonical Yes  ATA.
+//!
+//! The program requires `remaining.len() >= fill_count` and binds each slot to
+//! `get_associated_token_address(maker_owner, payout_mint)`:
+//!   * key ≠ canonical ATA → REVERT (`BadMakerAccount`). A non-canonical
+//!     account is a malformed call; the taker can no longer force an honest
+//!     maker into the skip path.
+//!   * key = canonical ATA but un-receivable (closed / frozen / uninitialized
+//!     / not SPL-owned) → SKIP the fill and restore the maker's resting order.
+//!   * key = canonical ATA and receivable → pay.
+//!
+//! `settle_sweep` consumes ONE recipient `AccountMeta` per POP ATTEMPT (one
+//! per entry dequeued this call, whether or not its refund lands), in pop
+//! order (bids first, then asks). Bid pops refund the owner's canonical USDC
+//! ATA, ask pops refund the owner's canonical Yes ATA. A non-canonical or
+//! un-receivable recipient is SKIPPED (not reverted, because the cranker is an
+//! untrusted public actor) and re-inserted at a FRESH seq.
+//!
+//! ## Invariants (asserted after each relevant flow step)
+//!
+//!   * **R13 — escrow reconciliation:** for every market,
+//!     `usdc_escrow == sum(open_bid.qty * open_bid.price)` AND
+//!     `yes_escrow == sum(open_ask.qty)`. Plus token conservation:
+//!     `sum(USDC across all user ATAs + escrows) == initial total seeded`.
+//!   * **R14 — pair supply:** `yes_mint.supply == no_mint.supply`.
+//!   * **No book-entry duplication (`flow_skip_probe`):** across a
+//!     skip-inducing fill — INCLUDING a partial-fill skip — the opposing
+//!     side's entry count must NOT increase (one logical maker order stays
+//!     one entry). This exercises the now-FIXED finding #2 (a skipped partial
+//!     restores qty into the existing remnant rather than inserting a
+//!     duplicate).
+//!   * **Sweep convergence (`flow_sweep_convergence`):** a settled book drains
+//!     to EMPTY under repeated `settle_sweep` cranks even when some recipients
+//!     are FROZEN (skipped entries re-insert at a fresh seq and drain on a
+//!     later crank once unfrozen; the crank never wedges). Forward progress is
+//!     asserted on every call. This exercises the now-FIXED finding #4
+//!     (fresh-seq re-insert prevents the skipped-order throttle/wedge).
+//!
+//! ## Skip-path coverage: freeze the CANONICAL account, never substitute
+//!
+//! Under the 1-account canonical-ATA ABI a SUBSTITUTED (non-canonical) account
+//! now REVERTS (`BadMakerAccount`). The only way to drive the skip-and-continue
+//! branch is to make the maker's CANONICAL ATA un-receivable. `flow_skip_probe`
+//! does that by FREEZING the maker's canonical payout ATA — flipping the SPL
+//! account-state byte at offset 108 to Frozen (2) via `set_account_custom` —
+//! which trips the program's `token_account_receivable` pre-CPI gate. It
+//! self-checks that the freeze persisted and that the skip actually fired, so
+//! the no-dup assertion is never vacuous.
 //!
 //! ## Layout note
 //!
@@ -69,14 +108,18 @@ const INITIAL_USDC_PER_USER: u64 = 10_000_000_000; // 10_000 USDC
 const NUM_USERS: usize = 3;
 const NUM_MARKETS: usize = 2;
 
-/// Mirror of `place_limit_order::MAX_FILLS_PER_TX`: a taker walks at most
-/// this many opposing entries per tx. `place_order_inner` reads the maker
-/// payout accounts from `remaining_accounts[i*2]` (maker USDC) and
-/// `[i*2 + 1]` (maker Yes) for each fill `i`. Every "user" here is the
-/// admin keypair, so every maker's payout ATAs are the admin's USDC + this
-/// market's Yes ATA; we always supply MAX_FILLS_PER_TX pairs and the
-/// handler ignores any tail slots beyond the actual fill count.
+/// Mirror of `place_limit_order::MAX_FILLS_PER_TX`: a taker walks at most this
+/// many opposing entries per tx. Under the 1-account canonical-ATA ABI,
+/// `place_order_inner` reads ONE maker payout account per fill from
+/// `remaining_accounts[i]` (the maker's canonical ATA for the payout mint).
+/// Every "user" here is the admin keypair, so every maker's canonical payout
+/// ATA is the admin's canonical USDC ATA (Bid taker) or this market's admin
+/// canonical Yes ATA (Ask taker). We supply MAX_FILLS_PER_TX canonical payout
+/// ATAs for the taker's side and the handler reads only `0..fill_count`.
 const MAX_FILLS_PER_TX: usize = 4;
+
+/// Mirror of `settle_sweep::MAX_SWEEP_PER_TX`.
+const MAX_SWEEP_PER_TX: usize = 8;
 
 /// Mid price used for liquidity-seeding orders, in USDC microunits per Yes
 /// token. Deliberately small so `qty * price` locks stay affordable from
@@ -126,6 +169,9 @@ struct FuzzTest {
     config: Pubkey,
     markets: Vec<MarketCtx>,
     initial_total_usdc: u64,
+    /// Set once the sweep-convergence probe has run this iteration (it settles
+    /// a dedicated market, which is one-way, so it runs at most once).
+    sweep_probe_done: bool,
 }
 
 impl Default for FuzzTest {
@@ -141,6 +187,7 @@ impl Default for FuzzTest {
             config: Pubkey::default(),
             markets: Vec::new(),
             initial_total_usdc: 0,
+            sweep_probe_done: false,
         }
     }
 }
@@ -159,6 +206,7 @@ impl FuzzTest {
         self.user_usdc.clear();
         self.markets.clear();
         self.initial_total_usdc = 0;
+        self.sweep_probe_done = false;
         self.bootstrap();
     }
 
@@ -422,6 +470,324 @@ impl FuzzTest {
         self.assert_all_invariants();
     }
 
+    /// Skip-path probe — no-book-entry-duplication invariant (finding #2 guard).
+    ///
+    /// Under the 1-account canonical-ATA ABI the ONLY way a taker can reach the
+    /// maker-payout skip-and-continue branch is for the maker's CANONICAL payout
+    /// ATA to be un-receivable (a SUBSTITUTED non-canonical account now REVERTS
+    /// with `BadMakerAccount`). This probe drives that branch by FREEZING the
+    /// maker's canonical USDC ATA (the Bid-taker payout mint) — flipping the SPL
+    /// account-state byte at offset 108 to Frozen (2) — so the program's
+    /// `token_account_receivable` pre-CPI gate fails and the fill is skipped and
+    /// the maker order restored.
+    ///
+    /// It exercises BOTH skip shapes, chosen randomly:
+    ///   * FULL-fill skip: taker consumes the maker's whole resting ask. The
+    ///     popped maker is re-inserted at a fresh seq — exactly ONE entry back.
+    ///   * PARTIAL-fill skip: taker consumes only PART of the maker's ask. The
+    ///     now-FIXED finding #2 means the unpaid qty folds back into the
+    ///     existing remnant (no duplicate entry); the remnant stays one entry.
+    ///
+    /// The no-dup invariant is the same for both: the opposing (ask) side's
+    /// entry count must NOT increase across the skip-inducing fill. The probe
+    /// self-checks that the freeze persisted AND that the skip fired (the
+    /// maker's ask survives), so the assertion is non-vacuous. Finally it thaws
+    /// the ATA so later flows can pay normally.
+    #[flow]
+    fn flow_skip_probe(&mut self) {
+        if !self.inited {
+            return;
+        }
+        let market_idx = self.trident.random_from_range(0..NUM_MARKETS);
+        // Maker = user 0 (all users share the admin key; the maker's canonical
+        // USDC/Yes ATAs are user 0's canonical ATAs). Seed an exact resting ask
+        // of `qty` Yes from the maker at MID_PRICE.
+        let maker = 0usize;
+        let qty: u64 = self.trident.random_from_range(2u64..1_000);
+        if self.ensure_yes(maker, market_idx, qty) < qty {
+            return;
+        }
+        if !self.do_place_limit(maker, market_idx, 1, MID_PRICE, qty) {
+            return;
+        }
+
+        // Confirm the maker's MID/qty ask actually rested (it could have crossed
+        // an existing resting bid on placement). Snapshot the ask side BEFORE
+        // the crossing taker. A correct skip — full OR partial — leaves the ask
+        // COUNT unchanged.
+        let asks_before = self.read_resting(market_idx).asks.len();
+        let matching_before = self
+            .read_resting(market_idx)
+            .asks
+            .iter()
+            .filter(|e| e.price == MID_PRICE && e.qty == qty)
+            .count();
+        if matching_before == 0 {
+            return;
+        }
+
+        // A Bid taker hitting a resting ask pays the maker USDC (program:
+        // `Side::Bid => USDC escrow -> maker canonical USDC ATA`), so the maker's
+        // canonical USDC ATA is the receivable gate. Freeze it to fail
+        // `token_account_receivable` and trip the skip branch — this is the
+        // canonical account the program will derive, NOT a substitute.
+        let maker_usdc = self.user_usdc[maker];
+        self.set_token_frozen(&maker_usdc, true);
+        // Self-check: confirm the freeze persisted to the SVM (guards against a
+        // silent no-op that would make the no-dup assertion vacuous).
+        assert!(
+            self.is_token_frozen(&maker_usdc),
+            "skip-probe setup error: maker USDC ATA did not freeze",
+        );
+
+        // Randomly choose FULL or PARTIAL consumption of the maker's ask. The
+        // taker bids at 2*MID so it crosses every resting ask priced <= that
+        // (all owned by the frozen maker → all skipped). For FULL we size the
+        // taker to the total crossable qty; for PARTIAL we take a strict
+        // fraction (>=1, < qty) so the maker's remnant stays resting and the
+        // skip restores into it (finding #2 path).
+        let taker = self.trident.random_from_range(0..NUM_USERS);
+        let price = MID_PRICE * 2;
+        let crossable_qty: u64 = crossable_ask_qty(&self.read_resting(market_idx), price);
+        if crossable_qty == 0 {
+            self.set_token_frozen(&maker_usdc, false);
+            return;
+        }
+        let partial = self.trident.random_bool();
+        let taker_qty = if partial {
+            // Strictly less than the front ask's qty so that ask partially
+            // fills (the front is the maker order we seeded at MID, qty `qty`).
+            // 1..qty (qty >= 2 by construction above).
+            self.trident.random_from_range(1u64..qty)
+        } else {
+            crossable_qty
+        };
+        if taker_qty == 0 {
+            self.set_token_frozen(&maker_usdc, false);
+            return;
+        }
+        // Cap the taker lock to the bankroll; bail if unaffordable (rare).
+        if self.usdc_bal(taker) < taker_qty.saturating_mul(price) {
+            self.set_token_frozen(&maker_usdc, false);
+            return;
+        }
+        let _ = self.do_place_limit(taker, market_idx, 0, price, taker_qty);
+
+        // Thaw so subsequent flows can pay this maker normally.
+        self.set_token_frozen(&maker_usdc, false);
+
+        // The fill was un-payable (frozen maker USDC), so the program SKIPS it.
+        // Verify the skip fired so the no-dup assertion is non-vacuous: the
+        // maker's ask must still be present on the ask side.
+        let after = self.read_resting(market_idx);
+        let matching_after = after
+            .asks
+            .iter()
+            .filter(|e| e.price == MID_PRICE)
+            .filter(|e| {
+                // Full skip: a fresh-seq re-insert of the whole `qty`. Partial
+                // skip: the remnant carries (qty - taker_qty) + restored unpaid.
+                // Either way the maker's order persists at the MID price level.
+                e.owner == solana_sdk::signer::Signer::pubkey(&self.users[maker]).to_bytes()
+            })
+            .count();
+        assert!(
+            matching_after >= 1,
+            "skip-probe: expected the frozen maker's ask to survive the skip \
+             (market {}, qty {}, partial={}), but it vanished — fill was not skipped",
+            market_idx, qty, partial,
+        );
+
+        // No-dup invariant (finding #2 guard): the skip + restore must NOT
+        // duplicate the maker's book entry. Across a skip-inducing fill —
+        // full OR partial — the ask side's TOTAL entry count must not increase.
+        // (A correct full skip pops one and re-inserts one: net zero. A correct
+        // partial skip leaves the single remnant in place and folds the unpaid
+        // qty back into it: net zero. A duplicate-entry regression would grow
+        // the count.)
+        assert!(
+            after.asks.len() <= asks_before,
+            "no-dup violated (market {}, partial={}): ask-side entries grew {} -> {} \
+             across a skip-inducing fill",
+            market_idx, partial, asks_before, after.asks.len(),
+        );
+
+        self.assert_all_invariants();
+    }
+
+    /// Sweep-convergence probe (finding #4 throttle/wedge guard).
+    ///
+    /// A settled book must drain to EMPTY under repeated `settle_sweep` calls
+    /// EVEN WHEN some refund recipients are temporarily un-receivable. This
+    /// probe stands up a DEDICATED market (so settling it doesn't freeze the
+    /// two shared trading markets), seeds resting orders on both sides, FREEZES
+    /// the bid owner's canonical USDC ATA so the first sweep crank must SKIP and
+    /// re-insert those bids at a fresh seq, settles the market via a forged Pyth
+    /// `PriceUpdateV2`, then cranks `settle_sweep` (8 orders/call). It asserts:
+    ///   * forward progress on EVERY non-trivial call (the book strictly shrinks
+    ///     OR a frozen recipient blocks only its own entries — never wedges the
+    ///     whole crank), and
+    ///   * once the frozen ATA is thawed mid-loop, the previously-skipped bids
+    ///     drain and the book reaches EMPTY within a bounded number of calls.
+    ///
+    /// This is the finding #4 fix in action: skipped entries re-insert at a
+    /// FRESH seq (back of the level), so they don't pin the front and burn the
+    /// per-call attempt budget on every crank — the asks behind them still drain.
+    ///
+    /// Runs at most once per iteration (settling is one-way). The dedicated
+    /// market's expiry is short so it expires soon; the warp lands far below the
+    /// shared trading markets' expiry, so they stay tradeable.
+    #[flow]
+    fn flow_sweep_convergence(&mut self) {
+        if !self.inited || self.sweep_probe_done {
+            return;
+        }
+        self.sweep_probe_done = true;
+
+        let admin_pk = solana_sdk::signer::Signer::pubkey(&self.admin);
+        let now = self.trident.get_current_timestamp();
+        // Dedicated market with a short horizon: tradeable now, expirable soon.
+        let expiry: i64 = now + 1_000;
+        let ticker = *b"SWEEP\0\0\0";
+        let strike: u64 = 500_000_000;
+        let feed_id = [0u8; 32];
+        let mut m = self.create_market(ticker, strike, expiry, feed_id);
+        // Record + create the dedicated market's Yes/No ATAs (owner = admin).
+        // place_limit_order validates user_yes (token::mint = yes_mint), so a
+        // default pubkey there fails — we must derive and create them.
+        for u_idx in 0..NUM_USERS {
+            let user_pk = solana_sdk::signer::Signer::pubkey(&self.users[u_idx]);
+            m.user_yes_ata[u_idx] =
+                self.trident.get_associated_token_address(&m.yes_mint, &user_pk, &token_program_id());
+            m.user_no_ata[u_idx] =
+                self.trident.get_associated_token_address(&m.no_mint, &user_pk, &token_program_id());
+        }
+        let yes_ix = self.trident.initialize_associated_token_account(&admin_pk, &m.yes_mint, &admin_pk);
+        let no_ix = self.trident.initialize_associated_token_account(&admin_pk, &m.no_mint, &admin_pk);
+        let res = self.trident.process_transaction(&[yes_ix, no_ix], Some("sweep_yes_no_ata"));
+        if !res.is_success() {
+            return;
+        }
+        let m_idx = self.markets.len();
+        self.markets.push(m);
+
+        // Seed resting orders on both sides (no crossing: bids strictly below
+        // asks). Enough each side that the crank needs multiple calls (cap 8).
+        let n_bids = 5u64;
+        let n_asks = 6u64;
+        for _ in 0..n_bids {
+            let _ = self.do_place_limit(0, m_idx, 0, MID_PRICE, 3);
+        }
+        let _ = self.ensure_yes(0, m_idx, n_asks * 3);
+        for _ in 0..n_asks {
+            let _ = self.do_place_limit(0, m_idx, 1, MID_PRICE * 3, 3);
+        }
+
+        let resting = self.read_resting(m_idx);
+        let total_resting = resting.bids.len() + resting.asks.len();
+        if total_resting == 0 {
+            self.assert_all_invariants();
+            return;
+        }
+
+        // Warp just past expiry so settle is allowed; stays << trading expiry.
+        self.trident.warp_to_timestamp(expiry + 2);
+
+        // Forge and plant a Full-verified PriceUpdateV2 owned by the program
+        // (config.pyth_receiver == meridian program id in bootstrap).
+        let price_update = solana_sdk::signature::Keypair::new();
+        let price_update_pk = solana_sdk::signer::Signer::pubkey(&price_update);
+        self.plant_price_update(&price_update_pk, feed_id, expiry + 1);
+
+        // Settle the dedicated market.
+        let settle_ix = self.build_settle_market_ix(m_idx, price_update_pk);
+        let res = self.trident.process_transaction(&[settle_ix], Some("settle_market"));
+        assert!(
+            res.is_success(),
+            "settle_market failed for sweep probe: logs={}",
+            res.logs()
+        );
+
+        // FREEZE the bid owner's canonical USDC ATA so the FIRST sweep crank
+        // must skip the bids (un-receivable) and re-insert them at a fresh seq.
+        // This exercises finding #4's fix: the skipped bids go to the BACK and
+        // don't wedge the crank — the asks behind them still drain. We thaw
+        // partway through so the bids eventually drain and the book empties.
+        let maker_usdc = self.user_usdc[0];
+        self.set_token_frozen(&maker_usdc, true);
+        assert!(
+            self.is_token_frozen(&maker_usdc),
+            "sweep-probe setup error: bid-owner USDC ATA did not freeze",
+        );
+
+        // Crank settle_sweep until the book is empty. Bound generously; a
+        // wedge/throttle regression (no forward progress) trips the bound.
+        // Forward-progress rule per call: EITHER the total entry count strictly
+        // drops, OR (while frozen) only the un-refundable bids remain and the
+        // asks have all drained — i.e. the crank never gets permanently stuck.
+        let max_calls = (total_resting as u64 + 8).max(8);
+        let mut calls = 0u64;
+        let mut thawed = false;
+        loop {
+            let r = self.read_resting(m_idx);
+            if r.bids.is_empty() && r.asks.is_empty() {
+                break;
+            }
+            assert!(
+                calls < max_calls,
+                "sweep convergence FAILED (market {}): book not empty after {} crank calls \
+                 (bids={}, asks={}, thawed={})",
+                m_idx, calls, r.bids.len(), r.asks.len(), thawed,
+            );
+            // Thaw once the asks have fully drained and only the (frozen) bids
+            // remain — this proves the asks drained THROUGH the skipped bids
+            // (no wedge), then lets the bids drain on the next crank.
+            if !thawed && r.asks.is_empty() {
+                self.set_token_frozen(&maker_usdc, false);
+                thawed = true;
+            }
+            let before = r.bids.len() + r.asks.len();
+            let sweep_ix = self.build_settle_sweep_ix(m_idx, &r);
+            let res = self.trident.process_transaction(&[sweep_ix], Some("settle_sweep"));
+            assert!(
+                res.is_success(),
+                "settle_sweep crank failed (market {}): logs={}",
+                m_idx, res.logs()
+            );
+            let after_r = self.read_resting(m_idx);
+            let after = after_r.bids.len() + after_r.asks.len();
+            // Forward progress: while still frozen the bids can't drain, but the
+            // crank must still make progress on the asks until none remain. Once
+            // only the frozen bids are left (asks empty), a frozen crank legally
+            // makes zero net progress (it pops, skips, re-inserts) — we thaw
+            // above before that crank, so `after < before` must hold every call.
+            assert!(
+                after < before,
+                "sweep made NO progress (market {}): {} -> {} entries (wedge/throttle \
+                 regression; thawed={})",
+                m_idx, before, after, thawed,
+            );
+            calls += 1;
+        }
+
+        // Defensive: ensure we actually unfroze (the loop thaws when asks
+        // empty; if the book somehow emptied before that, thaw now to leave the
+        // shared ATA in a clean state for later flows in this iteration).
+        if !thawed {
+            self.set_token_frozen(&maker_usdc, false);
+        }
+
+        // Escrow must be fully drained once the book is empty.
+        let usdc_escrow = self.markets[m_idx].usdc_escrow;
+        let yes_escrow = self.markets[m_idx].yes_escrow;
+        let usdc_left = self.read_token_balance(&usdc_escrow);
+        let yes_left = self.read_token_balance(&yes_escrow);
+        assert_eq!(usdc_left, 0, "sweep market {} USDC escrow not drained: {}", m_idx, usdc_left);
+        assert_eq!(yes_left, 0, "sweep market {} Yes escrow not drained: {}", m_idx, yes_left);
+
+        self.assert_all_invariants();
+    }
+
     #[end]
     fn end(&mut self) {
         if self.inited {
@@ -654,8 +1020,8 @@ impl FuzzTest {
         let admin_pk = solana_sdk::signer::Signer::pubkey(&self.admin);
         // Anchor wire: discriminator || borsh(fee_authority: Pubkey, pyth_receiver: Pubkey)
         // pyth_receiver gained a second arg in 4785807 (Pyth Full-verification).
-        // settle is out-of-scope for this harness, so any valid pubkey works;
-        // use the program's own ID (the LiteSVM/test-fixture convention).
+        // We use the program's own ID as pyth_receiver so the sweep probe can
+        // plant a program-owned PriceUpdateV2 for settle_market.
         let mut data = Vec::with_capacity(8 + 32 + 32);
         data.extend_from_slice(&anchor_disc("initialize_config"));
         data.extend_from_slice(admin_pk.as_ref());
@@ -714,6 +1080,107 @@ impl FuzzTest {
                 AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
                 AccountMeta::new_readonly(solana_sdk::sysvar::rent::ID, false),
             ],
+            data,
+        }
+    }
+
+    /// Forge and plant a Full-verified Pyth `PriceUpdateV2` account at `pk`,
+    /// owned by the meridian program (which bootstrap pins as
+    /// `config.pyth_receiver`). Borsh-serialize the vendored struct and
+    /// prepend the Anchor account discriminator so `try_deserialize` in
+    /// `settle_market` accepts it.
+    fn plant_price_update(&mut self, pk: &Pubkey, feed_id: [u8; 32], publish_time: i64) {
+        use anchor_lang::AnchorSerialize;
+        use solana_sdk::account::{AccountSharedData, WritableAccount};
+
+        // The meridian crate uses a different solana-program major (its
+        // `Pubkey` != trident's `Pubkey`), so cross the boundary by bytes.
+        let prog_pk_anchor =
+            anchor_lang::prelude::Pubkey::new_from_array(meridian_program_id().to_bytes());
+        let update = meridian::state::pyth::PriceUpdateV2 {
+            write_authority: prog_pk_anchor,
+            verification_level: meridian::state::pyth::VerificationLevel::Full,
+            price_message: meridian::state::pyth::PriceFeedMessage {
+                feed_id,
+                price: 1,
+                conf: 0,
+                exponent: 0,
+                publish_time,
+                prev_publish_time: publish_time,
+                ema_price: 1,
+                ema_conf: 0,
+            },
+            posted_slot: 0,
+        };
+        let mut data =
+            <meridian::state::pyth::PriceUpdateV2 as Discriminator>::DISCRIMINATOR.to_vec();
+        update.serialize(&mut data).expect("serialize PriceUpdateV2");
+
+        // Construct a fresh program-owned account sized to the forged data.
+        let mut acct = AccountSharedData::new(1_000_000_000, data.len(), &meridian_program_id());
+        acct.data_as_mut_slice().copy_from_slice(&data);
+        self.trident.set_account_custom(pk, &acct);
+    }
+
+    fn build_settle_market_ix(&self, market_idx: usize, price_update: Pubkey) -> Instruction {
+        let m = &self.markets[market_idx];
+        let caller = solana_sdk::signer::Signer::pubkey(&self.admin);
+        let mut data = Vec::with_capacity(8);
+        data.extend_from_slice(&anchor_disc("settle_market"));
+        Instruction {
+            program_id: meridian_program_id(),
+            accounts: vec![
+                AccountMeta::new(caller, true),
+                AccountMeta::new_readonly(self.config, false),
+                AccountMeta::new(m.market, false),
+                AccountMeta::new_readonly(price_update, false),
+            ],
+            data,
+        }
+    }
+
+    /// Build a `settle_sweep` ix that drains up to `MAX_SWEEP_PER_TX` orders.
+    /// The program drains bids first (USDC refund) then asks (Yes refund), one
+    /// recipient `AccountMeta` per POP ATTEMPT in that order — INCLUDING entries
+    /// it will skip. All owners are the admin keypair, so we supply the admin's
+    /// canonical USDC ATA for each bid pop and the market's admin canonical Yes
+    /// ATA for each ask pop, sized to the current resting book (capped at 8).
+    fn build_settle_sweep_ix(&self, market_idx: usize, resting: &RestingState) -> Instruction {
+        let m = &self.markets[market_idx];
+        let caller = solana_sdk::signer::Signer::pubkey(&self.admin);
+        let owner_usdc = self.user_usdc[0];
+        let owner_yes = m.user_yes_ata[0];
+
+        let mut data = Vec::with_capacity(8 + 4);
+        data.extend_from_slice(&anchor_disc("settle_sweep"));
+        data.extend_from_slice(&(MAX_SWEEP_PER_TX as u32).to_le_bytes());
+
+        let mut accounts = vec![
+            AccountMeta::new(caller, true),
+            AccountMeta::new_readonly(self.config, false),
+            AccountMeta::new(m.market, false),
+            AccountMeta::new(m.book, false),
+            AccountMeta::new(m.usdc_escrow, false),
+            AccountMeta::new(m.yes_escrow, false),
+            AccountMeta::new_readonly(m.yes_mint, false),
+            AccountMeta::new_readonly(m.mint_authority, false),
+            AccountMeta::new_readonly(token_program_id(), false),
+        ];
+        // One recipient per pop attempt, capped at MAX_SWEEP_PER_TX, in pop
+        // order (bids then asks). The program pops bids first while any remain,
+        // then asks — and consumes a slot even for skipped (frozen) pops.
+        let cap = MAX_SWEEP_PER_TX;
+        let bids_this_call = resting.bids.len().min(cap);
+        let asks_this_call = (cap - bids_this_call).min(resting.asks.len());
+        for _ in 0..bids_this_call {
+            accounts.push(AccountMeta::new(owner_usdc, false)); // canonical USDC ATA
+        }
+        for _ in 0..asks_this_call {
+            accounts.push(AccountMeta::new(owner_yes, false)); // canonical Yes ATA
+        }
+        Instruction {
+            program_id: meridian_program_id(),
+            accounts,
             data,
         }
     }
@@ -814,7 +1281,7 @@ impl FuzzTest {
             ],
             data,
         };
-        ix.accounts.extend(self.maker_remaining(market_idx));
+        ix.accounts.extend(self.maker_remaining(market_idx, side));
         self.trident
             .process_transaction(&[ix], Some("place_limit_order"))
             .is_success()
@@ -854,7 +1321,7 @@ impl FuzzTest {
             ],
             data,
         };
-        ix.accounts.extend(self.maker_remaining(market_idx));
+        ix.accounts.extend(self.maker_remaining(market_idx, side));
         self.trident
             .process_transaction(&[ix], Some("place_market_order"))
             .is_success()
@@ -906,6 +1373,8 @@ impl FuzzTest {
         amount: u64,
         min_yes_sell_price: u64,
     ) -> bool {
+        // buy_no's internal market-sell of the Yes leg is an ASK taker (it hits
+        // resting bids and pays makers Yes), so its maker payout mint is Yes.
         let m = &self.markets[market_idx];
         let user_pk = solana_sdk::signer::Signer::pubkey(&self.users[user_idx]);
         let user_usdc = self.user_usdc[user_idx];
@@ -934,7 +1403,8 @@ impl FuzzTest {
             ],
             data,
         };
-        ix.accounts.extend(self.maker_remaining(market_idx));
+        // ASK taker → maker payout mint is Yes → canonical Yes ATA per fill.
+        ix.accounts.extend(self.maker_remaining(market_idx, 1));
         self.trident
             .process_transaction(&[ix], Some("buy_no"))
             .is_success()
@@ -947,6 +1417,8 @@ impl FuzzTest {
         amount: u64,
         max_yes_buy_price: u64,
     ) -> bool {
+        // sell_no's internal market-buy of the Yes leg is a BID taker (it hits
+        // resting asks and pays makers USDC), so its maker payout mint is USDC.
         let m = &self.markets[market_idx];
         let user_pk = solana_sdk::signer::Signer::pubkey(&self.users[user_idx]);
         let user_usdc = self.user_usdc[user_idx];
@@ -975,7 +1447,8 @@ impl FuzzTest {
             ],
             data,
         };
-        ix.accounts.extend(self.maker_remaining(market_idx));
+        // BID taker → maker payout mint is USDC → canonical USDC ATA per fill.
+        ix.accounts.extend(self.maker_remaining(market_idx, 0));
         self.trident
             .process_transaction(&[ix], Some("sell_no"))
             .is_success()
@@ -1088,6 +1561,33 @@ impl FuzzTest {
         self.read_book_raw(&book)
     }
 
+    /// Flip an SPL token account's state byte to drive the maker-payout / sweep
+    /// skip branch on a CANONICAL account (the task's "freeze the canonical ATA"
+    /// strategy). `spl_token::state::Account` is 165 bytes with the `state` enum
+    /// at offset 108: Initialized = 1, Frozen = 2. The program's
+    /// `token_account_receivable` requires byte 108 == 1, so writing 2 makes the
+    /// account un-receivable (skip) while keeping its address canonical and its
+    /// balance intact; writing 1 thaws it. We mutate the on-chain bytes directly
+    /// via `set_account_custom` rather than issuing a real `FreezeAccount` CPI —
+    /// a byte flip is cheaper and avoids an extra signer tx.
+    fn set_token_frozen(&mut self, ata: &Pubkey, frozen: bool) {
+        use solana_sdk::account::WritableAccount;
+        let mut acct = self.trident.get_account(ata);
+        if acct.data().len() < spl_token_interface::state::Account::LEN {
+            return; // not a live token account; nothing to do
+        }
+        acct.data_as_mut_slice()[108] = if frozen { 2 } else { 1 };
+        self.trident.set_account_custom(ata, &acct);
+    }
+
+    /// True iff the SPL token account's state byte reads Frozen (2). Used by the
+    /// probes to confirm the freeze persisted before relying on it.
+    fn is_token_frozen(&mut self, ata: &Pubkey) -> bool {
+        let acct = self.trident.get_account(ata);
+        let data = acct.data();
+        data.len() >= spl_token_interface::state::Account::LEN && data[108] == 2
+    }
+
     // -------------------------------------------------------------------
     // Liveness helpers — keep flows inside the feasible region so the
     // matching / fund-movement paths actually execute (rather than
@@ -1160,38 +1660,34 @@ impl FuzzTest {
         self.do_place_limit(user_idx, market_idx, 1, MID_PRICE, qty)
     }
 
-    /// Maker payout accounts for fills. Every maker is the admin keypair,
-    /// so each fill pays the admin's USDC + this market's Yes ATA. We
-    /// supply `MAX_FILLS_PER_TX` writable pairs; `place_order_inner` reads
-    /// only `0..fill_count` and ignores the rest. Appending these to any
-    /// order that might cross is what lets fills actually settle — without
-    /// them every crossing order reverts on the first fill.
+    /// Maker payout accounts for fills (1-account canonical-ATA ABI).
     ///
-    /// Roughly 1 in 7 calls, we deliberately corrupt the FIRST pair by
-    /// swapping the USDC/Yes slots, so the USDC slot carries the Yes mint.
-    /// That fails the `usdc_ok` mint check (place_limit_order.rs:410) and
-    /// drives the ATA-close skip-and-continue branch (line 415): the taker
-    /// treats the first fill as un-payable, folds its qty into the residual,
-    /// and re-inserts the skipped maker with a fresh seq. Slot 0 is the one
-    /// read whenever any crossing happens (fill_count >= 1), so corrupting
-    /// it reliably exercises the skip path. This is the reworked P1
-    /// fund-movement code; fuzzing it under random sequences is the point of
-    /// the U9 gate, and the R13/R14/conservation asserts catch any escrow
-    /// mis-accounting in the skip + re-insert + residual-fold logic.
-    fn maker_remaining(&mut self, market_idx: usize) -> Vec<AccountMeta> {
-        let maker_usdc = self.user_usdc[0];
-        let maker_yes = self.markets[market_idx].user_yes_ata[0];
-        let corrupt_first = self.trident.random_from_range(0u64..7) == 0;
-        let mut metas = Vec::with_capacity(MAX_FILLS_PER_TX * 2);
-        for i in 0..MAX_FILLS_PER_TX {
-            if corrupt_first && i == 0 {
-                // USDC slot now holds a Yes-mint account → usdc_ok == false → skip.
-                metas.push(AccountMeta::new(maker_yes, false));
-                metas.push(AccountMeta::new(maker_usdc, false));
-            } else {
-                metas.push(AccountMeta::new(maker_usdc, false));
-                metas.push(AccountMeta::new(maker_yes, false));
-            }
+    /// Every maker is the admin keypair, so each fill's payout account is the
+    /// admin's CANONICAL ATA for the payout mint, which is fixed by the TAKER's
+    /// side for the whole order:
+    ///   * `side == 0` (Bid taker, hits resting asks) pays makers USDC →
+    ///     canonical USDC ATA.
+    ///   * `side == 1` (Ask taker, hits resting bids) pays makers Yes →
+    ///     canonical Yes ATA.
+    /// We supply `MAX_FILLS_PER_TX` canonical payout ATAs (one slot per possible
+    /// fill); `place_order_inner` requires `remaining.len() >= fill_count` and
+    /// reads only `0..fill_count`, ignoring the tail.
+    ///
+    /// These are ALWAYS the maker's CANONICAL ATA — passing a non-canonical
+    /// account now REVERTS (`BadMakerAccount`), so the skip-and-continue branch
+    /// is NOT driven from here. `flow_skip_probe` reaches it by FREEZING the
+    /// canonical payout ATA (the only valid way under this ABI).
+    fn maker_remaining(&mut self, market_idx: usize, taker_side: u8) -> Vec<AccountMeta> {
+        // Payout mint is determined by the taker side:
+        //   Bid taker (0) pays makers USDC; Ask taker (1) pays makers Yes.
+        let payout_ata = if taker_side == 0 {
+            self.user_usdc[0]
+        } else {
+            self.markets[market_idx].user_yes_ata[0]
+        };
+        let mut metas = Vec::with_capacity(MAX_FILLS_PER_TX);
+        for _ in 0..MAX_FILLS_PER_TX {
+            metas.push(AccountMeta::new(payout_ata, false));
         }
         metas
     }
@@ -1228,6 +1724,18 @@ struct RestingEntry {
     seq: u64,
     owner: [u8; 32],
     qty: u64,
+}
+
+/// Total resting ask quantity at prices a Bid taker priced `limit` can cross
+/// (ask price <= limit). Used by `flow_skip_probe` to size a FULL-consumption
+/// taker (every crossed ask consumed in whole).
+fn crossable_ask_qty(resting: &RestingState, limit: u64) -> u64 {
+    resting
+        .asks
+        .iter()
+        .filter(|e| e.price <= limit)
+        .map(|e| e.qty)
+        .fold(0u64, |a, q| a.saturating_add(q))
 }
 
 fn parse_side(slice: &[u8]) -> Vec<RestingEntry> {
@@ -1271,13 +1779,8 @@ fn main() {
     // instructions. Each flow runs invariant checks (R13/R14/conservation)
     // immediately after the call, so violations surface fast.
     //
-    // CI runs `cases >= 100_000` per plan §U9 verification:
-    //   FuzzTest::fuzz(2_000, 50)   # 100_000 ops total
-    //
-    // Override at runtime by editing this `fuzz(...)` call; Trident v0.12
-    // does not expose `--cases` as a CLI flag (run -h shows TARGET + SEED
-    // only). The plan's `--cases 100000` syntax is aspirational for a
-    // future Trident release — for now CI bumps the literals here.
+    // The §U9 gate runs >= 100_000 ops:
+    //   TRIDENT_ITERATIONS=100000 TRIDENT_FLOW_CALLS=10 trident fuzz run clob_invariants
     let iterations: u64 = std::env::var("TRIDENT_ITERATIONS")
         .ok()
         .and_then(|s| s.parse().ok())

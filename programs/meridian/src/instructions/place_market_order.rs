@@ -17,8 +17,18 @@
 //! diff is the `OrderType::Market` argument which routes residual handling
 //! down the rejection path inside the inner kernel.
 //!
-//! Composition note for U6: `buy_no` / `sell_no` will reuse
-//! `place_order_inner` directly (with their own `Accounts` shape).
+//! Composition note: `buy_no` / `sell_no` reuse `place_order_inner`
+//! directly (with their own `Accounts` shape).
+//!
+//! # Maker payouts via `remaining_accounts`
+//!
+//! This instruction forwards `ctx.remaining_accounts` straight into
+//! `place_order_inner`, so it inherits that kernel's maker-payout ABI: **one
+//! account per fill**, in fill order, each the maker's **canonical ATA** for
+//! the payout mint (USDC for a Bid taker, Yes for an Ask taker). A
+//! non-canonical account reverts ([`crate::error::MeridianError::BadMakerAccount`]);
+//! a canonical-but-frozen/closed account skips that fill. See
+//! [`super::place_limit_order`]'s module docs for the full contract.
 
 use anchor_lang::prelude::*;
 use anchor_spl::token::{Mint, Token, TokenAccount};

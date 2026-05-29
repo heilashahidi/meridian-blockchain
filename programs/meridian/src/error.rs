@@ -135,4 +135,16 @@ pub enum MeridianError {
     /// expiry; par operations (burn_pair) and exits (cancel_order) stay open.
     #[msg("Market has reached expiry; trading is closed.")]
     MarketExpired,
+
+    /// A maker payout account supplied in `remaining_accounts` is not the
+    /// maker's canonical associated token account for the payout mint. The
+    /// taker controls the accounts it passes, so we bind payouts to the
+    /// canonical ATA: a non-canonical account is a malformed call and reverts
+    /// (the taker only harms its own transaction). This closes the
+    /// queue-priority griefing vector where a taker could force an honest
+    /// maker into the skip path by supplying a deliberately-bad account.
+    /// Distinct from the skip path (a *canonical* ATA that is closed/frozen),
+    /// which is a recoverable, non-reverting skip.
+    #[msg("Maker payout account is not the maker's canonical associated token account.")]
+    BadMakerAccount,
 }
