@@ -6,6 +6,7 @@ import { WalletButton } from "@/components/WalletButton";
 import { MarketPicker } from "@/components/MarketPicker";
 import { OrderBook } from "@/components/OrderBook";
 import { Balances } from "@/components/Balances";
+import { MintBurnPanel } from "@/components/MintBurnPanel";
 
 export default function Home() {
   const { config, configError } = useMeridian();
@@ -51,6 +52,7 @@ export default function Home() {
         <MarketPicker />
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <Balances />
+          <MintBurnPanel />
           <OrderBook />
         </div>
       </div>
