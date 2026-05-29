@@ -8,6 +8,7 @@ import { shortKey } from "@/lib/format";
 import {
   ACTION_LABEL,
   fetchHistory,
+  type HistoryAction,
   type HistoryEntry,
 } from "@/lib/history";
 import { useMeridian } from "@/lib/MeridianContext";
@@ -17,6 +18,35 @@ const SOLSCAN_BASE = "https://solscan.io/tx";
 function fmtTime(blockTime: number | null): string {
   if (!blockTime) return "—";
   return new Date(blockTime * 1000).toLocaleString();
+}
+
+/** Accent color per action so the log is scannable at a glance. */
+const ACTION_COLOR: Record<HistoryAction, string> = {
+  mint: "var(--accent)",
+  burn: "var(--muted)",
+  trade: "var(--yes)",
+  cancel: "var(--no)",
+  redeem: "var(--yes)",
+  settle: "var(--warn)",
+  create: "var(--accent)",
+  admin: "var(--muted)",
+  unknown: "var(--muted)",
+};
+
+function ActionBadge({ action }: { action: HistoryAction }) {
+  const color = ACTION_COLOR[action];
+  return (
+    <span
+      className="pill"
+      style={{
+        color,
+        borderColor: color,
+        background: "transparent",
+      }}
+    >
+      {ACTION_LABEL[action]}
+    </span>
+  );
 }
 
 export default function HistoryPage() {
@@ -45,7 +75,7 @@ export default function HistoryPage() {
 
   return (
     <main style={{ maxWidth: 1040, margin: "0 auto", padding: "32px 16px" }}>
-      <header style={{ marginBottom: 20 }}>
+      <header style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 28, margin: "0 0 8px" }}>History</h1>
         <p className="muted" style={{ margin: 0, maxWidth: 680 }}>
           Your recent Meridian transactions — mints, trades, cancels, and
@@ -54,26 +84,26 @@ export default function HistoryPage() {
       </header>
 
       {!walletPubkey ? (
-        <div className="panel" style={{ padding: 24, textAlign: "center" }}>
-          <p className="muted" style={{ marginBottom: 16 }}>
-            Connect your wallet to see your transaction history.
-          </p>
-          <WalletButton />
-        </div>
+        <ConnectPrompt />
       ) : entries.length === 0 ? (
-        <p className="muted">
-          {loading ? "Loading history…" : "No Meridian transactions yet."}
-        </p>
+        loading ? (
+          <p className="muted">Loading history…</p>
+        ) : (
+          <EmptyHistory />
+        )
       ) : (
         <div className="panel" style={{ padding: 0, overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table
+            className="mono"
+            style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
+          >
             <thead>
               <tr style={{ textAlign: "left" }}>
                 <Th>Action</Th>
                 <Th>Instruction</Th>
                 <Th>Time</Th>
                 <Th>Status</Th>
-                <Th right>Tx</Th>
+                <Th right>Signature</Th>
               </tr>
             </thead>
             <tbody>
@@ -82,37 +112,44 @@ export default function HistoryPage() {
                   key={e.signature}
                   style={{ borderTop: "1px solid var(--border)" }}
                 >
-                  <td style={{ padding: "10px 8px", fontWeight: 600 }}>
-                    {ACTION_LABEL[e.action]}
+                  <td style={{ padding: "12px 12px" }}>
+                    <ActionBadge action={e.action} />
                   </td>
                   <td
-                    className="mono muted"
-                    style={{ padding: "10px 8px", fontSize: 12 }}
+                    className="muted"
+                    style={{ padding: "12px 12px", fontSize: 12 }}
                   >
                     {e.instruction}
                   </td>
                   <td
-                    className="muted"
-                    style={{ padding: "10px 8px", fontSize: 12 }}
+                    className="dim"
+                    style={{ padding: "12px 12px", fontSize: 12 }}
                   >
                     {fmtTime(e.blockTime)}
                   </td>
-                  <td style={{ padding: "10px 8px", fontSize: 12 }}>
+                  <td style={{ padding: "12px 12px", fontSize: 12 }}>
                     {e.failed ? (
-                      <span style={{ color: "var(--ask)" }}>failed</span>
+                      <span style={{ color: "var(--no)", fontWeight: 600 }}>
+                        Failed
+                      </span>
                     ) : (
-                      <span style={{ color: "var(--bid)" }}>ok</span>
+                      <span style={{ color: "var(--yes)", fontWeight: 600 }}>
+                        OK
+                      </span>
                     )}
                   </td>
                   <td
-                    className="mono"
-                    style={{ padding: "10px 8px", textAlign: "right", fontSize: 12 }}
+                    style={{
+                      padding: "12px 12px",
+                      textAlign: "right",
+                      fontSize: 12,
+                    }}
                   >
                     <a
                       href={`${SOLSCAN_BASE}/${e.signature}`}
                       target="_blank"
                       rel="noreferrer"
-                      style={{ color: "var(--text)" }}
+                      style={{ color: "var(--accent)" }}
                     >
                       {shortKey(e.signature)}
                     </a>
@@ -124,6 +161,40 @@ export default function HistoryPage() {
         </div>
       )}
     </main>
+  );
+}
+
+function EmptyHistory() {
+  return (
+    <div
+      className="panel"
+      style={{ padding: 40, textAlign: "center", display: "grid", gap: 12 }}
+    >
+      <div style={{ fontSize: 18, fontWeight: 600 }}>No activity yet</div>
+      <p className="muted" style={{ margin: "0 auto", maxWidth: 420 }}>
+        Your mints, trades, cancels, and redeems will show up here as soon as
+        you make your first move.
+      </p>
+    </div>
+  );
+}
+
+function ConnectPrompt() {
+  return (
+    <div
+      className="panel"
+      style={{ padding: 40, textAlign: "center", display: "grid", gap: 14 }}
+    >
+      <div style={{ fontSize: 18, fontWeight: 600 }}>
+        Connect your wallet to see your transaction history
+      </div>
+      <p className="muted" style={{ margin: "0 auto", maxWidth: 420 }}>
+        Every Meridian transaction this wallet makes will appear here.
+      </p>
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 4 }}>
+        <WalletButton />
+      </div>
+    </div>
   );
 }
 

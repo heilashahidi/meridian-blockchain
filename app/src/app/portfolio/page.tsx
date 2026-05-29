@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 
@@ -11,6 +12,11 @@ import { useMeridian } from "@/lib/MeridianContext";
 import { noFromYes, yesMidFraction } from "@/lib/marketsView";
 import {
   MINT_PAIR_LEG_BASIS,
+  computePnl,
+  contractsFromBaseUnits,
+  currentContractPrice,
+  fmtDollars,
+  fmtSignedDollars,
   visiblePositions,
   type Holding,
   type PositionSide,
@@ -169,65 +175,108 @@ export default function PortfolioPage() {
     [program, connection, walletPubkey, config, tx, load],
   );
 
+  // Portfolio-level summary, derived from the same pure P&L helpers the rows
+  // use. Only positions with a derivable current price contribute (value/P&L
+  // null → skipped), so the totals never fabricate a number.
+  const summary = useMemo(() => {
+    let value = 0;
+    let pnl = 0;
+    for (const e of enriched) {
+      const qty = contractsFromBaseUnits(e.holding.amount);
+      const current = currentContractPrice(
+        e.holding.side,
+        e.holding.market,
+        e.livePrice,
+      );
+      if (current === null) continue;
+      const r = computePnl(qty, e.entryPrice, current);
+      value += r.currentValue;
+      pnl += r.pnl;
+    }
+    return { value, pnl };
+  }, [enriched]);
+
   return (
     <main style={{ maxWidth: 1040, margin: "0 auto", padding: "32px 16px" }}>
-      <header style={{ marginBottom: 20 }}>
+      <header style={{ marginBottom: 24 }}>
         <h1 style={{ fontSize: 28, margin: "0 0 8px" }}>Portfolio</h1>
         <p className="muted" style={{ margin: 0, maxWidth: 680 }}>
-          Your Yes/No positions across all markets. Current value is marked to
-          the book mid (settled markets to $1.00 / $0.00); entry basis is
-          estimated from the live mid where no per-fill ledger exists.
+          Your Yes/No positions across all markets. Value is marked to the book
+          mid (settled markets to $1.00 / $0.00); entry basis is estimated from
+          the live mid where no per-fill ledger exists.
         </p>
       </header>
 
       {!walletPubkey ? (
         <ConnectPrompt />
       ) : enriched.length === 0 ? (
-        <p className="muted">
-          {loading
-            ? "Loading positions…"
-            : "No open positions. Mint or trade on a market to see it here."}
-        </p>
+        loading ? (
+          <p className="muted">Loading positions…</p>
+        ) : (
+          <EmptyPositions />
+        )
       ) : (
-        <div className="panel" style={{ padding: 0, overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr style={{ textAlign: "left" }}>
-                <Th>Position</Th>
-                <Th right>Qty</Th>
-                <Th right>Entry</Th>
-                <Th right>Value</Th>
-                <Th right>P&amp;L</Th>
-                <Th right></Th>
-              </tr>
-            </thead>
-            <tbody>
-              {enriched.map((e) => {
-                const key = `${e.holding.market.pubkey.toBase58()}:${e.holding.side}`;
-                return (
-                  <PositionRow
-                    key={key}
-                    holding={e.holding}
-                    livePrice={e.livePrice}
-                    entryPrice={e.entryPrice}
-                    entryIsEstimate={e.entryIsEstimate}
-                    onRedeem={onRedeem}
-                    redeeming={redeemingKey === key}
-                  />
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+        <>
+          {/* Top summary: portfolio value + total P&L */}
+          <div
+            className="panel"
+            style={{
+              display: "flex",
+              gap: 32,
+              flexWrap: "wrap",
+              marginBottom: 16,
+            }}
+          >
+            <div className="stat">
+              <span className="stat-label">Portfolio value</span>
+              <span className="stat-value mono">
+                {fmtDollars(summary.value)}
+              </span>
+            </div>
+            <div className="stat">
+              <span className="stat-label">Total P&amp;L</span>
+              <span
+                className="stat-value mono"
+                style={{
+                  color: summary.pnl >= 0 ? "var(--yes)" : "var(--no)",
+                }}
+              >
+                {fmtSignedDollars(summary.pnl)}
+              </span>
+            </div>
+            <div className="stat">
+              <span className="stat-label">Positions</span>
+              <span className="stat-value mono">{enriched.length}</span>
+            </div>
+          </div>
+
+          {/* Position cards */}
+          <div style={{ display: "grid", gap: 12 }}>
+            {enriched.map((e) => {
+              const key = `${e.holding.market.pubkey.toBase58()}:${e.holding.side}`;
+              return (
+                <PositionRow
+                  key={key}
+                  holding={e.holding}
+                  livePrice={e.livePrice}
+                  entryPrice={e.entryPrice}
+                  entryIsEstimate={e.entryIsEstimate}
+                  onRedeem={onRedeem}
+                  redeeming={redeemingKey === key}
+                />
+              );
+            })}
+          </div>
+        </>
       )}
 
       {tx.error && (
-        <p style={{ color: "var(--ask)", fontSize: 13, marginTop: 12 }}>
+        <p style={{ color: "var(--no)", fontSize: 13, marginTop: 16 }}>
           {tx.error}
         </p>
       )}
       {tx.status && (
-        <p className="muted" style={{ fontSize: 12, marginTop: 12 }}>
+        <p className="muted" style={{ fontSize: 12, marginTop: 16 }}>
           {tx.status}
         </p>
       )}
@@ -235,35 +284,45 @@ export default function PortfolioPage() {
   );
 }
 
-function Th({
-  children,
-  right,
-}: {
-  children?: React.ReactNode;
-  right?: boolean;
-}) {
+function EmptyPositions() {
   return (
-    <th
-      className="muted"
-      style={{
-        padding: "10px 8px",
-        fontSize: 12,
-        fontWeight: 600,
-        textAlign: right ? "right" : "left",
-      }}
+    <div
+      className="panel"
+      style={{ padding: 40, textAlign: "center", display: "grid", gap: 12 }}
     >
-      {children}
-    </th>
+      <div style={{ fontSize: 18, fontWeight: 600 }}>No open positions</div>
+      <p
+        className="muted"
+        style={{ margin: "0 auto", maxWidth: 420, lineHeight: 1.5 }}
+      >
+        You&rsquo;re flat. Pick a market and take a Yes or No position to start
+        building your portfolio.
+      </p>
+      <div style={{ marginTop: 8 }}>
+        <Link href="/markets" className="btn" style={{ display: "inline-block" }}>
+          Browse markets
+        </Link>
+      </div>
+    </div>
   );
 }
 
 function ConnectPrompt() {
   return (
-    <div className="panel" style={{ padding: 24, textAlign: "center" }}>
-      <p className="muted" style={{ marginBottom: 16 }}>
-        Connect your wallet to see your positions and P&amp;L.
+    <div
+      className="panel"
+      style={{ padding: 40, textAlign: "center", display: "grid", gap: 14 }}
+    >
+      <div style={{ fontSize: 18, fontWeight: 600 }}>
+        Connect your wallet to see your positions
+      </div>
+      <p className="muted" style={{ margin: "0 auto", maxWidth: 420 }}>
+        Your Yes/No holdings and live P&amp;L will appear here once a wallet is
+        connected.
       </p>
-      <WalletButton />
+      <div style={{ display: "flex", justifyContent: "center", marginTop: 4 }}>
+        <WalletButton />
+      </div>
     </div>
   );
 }
