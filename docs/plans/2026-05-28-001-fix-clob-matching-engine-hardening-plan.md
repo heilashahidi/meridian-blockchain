@@ -1,7 +1,7 @@
 ---
 title: "fix: CLOB matching-engine hardening (queue-priority griefing, partial-fill duplication, sweep seq)"
 type: fix
-status: active
+status: completed
 created: 2026-05-28
 depth: deep
 related:
