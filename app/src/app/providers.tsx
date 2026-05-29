@@ -19,6 +19,7 @@ import {
 } from "@solana/wallet-adapter-wallets";
 
 import { RPC_URL } from "@/lib/program";
+import { MeridianProvider } from "@/lib/MeridianContext";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 
@@ -31,7 +32,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ConnectionProvider endpoint={RPC_URL}>
       <WalletProvider wallets={wallets} autoConnect>
-        <WalletModalProvider>{children}</WalletModalProvider>
+        <WalletModalProvider>
+          <MeridianProvider>{children}</MeridianProvider>
+        </WalletModalProvider>
       </WalletProvider>
     </ConnectionProvider>
   );

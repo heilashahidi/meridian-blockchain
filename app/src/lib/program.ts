@@ -1,6 +1,11 @@
 import { AnchorProvider, Program } from "@coral-xyz/anchor";
 import type { Wallet } from "@coral-xyz/anchor";
-import { Connection, PublicKey } from "@solana/web3.js";
+import {
+  Connection,
+  PublicKey,
+  Transaction,
+  VersionedTransaction,
+} from "@solana/web3.js";
 
 import { meridianIdl } from "./idlPatch";
 import type { Meridian } from "./idl/meridian";
@@ -16,15 +21,31 @@ export const PROGRAM_ID = new PublicKey(
 export type MeridianProgram = Program<Meridian>;
 
 /**
+ * The browser wallet shape Anchor's provider actually uses at runtime. The
+ * `Wallet` type Anchor exports is `NodeWallet` (requires a keypair `payer`),
+ * which a wallet-adapter `AnchorWallet` doesn't have — but the provider only
+ * touches `publicKey` + the sign methods, so this structural type is enough.
+ */
+export interface BrowserWallet {
+  publicKey: PublicKey;
+  signTransaction: <T extends Transaction | VersionedTransaction>(
+    tx: T,
+  ) => Promise<T>;
+  signAllTransactions: <T extends Transaction | VersionedTransaction>(
+    txs: T[],
+  ) => Promise<T[]>;
+}
+
+/**
  * Build a typed Anchor `Program` bound to a wallet. Anchor 0.30+ reads the
  * program ID from `idl.address`, so we don't pass it separately — but we keep
  * `PROGRAM_ID` exported for PDA derivation and account filters.
  */
 export function getProgram(
   connection: Connection,
-  wallet: Wallet,
+  wallet: BrowserWallet,
 ): MeridianProgram {
-  const provider = new AnchorProvider(connection, wallet, {
+  const provider = new AnchorProvider(connection, wallet as unknown as Wallet, {
     commitment: "confirmed",
   });
   return new Program(meridianIdl, provider);

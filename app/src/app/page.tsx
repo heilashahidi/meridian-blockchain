@@ -1,75 +1,59 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { useConnection } from "@solana/wallet-adapter-react";
-import { WalletMultiButton } from "@solana/wallet-adapter-react-ui";
-import { PublicKey } from "@solana/web3.js";
+import { useMeridian } from "@/lib/MeridianContext";
+import { PROGRAM_ID, RPC_URL } from "@/lib/program";
+import { WalletButton } from "@/components/WalletButton";
+import { MarketPicker } from "@/components/MarketPicker";
+import { OrderBook } from "@/components/OrderBook";
+import { Balances } from "@/components/Balances";
 
-import { getReadOnlyProgram, PROGRAM_ID, RPC_URL } from "@/lib/program";
-
-// U1 smoke screen: prove the app boots, the wallet connects, and the Anchor
-// client can read the on-chain Config from the configured cluster. U3 replaces
-// the body with the market picker + order book + balances.
 export default function Home() {
-  const { connection } = useConnection();
-  const [config, setConfig] = useState<string>("loading…");
-
-  useEffect(() => {
-    (async () => {
-      try {
-        const program = getReadOnlyProgram(connection);
-        const [configPda] = PublicKey.findProgramAddressSync(
-          [new TextEncoder().encode("config")],
-          PROGRAM_ID,
-        );
-        const cfg = await program.account.config.fetch(configPda);
-        setConfig(
-          JSON.stringify(
-            {
-              admin: cfg.admin.toBase58(),
-              usdcMint: cfg.usdcMint.toBase58(),
-              treasury: cfg.treasury.toBase58(),
-              paused: cfg.paused,
-            },
-            null,
-            2,
-          ),
-        );
-      } catch (e) {
-        setConfig(
-          `Config not found on this cluster.\nBootstrap it first.\n\n${String(e)}`,
-        );
-      }
-    })();
-  }, [connection]);
+  const { config, configError } = useMeridian();
 
   return (
-    <main style={{ maxWidth: 980, margin: "0 auto", padding: "24px 16px" }}>
+    <main style={{ maxWidth: 1040, margin: "0 auto", padding: "24px 16px" }}>
       <header
         style={{
           display: "flex",
           justifyContent: "space-between",
           alignItems: "center",
-          marginBottom: 24,
+          marginBottom: 20,
         }}
       >
         <div>
           <h1 style={{ margin: 0 }}>Meridian</h1>
           <div className="muted mono" style={{ fontSize: 12 }}>
-            {RPC_URL} · {PROGRAM_ID.toBase58()}
+            {RPC_URL} · {PROGRAM_ID.toBase58().slice(0, 8)}…
+            {config ? ` · USDC ${config.usdcMint.toBase58().slice(0, 8)}…` : ""}
+            {config?.paused ? " · ⏸ PAUSED" : ""}
           </div>
         </div>
-        <WalletMultiButton />
+        <WalletButton />
       </header>
 
-      <section className="panel">
-        <div className="muted" style={{ marginBottom: 8 }}>
-          Config (read-only smoke test — U1)
+      {configError && (
+        <div
+          className="panel"
+          style={{ borderColor: "var(--ask)", marginBottom: 16 }}
+        >
+          <div style={{ color: "var(--ask)" }}>{configError}</div>
         </div>
-        <pre className="mono" style={{ margin: 0, whiteSpace: "pre-wrap" }}>
-          {config}
-        </pre>
-      </section>
+      )}
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "320px 1fr",
+          gap: 16,
+          alignItems: "start",
+        }}
+      >
+        <MarketPicker />
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <Balances />
+          <OrderBook />
+        </div>
+      </div>
     </main>
   );
 }
