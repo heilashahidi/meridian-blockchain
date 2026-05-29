@@ -29,8 +29,13 @@
 //!       on a settled market and refunds escrowed collateral (R15b).
 //!     * [`redeem`] — winning-token holders burn for $1 USDC; no
 //!       deadline.
+//!   * Post-ship hardening:
+//!     * [`admin_force_expire_order`] — admin recovery of a permanently-stuck
+//!       order's collateral to the treasury after settlement + a 30-day grace,
+//!       provable-stuck only.
 
 pub mod admin;
+pub mod admin_force_expire_order;
 pub mod burn_pair;
 pub mod buy_no;
 pub mod cancel_order;
@@ -47,7 +52,7 @@ pub mod settle_sweep;
 // Re-export the `Accounts` structs and arg types only; each handler is
 // invoked via its module path in `lib.rs` so the per-module `handler`
 // symbols don't collide in this namespace.
-pub use admin::{AdminSettleMarket, SetPaused};
+pub use admin::{AdminSettleMarket, AdminConfig};
 pub use burn_pair::BurnPair;
 pub use buy_no::{BuyNo, BuyNoArgs};
 pub use cancel_order::{CancelOrder, CancelOrderArgs};

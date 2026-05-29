@@ -51,6 +51,9 @@ pub fn initialize_config_handler(
     config.paused = false;
     config.admin = ctx.accounts.payer.key();
     config.fee_authority = fee_authority;
+    // Treasury defaults to the admin; operators rotate it to a dedicated
+    // custody account via `set_treasury` before using `admin_force_expire_order`.
+    config.treasury = ctx.accounts.payer.key();
     config.usdc_mint = ctx.accounts.usdc_mint.key();
     config.pyth_receiver = pyth_receiver;
     // Secure-by-default: require fully Wormhole-verified Pyth prices at

@@ -121,6 +121,11 @@ const MAX_FILLS_PER_TX: usize = 4;
 /// Mirror of `settle_sweep::MAX_SWEEP_PER_TX`.
 const MAX_SWEEP_PER_TX: usize = 8;
 
+/// Mirror of `admin::RECOVERY_GRACE_SECONDS` (30 days). After a market settles,
+/// an admin may force-expire a permanently-stuck order and sweep its collateral
+/// to the treasury only once `now >= settled_at + RECOVERY_GRACE_SECONDS`.
+const RECOVERY_GRACE_SECONDS: i64 = 30 * 86_400;
+
 /// Mid price used for liquidity-seeding orders, in USDC microunits per Yes
 /// token. Deliberately small so `qty * price` locks stay affordable from
 /// the shared bankroll even at large qty — the R13 invariant uses the same
@@ -172,6 +177,20 @@ struct FuzzTest {
     /// Set once the sweep-convergence probe has run this iteration (it settles
     /// a dedicated market, which is one-way, so it runs at most once).
     sweep_probe_done: bool,
+    /// Set once the force-expire-drain probe (U5) has run this iteration. It
+    /// settles a dedicated market and warps the clock past the 30-day recovery
+    /// grace, both one-way, so it runs at most once.
+    force_expire_probe_done: bool,
+    /// Set once the ASK-side force-expire-drain probe has run this iteration. Like
+    /// its Bid sibling it settles a dedicated market and warps past the 30-day
+    /// recovery grace (both one-way), so it runs at most once.
+    ask_force_expire_probe_done: bool,
+    /// Extra USDC token accounts (beyond the shared user ATA + escrows) that the
+    /// USDC-conservation invariant must count. The force-expire probe rotates
+    /// the treasury to a fresh keypair and recovers stuck collateral into its
+    /// canonical USDC ATA; that USDC left escrow but stays in the system, so the
+    /// treasury ATA must be in the conservation set or the sum would under-count.
+    extra_usdc_atas: Vec<Pubkey>,
 }
 
 impl Default for FuzzTest {
@@ -188,6 +207,9 @@ impl Default for FuzzTest {
             markets: Vec::new(),
             initial_total_usdc: 0,
             sweep_probe_done: false,
+            force_expire_probe_done: false,
+            ask_force_expire_probe_done: false,
+            extra_usdc_atas: Vec::new(),
         }
     }
 }
@@ -207,6 +229,9 @@ impl FuzzTest {
         self.markets.clear();
         self.initial_total_usdc = 0;
         self.sweep_probe_done = false;
+        self.force_expire_probe_done = false;
+        self.ask_force_expire_probe_done = false;
+        self.extra_usdc_atas.clear();
         self.bootstrap();
     }
 
@@ -788,6 +813,510 @@ impl FuzzTest {
         self.assert_all_invariants();
     }
 
+    /// Force-expire-drain probe (U5 — permanently-stuck-order recovery).
+    ///
+    /// `settle_sweep` can refund every recipient whose canonical ATA is
+    /// receivable, but an order whose owner's canonical ATA is *permanently*
+    /// un-receivable (frozen and never thawed, abandoned wallet) cycles to the
+    /// back of its side forever — sweep alone can NEVER drain it. The new
+    /// `admin_force_expire_order` instruction closes that residue: after the
+    /// market is settled AND `now >= settled_at + RECOVERY_GRACE_SECONDS`, an
+    /// admin recovers the stuck order's escrowed collateral to `config.treasury`
+    /// and removes the entry from the book.
+    ///
+    /// This probe stands up a DEDICATED market, seeds bids (USDC-collateralized)
+    /// and asks (Yes-collateralized) all owned by the admin, settles it, then
+    /// PERMANENTLY freezes the bid owner's canonical USDC ATA — so the bids are
+    /// genuinely stuck (sweep skips and re-inserts them forever). It then:
+    ///
+    ///   1. **Pre-grace revert.** Attempts `admin_force_expire_order` on a stuck
+    ///      bid BEFORE the grace elapses; asserts the tx fails AND that neither
+    ///      the book nor the escrow moved (no premature confiscation).
+    ///   2. Drains the receivable asks via `settle_sweep` cranks (they pay the
+    ///      admin's un-frozen Yes ATA), leaving ONLY the stuck bids — proof that
+    ///      sweep alone cannot finish the job.
+    ///   3. Warps past `settled_at + RECOVERY_GRACE_SECONDS`, rotates
+    ///      `config.treasury` to a fresh keypair (so the recovery destination is
+    ///      distinct from the frozen owner ATA), and `admin_force_expire_order`s
+    ///      each stuck bid. For every recovery it asserts
+    ///      `escrow_decrease == treasury_ata_increase` (value conservation:
+    ///      collateral leaves escrow and lands in treasury, nothing minted/burnt).
+    ///   4. Asserts the settled book reaches `bids.is_empty() && asks.is_empty()`
+    ///      — full drain that sweep alone could not achieve.
+    ///
+    /// R13/R14 + USDC-conservation are checked via `assert_all_invariants` after
+    /// the recovery. (USDC conservation now counts the treasury's new ATA:
+    /// recovered USDC moved escrow -> treasury, both inside the conservation set.)
+    ///
+    /// Runs at most once per iteration (settling + warp are one-way).
+    #[flow]
+    fn flow_force_expire_drain(&mut self) {
+        if !self.inited || self.force_expire_probe_done {
+            return;
+        }
+        self.force_expire_probe_done = true;
+
+        let admin_pk = solana_sdk::signer::Signer::pubkey(&self.admin);
+        let now = self.trident.get_current_timestamp();
+        // Dedicated market, short horizon. Distinct ticker from the sweep probe.
+        let expiry: i64 = now + 1_000;
+        let ticker = *b"FRCXP\0\0\0";
+        let strike: u64 = 500_000_000;
+        let feed_id = [0u8; 32];
+        let mut m = self.create_market(ticker, strike, expiry, feed_id);
+        for u_idx in 0..NUM_USERS {
+            let user_pk = solana_sdk::signer::Signer::pubkey(&self.users[u_idx]);
+            m.user_yes_ata[u_idx] =
+                self.trident.get_associated_token_address(&m.yes_mint, &user_pk, &token_program_id());
+            m.user_no_ata[u_idx] =
+                self.trident.get_associated_token_address(&m.no_mint, &user_pk, &token_program_id());
+        }
+        let yes_ix = self.trident.initialize_associated_token_account(&admin_pk, &m.yes_mint, &admin_pk);
+        let no_ix = self.trident.initialize_associated_token_account(&admin_pk, &m.no_mint, &admin_pk);
+        let res = self.trident.process_transaction(&[yes_ix, no_ix], Some("frcxp_yes_no_ata"));
+        if !res.is_success() {
+            return;
+        }
+        let m_idx = self.markets.len();
+        self.markets.push(m);
+
+        // Seed resting orders on both sides (no crossing: bids strictly below
+        // asks). Bids are USDC-collateralized; asks Yes-collateralized.
+        let n_bids = 3u64;
+        let n_asks = 3u64;
+        for _ in 0..n_bids {
+            let _ = self.do_place_limit(0, m_idx, 0, MID_PRICE, 3);
+        }
+        let _ = self.ensure_yes(0, m_idx, n_asks * 3);
+        for _ in 0..n_asks {
+            let _ = self.do_place_limit(0, m_idx, 1, MID_PRICE * 3, 3);
+        }
+
+        let resting = self.read_resting(m_idx);
+        if resting.bids.is_empty() {
+            // Need at least one stuck bid to exercise the recovery path; if
+            // seeding produced no resting bids (e.g. they crossed), nothing to do.
+            self.assert_all_invariants();
+            return;
+        }
+
+        // Warp just past expiry so settle is allowed; stays << trading expiry.
+        self.trident.warp_to_timestamp(expiry + 2);
+
+        // Forge + plant a Full-verified PriceUpdateV2 and settle.
+        let price_update = solana_sdk::signature::Keypair::new();
+        let price_update_pk = solana_sdk::signer::Signer::pubkey(&price_update);
+        self.plant_price_update(&price_update_pk, feed_id, expiry + 1);
+        let settle_ix = self.build_settle_market_ix(m_idx, price_update_pk);
+        let res = self.trident.process_transaction(&[settle_ix], Some("frcxp_settle"));
+        assert!(
+            res.is_success(),
+            "force-expire probe: settle_market failed: logs={}",
+            res.logs()
+        );
+        // settled_at is the clock at settlement (>= expiry + 2 after the warp).
+        let settled_at = self.trident.get_current_timestamp();
+
+        // PERMANENTLY freeze the bid owner's canonical USDC ATA. The owner is
+        // the admin (all users share the key), so the stuck-ness proof ATA for a
+        // Bid recovery is the admin's canonical USDC ATA. Never thawed: the bids
+        // are genuinely stuck forever and sweep can NEVER drain them.
+        let owner_usdc = self.user_usdc[0];
+        self.set_token_frozen(&owner_usdc, true);
+        assert!(
+            self.is_token_frozen(&owner_usdc),
+            "force-expire probe setup error: bid-owner USDC ATA did not freeze",
+        );
+
+        // ---- 1) Pre-grace force-expire MUST revert (no premature confiscation).
+        // Rotate treasury first so the destination is a valid, distinct treasury
+        // ATA — this isolates the failure to the grace gate, not a bad treasury.
+        let treasury_kp = solana_sdk::signature::Keypair::new();
+        let treasury_pk = solana_sdk::signer::Signer::pubkey(&treasury_kp);
+        let res = self
+            .trident
+            .process_transaction(&[self.build_set_treasury_ix(treasury_pk)], Some("frcxp_set_treasury"));
+        assert!(res.is_success(), "force-expire probe: set_treasury failed: logs={}", res.logs());
+        // Treasury's canonical USDC ATA (recovery destination for Bid recovery).
+        let treasury_usdc_ata =
+            self.trident.get_associated_token_address(&self.usdc_mint, &treasury_pk, &token_program_id());
+        let ata_ix = self
+            .trident
+            .initialize_associated_token_account(&admin_pk, &self.usdc_mint, &treasury_pk);
+        let res = self.trident.process_transaction(&[ata_ix], Some("frcxp_treasury_ata"));
+        assert!(res.is_success(), "force-expire probe: create treasury ATA failed: logs={}", res.logs());
+
+        // Pick the front stuck bid.
+        let bid = self.read_resting(m_idx).bids[0];
+        let usdc_escrow = self.markets[m_idx].usdc_escrow;
+        let escrow_before_pre = self.read_token_balance(&usdc_escrow);
+        let bids_before_pre = self.read_resting(m_idx).bids.len();
+        let pre_ix = self.build_admin_force_expire_ix(
+            m_idx, 0, bid.price, bid.seq, owner_usdc, treasury_usdc_ata,
+        );
+        let res = self.trident.process_transaction(&[pre_ix], Some("frcxp_pregrace"));
+        assert!(
+            !res.is_success(),
+            "force-expire probe: pre-grace admin_force_expire_order MUST revert \
+             (grace not elapsed) but it SUCCEEDED — premature confiscation",
+        );
+        // No mutation: book + escrow unchanged by the reverted attempt.
+        let escrow_after_pre = self.read_token_balance(&usdc_escrow);
+        let bids_after_pre = self.read_resting(m_idx).bids.len();
+        assert_eq!(
+            escrow_before_pre, escrow_after_pre,
+            "force-expire probe: pre-grace revert mutated USDC escrow {} -> {}",
+            escrow_before_pre, escrow_after_pre,
+        );
+        assert_eq!(
+            bids_before_pre, bids_after_pre,
+            "force-expire probe: pre-grace revert mutated bid count {} -> {}",
+            bids_before_pre, bids_after_pre,
+        );
+
+        // ---- 2) Drain the receivable asks via settle_sweep. The asks pay the
+        // admin's (un-frozen) Yes ATA, so they drain; the bids (frozen USDC ATA)
+        // are skipped and re-inserted at a fresh seq forever. After the crank,
+        // ONLY the stuck bids remain — sweep alone cannot finish.
+        let max_calls = 32u64;
+        let mut calls = 0u64;
+        loop {
+            let r = self.read_resting(m_idx);
+            if r.asks.is_empty() {
+                break;
+            }
+            assert!(
+                calls < max_calls,
+                "force-expire probe: asks failed to drain via sweep after {} calls \
+                 (bids={}, asks={})",
+                calls, r.bids.len(), r.asks.len(),
+            );
+            let sweep_ix = self.build_settle_sweep_ix(m_idx, &r);
+            let res = self.trident.process_transaction(&[sweep_ix], Some("frcxp_sweep"));
+            assert!(
+                res.is_success(),
+                "force-expire probe: settle_sweep crank failed: logs={}",
+                res.logs()
+            );
+            calls += 1;
+        }
+        // Sweep-alone-insufficient proof: asks gone, but stuck bids remain.
+        let after_sweep = self.read_resting(m_idx);
+        assert!(
+            after_sweep.asks.is_empty(),
+            "force-expire probe: expected asks drained, {} remain",
+            after_sweep.asks.len(),
+        );
+        assert!(
+            !after_sweep.bids.is_empty(),
+            "force-expire probe: expected stuck bids to survive sweep (frozen owner \
+             USDC ATA) so force-expire is non-vacuous, but bids drained",
+        );
+
+        // ---- 3) Warp past the recovery grace, then force-expire each stuck bid.
+        // Value conservation per recovery: escrow_decrease == treasury_increase.
+        self.trident
+            .warp_to_timestamp(settled_at + RECOVERY_GRACE_SECONDS + 10);
+
+        let fe_max = 64u64;
+        let mut fe_calls = 0u64;
+        loop {
+            let r = self.read_resting(m_idx);
+            if r.bids.is_empty() {
+                break;
+            }
+            assert!(
+                fe_calls < fe_max,
+                "force-expire probe: stuck bids failed to drain via force-expire \
+                 after {} calls ({} bids remain)",
+                fe_calls, r.bids.len(),
+            );
+            let target = r.bids[0];
+            let escrow_before = self.read_token_balance(&usdc_escrow);
+            let treasury_before = self.read_token_balance(&treasury_usdc_ata);
+            let fe_ix = self.build_admin_force_expire_ix(
+                m_idx, 0, target.price, target.seq, owner_usdc, treasury_usdc_ata,
+            );
+            let res = self.trident.process_transaction(&[fe_ix], Some("frcxp_force_expire"));
+            assert!(
+                res.is_success(),
+                "force-expire probe: admin_force_expire_order failed post-grace: logs={}",
+                res.logs()
+            );
+            let escrow_after = self.read_token_balance(&usdc_escrow);
+            let treasury_after = self.read_token_balance(&treasury_usdc_ata);
+            let escrow_decrease = escrow_before - escrow_after;
+            let treasury_increase = treasury_after - treasury_before;
+            assert_eq!(
+                escrow_decrease, treasury_increase,
+                "force-expire probe: value-conservation violated — escrow_decrease={} \
+                 != treasury_increase={} (bid price={} seq={})",
+                escrow_decrease, treasury_increase, target.price, target.seq,
+            );
+            // The recovered amount must equal the bid's locked notional (qty*price).
+            let expected = (target.qty as u128) * (target.price as u128);
+            assert_eq!(
+                escrow_decrease as u128, expected,
+                "force-expire probe: recovered {} != bid notional {} (qty*price)",
+                escrow_decrease, expected,
+            );
+            fe_calls += 1;
+        }
+
+        // ---- 4) Stuck-market full drain: book is now EMPTY (sweep alone could
+        // not achieve this; force-expire on the stuck residue did).
+        let final_book = self.read_resting(m_idx);
+        assert!(
+            final_book.bids.is_empty() && final_book.asks.is_empty(),
+            "force-expire probe: settled book did NOT fully drain (bids={}, asks={})",
+            final_book.bids.len(), final_book.asks.len(),
+        );
+        // USDC escrow drained too (all bid collateral recovered to treasury).
+        let usdc_left = self.read_token_balance(&usdc_escrow);
+        assert_eq!(
+            usdc_left, 0,
+            "force-expire probe: USDC escrow not drained after full recovery: {}",
+            usdc_left,
+        );
+
+        // Conservation set must now include the treasury's recovered USDC.
+        self.extra_usdc_atas.push(treasury_usdc_ata);
+        // The bids were stuck (frozen, never thawed) for the WHOLE recovery —
+        // that's what made force-expire the only drain path. Now that the
+        // dedicated market is fully drained, thaw the SHARED owner USDC ATA so
+        // later flows in this iteration (which reuse it across all markets) can
+        // transact normally. The stuck-ness was real at recovery time; this is
+        // just fixture cleanup.
+        self.set_token_frozen(&owner_usdc, false);
+        self.assert_all_invariants();
+    }
+
+    /// ASK-side mirror of `flow_force_expire_drain` — exercises the Yes-collateral
+    /// recovery path (`yes_escrow -> treasury Yes ATA`) under fuzz.
+    ///
+    /// Where the Bid arm above recovers USDC (bid notional = qty*price), an Ask
+    /// escrows `qty` Yes tokens. A resting Ask whose owner's canonical YES ATA is
+    /// permanently un-receivable can never be paid by `settle_sweep` (it cycles
+    /// forever), so `admin_force_expire_order(side=Ask)` is the only drain path.
+    /// This probe stands up a DEDICATED market, seeds Yes-collateralized asks
+    /// (admin-owned), settles it, then:
+    ///
+    ///   1. PERMANENTLY freezes the ask owner's canonical YES ATA (stuck-ness).
+    ///   2. Rotates `config.treasury` to a fresh keypair (treasury != admin,
+    ///      satisfying `TreasuryNotConfigured`) and creates the treasury's
+    ///      canonical YES ATA (receivable — the recovery destination).
+    ///   3. Warps past `settled_at + RECOVERY_GRACE_SECONDS` and force-expires
+    ///      each stuck ask. Per recovery it asserts value conservation
+    ///      `yes_escrow_decrease == treasury_yes_ata_increase` AND that this equals
+    ///      the order's `qty` (ask collateral = qty Yes — no mint/burn).
+    ///   4. Asserts the book reaches `asks.is_empty()` (full drain) and the Yes
+    ///      escrow is fully drained.
+    ///
+    /// R13 (`yes_escrow == Σ open ask qty`) and R14 (Yes/No supply parity — a raw
+    /// transfer mints/burns nothing) are checked via `assert_all_invariants`. The
+    /// harness tracks token conservation only for USDC; Yes conservation is
+    /// asserted locally here (`escrow -> treasury` for the same `qty`, mirroring
+    /// the Bid arm's escrow/treasury accounting) plus globally via R13/R14.
+    ///
+    /// Runs at most once per iteration (settling + warp are one-way).
+    #[flow]
+    fn flow_force_expire_ask_drain(&mut self) {
+        if !self.inited || self.ask_force_expire_probe_done {
+            return;
+        }
+        self.ask_force_expire_probe_done = true;
+
+        let admin_pk = solana_sdk::signer::Signer::pubkey(&self.admin);
+        let now = self.trident.get_current_timestamp();
+        // Dedicated market, short horizon. Distinct ticker from the other probes.
+        let expiry: i64 = now + 1_000;
+        let ticker = *b"FRCXA\0\0\0";
+        let strike: u64 = 500_000_000;
+        let feed_id = [0u8; 32];
+        let mut m = self.create_market(ticker, strike, expiry, feed_id);
+        for u_idx in 0..NUM_USERS {
+            let user_pk = solana_sdk::signer::Signer::pubkey(&self.users[u_idx]);
+            m.user_yes_ata[u_idx] =
+                self.trident.get_associated_token_address(&m.yes_mint, &user_pk, &token_program_id());
+            m.user_no_ata[u_idx] =
+                self.trident.get_associated_token_address(&m.no_mint, &user_pk, &token_program_id());
+        }
+        let yes_ix = self.trident.initialize_associated_token_account(&admin_pk, &m.yes_mint, &admin_pk);
+        let no_ix = self.trident.initialize_associated_token_account(&admin_pk, &m.no_mint, &admin_pk);
+        let res = self.trident.process_transaction(&[yes_ix, no_ix], Some("frcxa_yes_no_ata"));
+        if !res.is_success() {
+            return;
+        }
+        let m_idx = self.markets.len();
+        self.markets.push(m);
+
+        // Seed Yes-collateralized resting asks (admin-owned). Mint enough Yes
+        // first (mint_pair locks USDC -> mints qty Yes+No each), then place asks
+        // high so they rest (no crossing bids exist on this market).
+        let n_asks = 3u64;
+        let _ = self.ensure_yes(0, m_idx, n_asks * 3);
+        for _ in 0..n_asks {
+            let _ = self.do_place_limit(0, m_idx, 1, MID_PRICE * 3, 3);
+        }
+
+        let resting = self.read_resting(m_idx);
+        if resting.asks.is_empty() {
+            // Need at least one stuck ask to exercise the recovery path; if
+            // seeding produced no resting asks (e.g. mint short), nothing to do.
+            self.assert_all_invariants();
+            return;
+        }
+
+        // Warp just past expiry so settle is allowed; stays << trading expiry.
+        self.trident.warp_to_timestamp(expiry + 2);
+
+        // Forge + plant a Full-verified PriceUpdateV2 and settle.
+        let price_update = solana_sdk::signature::Keypair::new();
+        let price_update_pk = solana_sdk::signer::Signer::pubkey(&price_update);
+        self.plant_price_update(&price_update_pk, feed_id, expiry + 1);
+        let settle_ix = self.build_settle_market_ix(m_idx, price_update_pk);
+        let res = self.trident.process_transaction(&[settle_ix], Some("frcxa_settle"));
+        assert!(
+            res.is_success(),
+            "ask force-expire probe: settle_market failed: logs={}",
+            res.logs()
+        );
+        // settled_at is the clock at settlement (>= expiry + 2 after the warp).
+        let settled_at = self.trident.get_current_timestamp();
+
+        // PERMANENTLY freeze the ask owner's canonical YES ATA. The owner is the
+        // admin (all users share the key), so the stuck-ness proof ATA for an Ask
+        // recovery is the admin's canonical YES ATA for THIS market's yes_mint.
+        // Never thawed during recovery: the asks are genuinely stuck forever and
+        // sweep can NEVER drain them.
+        let owner_yes = self.markets[m_idx].user_yes_ata[0];
+        self.set_token_frozen(&owner_yes, true);
+        assert!(
+            self.is_token_frozen(&owner_yes),
+            "ask force-expire probe setup error: ask-owner YES ATA did not freeze",
+        );
+
+        // Rotate treasury to a fresh keypair (treasury != admin → satisfies the
+        // TreasuryNotConfigured guard) and create the treasury's canonical YES ATA
+        // (the Ask recovery destination — must be receivable).
+        let treasury_kp = solana_sdk::signature::Keypair::new();
+        let treasury_pk = solana_sdk::signer::Signer::pubkey(&treasury_kp);
+        let res = self
+            .trident
+            .process_transaction(&[self.build_set_treasury_ix(treasury_pk)], Some("frcxa_set_treasury"));
+        assert!(res.is_success(), "ask force-expire probe: set_treasury failed: logs={}", res.logs());
+        let yes_mint = self.markets[m_idx].yes_mint;
+        let treasury_yes_ata =
+            self.trident.get_associated_token_address(&yes_mint, &treasury_pk, &token_program_id());
+        let ata_ix = self
+            .trident
+            .initialize_associated_token_account(&admin_pk, &yes_mint, &treasury_pk);
+        let res = self.trident.process_transaction(&[ata_ix], Some("frcxa_treasury_ata"));
+        assert!(res.is_success(), "ask force-expire probe: create treasury YES ATA failed: logs={}", res.logs());
+
+        // ---- 1) Pre-grace force-expire MUST revert (no premature confiscation).
+        let yes_escrow = self.markets[m_idx].yes_escrow;
+        let ask = self.read_resting(m_idx).asks[0];
+        let escrow_before_pre = self.read_token_balance(&yes_escrow);
+        let asks_before_pre = self.read_resting(m_idx).asks.len();
+        let pre_ix = self.build_admin_force_expire_ix(
+            m_idx, 1, ask.price, ask.seq, owner_yes, treasury_yes_ata,
+        );
+        let res = self.trident.process_transaction(&[pre_ix], Some("frcxa_pregrace"));
+        assert!(
+            !res.is_success(),
+            "ask force-expire probe: pre-grace admin_force_expire_order MUST revert \
+             (grace not elapsed) but it SUCCEEDED — premature confiscation",
+        );
+        // No mutation: book + escrow unchanged by the reverted attempt.
+        let escrow_after_pre = self.read_token_balance(&yes_escrow);
+        let asks_after_pre = self.read_resting(m_idx).asks.len();
+        assert_eq!(
+            escrow_before_pre, escrow_after_pre,
+            "ask force-expire probe: pre-grace revert mutated YES escrow {} -> {}",
+            escrow_before_pre, escrow_after_pre,
+        );
+        assert_eq!(
+            asks_before_pre, asks_after_pre,
+            "ask force-expire probe: pre-grace revert mutated ask count {} -> {}",
+            asks_before_pre, asks_after_pre,
+        );
+
+        // ---- 2) Warp past the recovery grace, then force-expire each stuck ask.
+        // Value conservation per recovery: yes_escrow_decrease == treasury_increase,
+        // and equals the order's qty (ask collateral = qty Yes — a raw transfer).
+        self.trident
+            .warp_to_timestamp(settled_at + RECOVERY_GRACE_SECONDS + 10);
+
+        let fe_max = 64u64;
+        let mut fe_calls = 0u64;
+        loop {
+            let r = self.read_resting(m_idx);
+            if r.asks.is_empty() {
+                break;
+            }
+            assert!(
+                fe_calls < fe_max,
+                "ask force-expire probe: stuck asks failed to drain via force-expire \
+                 after {} calls ({} asks remain)",
+                fe_calls, r.asks.len(),
+            );
+            let target = r.asks[0];
+            let escrow_before = self.read_token_balance(&yes_escrow);
+            let treasury_before = self.read_token_balance(&treasury_yes_ata);
+            let fe_ix = self.build_admin_force_expire_ix(
+                m_idx, 1, target.price, target.seq, owner_yes, treasury_yes_ata,
+            );
+            let res = self.trident.process_transaction(&[fe_ix], Some("frcxa_force_expire"));
+            assert!(
+                res.is_success(),
+                "ask force-expire probe: admin_force_expire_order failed post-grace: logs={}",
+                res.logs()
+            );
+            let escrow_after = self.read_token_balance(&yes_escrow);
+            let treasury_after = self.read_token_balance(&treasury_yes_ata);
+            let yes_escrow_decrease = escrow_before - escrow_after;
+            let treasury_yes_ata_increase = treasury_after - treasury_before;
+            // Value conservation: Yes left escrow and landed in the treasury, 1:1.
+            assert_eq!(
+                yes_escrow_decrease, treasury_yes_ata_increase,
+                "ask force-expire probe: value-conservation violated — \
+                 yes_escrow_decrease={} != treasury_yes_ata_increase={} (ask price={} seq={})",
+                yes_escrow_decrease, treasury_yes_ata_increase, target.price, target.seq,
+            );
+            // Ask collateral is exactly `qty` Yes (no price multiple, unlike bids).
+            assert_eq!(
+                yes_escrow_decrease, target.qty,
+                "ask force-expire probe: recovered {} Yes != ask qty {} (ask collateral = qty Yes)",
+                yes_escrow_decrease, target.qty,
+            );
+            fe_calls += 1;
+        }
+
+        // ---- 3) Stuck-market full drain: asks now EMPTY (sweep alone could not
+        // achieve this with a frozen owner YES ATA; force-expire on the residue did).
+        let final_book = self.read_resting(m_idx);
+        assert!(
+            final_book.asks.is_empty(),
+            "ask force-expire probe: settled book asks did NOT fully drain ({} remain)",
+            final_book.asks.len(),
+        );
+        // Yes escrow drained too (all ask collateral recovered to treasury).
+        let yes_left = self.read_token_balance(&yes_escrow);
+        assert_eq!(
+            yes_left, 0,
+            "ask force-expire probe: YES escrow not drained after full recovery: {}",
+            yes_left,
+        );
+
+        // R13 (yes_escrow == Σ open ask qty) and R14 (Yes/No supply parity — the
+        // recovery is a raw transfer, nothing minted/burnt) hold across the flow.
+        // Thaw the SHARED owner YES ATA so later flows in this iteration can
+        // transact normally; the stuck-ness was real for the WHOLE recovery.
+        self.set_token_frozen(&owner_yes, false);
+        self.assert_all_invariants();
+    }
+
     #[end]
     fn end(&mut self) {
         if self.inited {
@@ -1185,6 +1714,70 @@ impl FuzzTest {
         }
     }
 
+    /// Build a `set_treasury(Pubkey)` ix on the `SetPaused` accounts
+    /// {admin signer, config mut}. Rotates `config.treasury` so recovered
+    /// collateral lands in a treasury account distinct from the (frozen) stuck
+    /// owner's ATA.
+    fn build_set_treasury_ix(&self, new_treasury: Pubkey) -> Instruction {
+        let admin_pk = solana_sdk::signer::Signer::pubkey(&self.admin);
+        let mut data = Vec::with_capacity(8 + 32);
+        data.extend_from_slice(&anchor_disc("set_treasury"));
+        data.extend_from_slice(new_treasury.as_ref());
+        Instruction {
+            program_id: meridian_program_id(),
+            accounts: vec![
+                AccountMeta::new_readonly(admin_pk, true), // admin signer
+                AccountMeta::new(self.config, false),      // config (mut)
+            ],
+            data,
+        }
+    }
+
+    /// Build an `admin_force_expire_order(side, price, seq)` ix.
+    ///
+    /// Accounts IN ORDER (per `AdminForceExpireOrder`):
+    ///   1 admin(signer) 2 config 3 market 4 book(mut) 5 usdc_escrow(mut)
+    ///   6 yes_escrow(mut) 7 yes_mint 8 owner_ata(stuck owner's canonical ATA,
+    ///   proof) 9 treasury_ata(mut) 10 mint_authority 11 token_program.
+    ///
+    /// `owner_ata` is the order owner's canonical ATA for the recovered mint
+    /// (USDC for a Bid, Yes for an Ask). `treasury_ata` is `config.treasury`'s
+    /// canonical ATA for that same mint.
+    fn build_admin_force_expire_ix(
+        &self,
+        market_idx: usize,
+        side: u8,
+        price: u64,
+        seq: u64,
+        owner_ata: Pubkey,
+        treasury_ata: Pubkey,
+    ) -> Instruction {
+        let m = &self.markets[market_idx];
+        let admin_pk = solana_sdk::signer::Signer::pubkey(&self.admin);
+        let mut data = Vec::with_capacity(8 + 1 + 8 + 8);
+        data.extend_from_slice(&anchor_disc("admin_force_expire_order"));
+        data.push(side);
+        data.extend_from_slice(&price.to_le_bytes());
+        data.extend_from_slice(&seq.to_le_bytes());
+        Instruction {
+            program_id: meridian_program_id(),
+            accounts: vec![
+                AccountMeta::new_readonly(admin_pk, true), // admin signer
+                AccountMeta::new_readonly(self.config, false),
+                AccountMeta::new_readonly(m.market, false),
+                AccountMeta::new(m.book, false),
+                AccountMeta::new(m.usdc_escrow, false),
+                AccountMeta::new(m.yes_escrow, false),
+                AccountMeta::new_readonly(m.yes_mint, false),
+                AccountMeta::new_readonly(owner_ata, false), // stuck-ness proof
+                AccountMeta::new(treasury_ata, false),       // recovery dest (mut)
+                AccountMeta::new_readonly(m.mint_authority, false),
+                AccountMeta::new_readonly(token_program_id(), false),
+            ],
+            data,
+        }
+    }
+
     fn do_mint_pair(&mut self, user_idx: usize, market_idx: usize, amount: u64) -> bool {
         let m = &self.markets[market_idx];
         let user_pk = solana_sdk::signer::Signer::pubkey(&self.users[user_idx]);
@@ -1472,6 +2065,11 @@ impl FuzzTest {
         }
         for m in &self.markets {
             seen_usdc.insert(m.usdc_escrow);
+        }
+        // Treasury USDC ATAs that received force-expire recoveries: the USDC
+        // left escrow but is still in the system, so count it (deduped).
+        for ata in &self.extra_usdc_atas {
+            seen_usdc.insert(*ata);
         }
         for addr in &seen_usdc {
             let acct = self.trident.get_account(addr);

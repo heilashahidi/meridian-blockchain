@@ -38,6 +38,7 @@ pub use matching::{
 // satisfies the macro without polluting the public API with the
 // `handler` symbol collision (each module has its own `handler`).
 pub use instructions::admin::*;
+pub use instructions::admin_force_expire_order::*;
 pub use instructions::burn_pair::*;
 pub use instructions::buy_no::*;
 pub use instructions::cancel_order::*;
@@ -88,7 +89,7 @@ pub mod meridian {
     /// Admin-only: flip the global `config.paused` kill switch. `true`
     /// pauses every user-facing instruction; `false` resumes. The only
     /// way to toggle the flag that `initialize_config` sets to `false`.
-    pub fn set_paused(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
+    pub fn set_paused(ctx: Context<AdminConfig>, paused: bool) -> Result<()> {
         instructions::admin::set_paused_handler(ctx, paused)
     }
 
@@ -97,10 +98,16 @@ pub mod meridian {
     /// `true` at `initialize_config`; relax on devnet if only `Partial`
     /// updates are available.
     pub fn set_require_full_verification(
-        ctx: Context<SetPaused>,
+        ctx: Context<AdminConfig>,
         require_full: bool,
     ) -> Result<()> {
         instructions::admin::set_require_full_verification_handler(ctx, require_full)
+    }
+
+    /// Admin-only: rotate the treasury authority that receives collateral
+    /// recovered from permanently-stuck orders via `admin_force_expire_order`.
+    pub fn set_treasury(ctx: Context<AdminConfig>, new_treasury: Pubkey) -> Result<()> {
+        instructions::admin::set_treasury_handler(ctx, new_treasury)
     }
 
     /// Admin-only emergency settlement (P1 stuck-oracle deadlock). Stamps
@@ -109,6 +116,16 @@ pub mod meridian {
     /// settlement always gets first claim. Solvent by the $1 invariant.
     pub fn admin_settle_market(ctx: Context<AdminSettleMarket>, yes_wins: bool) -> Result<()> {
         instructions::admin::admin_settle_market_handler(ctx, yes_wins)
+    }
+
+    /// Admin-only: recover a permanently-stuck order's collateral to the
+    /// treasury after the post-settlement recovery grace, provably only when
+    /// the order's owner canonical ATA is genuinely un-receivable.
+    pub fn admin_force_expire_order(
+        ctx: Context<AdminForceExpireOrder>,
+        args: AdminForceExpireOrderArgs,
+    ) -> Result<()> {
+        instructions::admin_force_expire_order::admin_force_expire_order_handler(ctx, args)
     }
 
     /// Admin-only: create a strike market (Market + Book + Yes/No mints
