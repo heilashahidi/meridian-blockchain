@@ -74,12 +74,17 @@ export default function MarketsPage() {
 
   return (
     <main style={{ maxWidth: 1040, margin: "0 auto", padding: "32px 16px" }}>
-      <header style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 28, margin: "0 0 8px" }}>Markets</h1>
-        <p className="muted" style={{ margin: 0, maxWidth: 680 }}>
-          Daily binary options on the Magnificent Seven. Each contract pays $1.00
-          if the stock settles above its strike at the 4:00 PM ET close. Pick a
-          strike to trade.
+      <header style={{ marginBottom: 24 }}>
+        <h1 style={{ fontSize: 32, margin: "0 0 8px" }}>Markets</h1>
+        <p
+          className="dim"
+          style={{ margin: 0, maxWidth: 680, fontSize: 15 }}
+        >
+          Will it close above the strike? Daily binary options on the Magnificent
+          Seven. Each contract pays{" "}
+          <span className="mono">$1.00</span> if the stock settles above its
+          strike at the 4:00 PM ET close — and the price is the market&rsquo;s
+          implied probability. Pick a strike to trade.
         </p>
       </header>
 
