@@ -2,7 +2,7 @@ import { AnchorProvider, Program } from "@coral-xyz/anchor";
 import type { Wallet } from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
 
-import idl from "./idl/meridian.json";
+import { meridianIdl } from "./idlPatch";
 import type { Meridian } from "./idl/meridian";
 
 export const RPC_URL =
@@ -27,7 +27,7 @@ export function getProgram(
   const provider = new AnchorProvider(connection, wallet, {
     commitment: "confirmed",
   });
-  return new Program(idl as Meridian, provider);
+  return new Program(meridianIdl, provider);
 }
 
 /**
@@ -43,7 +43,7 @@ export function getReadOnlyProgram(connection: Connection): MeridianProgram {
   const provider = new AnchorProvider(connection, dummy, {
     commitment: "confirmed",
   });
-  return new Program(idl as Meridian, provider);
+  return new Program(meridianIdl, provider);
 }
 
 export const isLocalRpc = /127\.0\.0\.1|localhost/.test(RPC_URL);
