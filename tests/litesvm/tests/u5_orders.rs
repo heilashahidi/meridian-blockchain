@@ -704,6 +704,104 @@ fn partial_skip_does_not_duplicate_maker_entry() {
     // + B's mint_pair 10; Yes escrow == B's residual ask qty 3.
     assert_eq!(env.usdc_escrow_amount(), 400 + 10, "A's bid + B's mint_pair");
     assert_eq!(env.yes_escrow_amount(), 3, "B's residual ask collateral");
+
+    // TAKER-balance regression guard (review follow-up): B (the ask taker,
+    // user 1) must NOT be credited any USDC proceeds for the SKIPPED fill qty.
+    // From first principles:
+    //   * start: 10_000 USDC, 0 Yes, 0 No
+    //   * seed_yes(10): mint_pair locks 10 USDC → 9_990 USDC, 10 Yes, 10 No
+    //   * place ask 3: step-1 locks 3 Yes into yes_escrow → 7 Yes left
+    //   * the single fill (qty 3) SKIPS (A's frozen canonical Yes ATA), so the
+    //     USDC leg of that fill is NEVER paid to B — no proceeds, no price
+    //     improvement. The skipped 3 folds into residual and posts as B's ask
+    //     (the 3 Yes stay escrowed), so B does not get the Yes back either.
+    // Expected: USDC unchanged at 9_990 (zero proceeds), Yes = 7, No = 10.
+    let b = env.balances(1);
+    assert_eq!(
+        b,
+        Balances { usdc: 9_990, yes: 7, no: 10 },
+        "taker must receive NO USDC proceeds for the skipped fill qty",
+    );
+}
+
+#[test]
+fn market_buy_frozen_maker_skip_folds_into_market_refund() {
+    // Review follow-up: a MARKET-order taker whose only-skipped maker fill folds
+    // into residual must hit the OrderType::Market REFUND branch (not book-post).
+    // Two makers rest asks at the same price; the FRONT maker (A) has a FROZEN
+    // canonical USDC payout ATA (a Bid taker pays makers USDC), the second maker
+    // (C) is live. A Bid MARKET taker (B) crosses both plus extra:
+    //   * C fills (live ATA),
+    //   * A's fill SKIPS (frozen) and folds into residual,
+    //   * the genuine over-ask residual also folds in,
+    //   * for a Market order the whole residual is REFUNDED at the slippage
+    //     bound (NOT posted to the book).
+    // Assert: (a) B's unfilled/skipped qty is fully refunded in USDC, (b) the
+    // filled qty settled correctly (C paid, B got Yes), (c) A's order survives at
+    // a fresh seq, (d) escrow reconciles to total open notional.
+    let mut env = Env::new(3, 10_000);
+    env.seed_yes(0, 10); // A (maker): 9_990 USDC, 10 Yes, 10 No
+    env.seed_yes(2, 10); // C (maker): 9_990 USDC, 10 Yes, 10 No
+
+    // A posts first → A at the front of the ask level; C behind A (same price).
+    env.place_limit(0, /* Ask */ 1, 40, 10, &[]).expect("A ask posts (front)");
+    env.place_limit(2, /* Ask */ 1, 40, 10, &[]).expect("C ask posts (behind A)");
+    let a_seq = env.book().asks.as_slice()[0].key.seq();
+    assert_eq!(env.book().asks.len(), 2);
+
+    // Freeze A's canonical USDC ATA (Bid taker pays makers USDC) → A's fill skips.
+    freeze_token_account(&mut env.fx.svm, &env.users[0].usdc);
+
+    // B market-buys 25 Yes @ slippage 100. Match order: A (10) then C (10),
+    // 5 genuinely-unmatched residual. A skips → its 10 folds into residual too.
+    let pairs = [
+        (env.users[0].usdc, env.users[0].yes),
+        (env.users[2].usdc, env.users[2].yes),
+    ];
+    env.place_market(1, /* Bid */ 0, 25, /* slippage */ 100, &pairs)
+        .expect("market buy: C fills, A skips, residual refunded (Market branch)");
+
+    // (c) A's ask survives, re-inserted at a FRESH seq (full-skip re-insert).
+    // C consumed; B's residual is refunded (Market), never posted.
+    let book = env.book();
+    assert_eq!(book.bids.len(), 0, "market taker posts nothing");
+    assert_eq!(book.asks.len(), 1, "only A's restored ask rests (C consumed)");
+    let restored = book.asks.as_slice()[0];
+    assert_eq!(restored.owner, env.users[0].kp.pubkey().to_bytes());
+    assert_eq!(restored.qty, 10, "A's full qty restored");
+    assert!(restored.key.seq() > a_seq, "A re-inserted at a FRESH seq");
+
+    // (a) + (b) Taker B's balances from first principles:
+    //   start 10_000 USDC.
+    //   step1 lock = 25 * 100 = 2_500 → 7_500.
+    //   step3 C fill: 400 paid from escrow to C (not from B); B gets 10 Yes.
+    //   step4 price-improvement on FILLED qty only (10): 10*100 - 10*40 = 600 → B.
+    //   step5 Market residual refund: residual=15 (5 unmatched + 10 skipped),
+    //         15 * 100 = 1_500 → B.
+    //   final: 7_500 + 600 + 1_500 = 9_600 USDC; bought 10 Yes for net 400.
+    let b = env.balances(1);
+    assert_eq!(
+        b,
+        Balances { usdc: 9_600, yes: 10, no: 0 },
+        "skipped + unmatched qty fully refunded; only the 10 C-fill settled",
+    );
+
+    // (b) Maker C settled: paid 400 USDC, gave up 10 Yes.
+    let c = env.balances(2);
+    assert_eq!(c.usdc, 10_390, "C: 9_990 + 400 sale proceeds");
+    assert_eq!(c.yes, 0, "C's 10 Yes delivered to B");
+
+    // A skipped: no proceeds, ask still backed by its escrowed Yes.
+    let a = env.balances(0);
+    assert_eq!(a.usdc, 9_990, "A skipped — no USDC proceeds");
+    assert_eq!(a.yes, 0, "A's 10 Yes remain escrowed behind the restored ask");
+
+    // (d) Escrow reconciles to total open notional:
+    //   Yes escrow == A's restored ask collateral (10). C's 10 went to B.
+    //   USDC escrow == only the two mint_pair locks (10 + 10); B's deposit fully
+    //   resolved (C payout + PI refund + residual refund).
+    assert_eq!(env.yes_escrow_amount(), 10, "A's restored ask backs 10 Yes");
+    assert_eq!(env.usdc_escrow_amount(), 20, "only the two mint_pair locks remain");
 }
 
 #[test]

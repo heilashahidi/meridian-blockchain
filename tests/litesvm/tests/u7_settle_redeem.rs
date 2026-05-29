@@ -1523,6 +1523,86 @@ fn sweep_skips_non_canonical_recipient_and_recrank_pays() {
     assert_eq!(env.market().sweep_cursor, 2, "cursor monotonic to 2");
 }
 
+#[test]
+fn sweep_ask_side_not_throttled_by_frozen_front_yes_refund() {
+    // Symmetric to sweep_throughput_not_throttled_by_frozen_front_order, but for
+    // the ASK side (RefundKind::Yes). The existing sweep tests only freeze the
+    // Bid side (USDC refund); this pins the Yes/ask refund path. Four resting
+    // ASKS (Yes collateral); the FRONT (best-priced) ask's owner has a FROZEN
+    // canonical YES recipient. A single sweep with enough budget must drain the
+    // THREE payable asks behind it in ONE call (skipped one re-inserted at a
+    // FRESH seq → back of the level) — not throttled by re-attempting the bad
+    // front. After thawing, one more call drains the last → converges in 2 calls.
+    let mut env = Env::new(4, 10_000);
+    // Each maker mints a pair then rests an ask (sells Yes). Ascending prices so
+    // pop order is deterministic: user0 best (40, frozen front), then user1 (45),
+    // user2 (46), user3 (47). No bids → sweep drains the ask side.
+    for i in 0..4 {
+        env.seed_yes(i, 10);
+    }
+    env.place_limit(0, /* Ask */ 1, 40, 10, &[]).expect("u0 ask (front)");
+    env.place_limit(1, 1, 45, 10, &[]).expect("u1 ask");
+    env.place_limit(2, 1, 46, 10, &[]).expect("u2 ask");
+    env.place_limit(3, 1, 47, 10, &[]).expect("u3 ask");
+
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle");
+
+    // Ask collateral is Yes: 10 from each of the 4 makers = 40 Yes escrowed.
+    assert_eq!(env.book().bids.len(), 0, "no bids → ask-side sweep");
+    assert_eq!(env.yes_escrow_amount(), 40, "all four asks' Yes escrowed");
+
+    // Freeze user0's canonical YES recipient (ask refunds go to the Yes ATA).
+    freeze_token_account(&mut env.fx.svm, &env.users[0].yes);
+
+    // One sweep call, budget 4, recipients in pop order: u0(frozen), u1, u2, u3.
+    // Ask refunds bind to each owner's canonical YES ATA.
+    env.sweep(
+        4,
+        &[
+            env.users[0].yes,
+            env.users[1].yes,
+            env.users[2].yes,
+            env.users[3].yes,
+        ],
+    )
+    .expect("sweep must not revert; drains payable asks behind the frozen front");
+
+    // The 3 payable asks drained in this single call (not throttled); only u0's
+    // frozen order remains, re-inserted at the back (fresh seq).
+    let book = env.book();
+    assert_eq!(book.asks.len(), 1, "only the frozen front ask remains");
+    assert_eq!(book.asks.as_slice()[0].owner, env.users[0].kp.pubkey().to_bytes());
+    // yes_escrow drains PARTIALLY: u1+u2+u3 (10 each = 30) refunded; u0's 10 owed.
+    assert_eq!(
+        env.yes_escrow_amount(),
+        10,
+        "u1+u2+u3 Yes refunded in ONE call; only frozen u0's 10 still escrowed",
+    );
+    // The three refunded owners got their 10 Yes back.
+    assert_eq!(env.balances(1).yes, 10, "u1 Yes refunded");
+    assert_eq!(env.balances(2).yes, 10, "u2 Yes refunded");
+    assert_eq!(env.balances(3).yes, 10, "u3 Yes refunded");
+    assert_eq!(env.balances(0).yes, 0, "u0 frozen — not yet refunded");
+    // Cursor counts only successful drains.
+    assert_eq!(env.market().sweep_cursor, 3, "3 successful drains");
+
+    // Thaw user0 (replant a live, zero-balance canonical Yes ATA) and re-crank →
+    // the last ask drains and the previously-frozen owner is paid. Converges.
+    env.fx.svm.expire_blockhash();
+    let u0 = env.users[0].kp.pubkey();
+    let yes_mint = env.yes_mint;
+    let relived = create_canonical_ata(&mut env.fx.svm, &u0, &yes_mint);
+    assert_eq!(relived, env.users[0].yes, "same canonical Yes address re-created live");
+    env.sweep(4, &[env.users[0].yes]).expect("re-crank drains the thawed ask");
+    assert_eq!(env.book().asks.len(), 0, "all asks drained — converged");
+    assert_eq!(env.yes_escrow_amount(), 0, "Yes escrow fully drained");
+    assert_eq!(env.balances(0).yes, 10, "previously-frozen u0 now refunded");
+    assert_eq!(env.market().sweep_cursor, 4, "cursor monotonic: 4 total drains");
+}
+
 /// Sum USDC across both users + the per-market USDC escrow. The total
 /// must be invariant across all U7 operations.
 fn sum_usdc_everywhere(env: &Env) -> u64 {
