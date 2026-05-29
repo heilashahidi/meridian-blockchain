@@ -188,8 +188,11 @@ pub fn settle_sweep_handler<'info>(
     let mut attempts: usize = 0;
     let mut accounts_idx: usize = 0;
 
-    // Entries whose refund couldn't be delivered this call (recipient account
-    // closed / wrong mint / wrong owner / transfer failed). We pop them out of
+    // Entries whose refund couldn't be delivered this call (recipient is
+    // non-canonical, or the canonical ATA is closed / frozen / uninitialized —
+    // mint + owner are now implicit in the canonical-ATA address derivation, so
+    // there is no separate wrong-mint/wrong-owner skip, and a failed transfer is
+    // no longer a skip path: it propagates as Err). We pop them out of
     // the book so the loop can make progress on the entries behind them, then
     // re-insert them at the end so their escrowed collateral stays owed to the
     // owner. This is the ATA-close DoS fix: a single griefed order (place a

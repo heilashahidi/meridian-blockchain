@@ -937,8 +937,8 @@ fn market_order_partial_fill_at_cap() {
     // 10_000 - 1000 + 160(taken from escrow to makers) -- wait,
     // the escrow logic:
     //   * step 1: user_usdc → escrow, 1000
-    //   * step 3: per-fill: escrow → maker_usdc, 40 each (4 makers,
-    //     total 160); also yes_escrow → user_yes
+    //   * step 3: per-fill: escrow → maker's canonical USDC ATA, 40 each
+    //     (4 makers, total 160); also yes_escrow → user_yes
     //   * step 4: refund (price improvement on filled): (100 - 40) * 4
     //     = 240 → user_usdc
     //   * step 5 (market residual): refund (10 - 4) * 100 = 600 → user_usdc

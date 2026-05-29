@@ -18,12 +18,25 @@
 //!                          qty=amount, slippage=min_yes_sell_price)
 //!           ├─ transfer Yes (user → yes_escrow) [amount]
 //!           ├─ match_step(book, taker=Ask, qty=amount)
-//!           ├─ for each fill: yes_escrow → maker; usdc_escrow → user
+//!           ├─ for each fill: yes_escrow → maker's canonical Yes ATA;
+//!           │                 usdc_escrow → user
 //!           └─ residual rejected (market order)
 //!           returns OrderOutcome { filled_qty, residual_qty }
 //!     └─ U6 atomicity check: residual_qty MUST be 0, else revert.
 //!         User ends with: amount No, 0 Yes, USDC delta = sum(fill_price * fill_qty) - amount.
 //! ```
+//!
+//! # Maker payouts via `remaining_accounts`
+//!
+//! The Yes-leg market-sell is an **Ask taker**, so makers are paid **Yes**.
+//! `buy_no` forwards `ctx.remaining_accounts` into `place_order_inner`,
+//! inheriting its ABI: **one account per fill**, in fill order, each the
+//! maker's **canonical Yes ATA**. A non-canonical account reverts
+//! ([`crate::error::MeridianError::BadMakerAccount`]) — and because the whole
+//! `buy_no` tx is atomic, that rolls back the `mint_pair` leg too; a
+//! canonical-but-frozen/closed account skips that fill (folding into the
+//! residual, which then trips the atomic-full-fill check below). See
+//! [`super::place_limit_order`]'s module docs for the full contract.
 //!
 //! # Slippage parameter naming
 //!
@@ -237,8 +250,8 @@ pub fn buy_no_handler<'info>(
     // `place_order_inner` will:
     //   1. lock the user's `amount` Yes in the yes_escrow,
     //   2. run match_step against the bid side (taker is an Ask),
-    //   3. for each fill, transfer Yes from escrow → maker_yes and
-    //      transfer USDC from escrow → user,
+    //   3. for each fill, transfer Yes from escrow → the maker's canonical
+    //      Yes ATA and transfer USDC from escrow → user,
     //   4. for any residual (no remaining crossing bids OR best bid below
     //      the slippage floor), refund the residual Yes back to user_yes.
     //
