@@ -147,4 +147,24 @@ pub enum MeridianError {
     /// which is a recoverable, non-reverting skip.
     #[msg("Maker payout account is not the maker's canonical associated token account.")]
     BadMakerAccount,
+
+    /// `admin_force_expire_order` was called before
+    /// `market.settled_at + RECOVERY_GRACE_SECONDS`. The stuck order's owner
+    /// must have the full grace window to un-freeze / re-open their canonical
+    /// ATA so the normal sweep can pay them before the protocol takes custody.
+    #[msg("Recovery grace period has not elapsed; cannot force-expire this order yet.")]
+    RecoveryGraceNotElapsed,
+
+    /// `admin_force_expire_order` was called on an order whose owner's canonical
+    /// ATA is currently receivable — i.e. the order is NOT stuck and should
+    /// drain through the normal `settle_sweep` crank. Guards the admin recovery
+    /// power against confiscating a healthy order.
+    #[msg("Order is not stuck (canonical ATA is receivable); use settle_sweep instead.")]
+    OrderNotStuck,
+
+    /// The destination account supplied to `admin_force_expire_order` is not the
+    /// `Config.treasury`'s canonical associated token account for the recovered
+    /// collateral's mint.
+    #[msg("Recovery destination is not the treasury's canonical associated token account.")]
+    InvalidTreasuryAccount,
 }

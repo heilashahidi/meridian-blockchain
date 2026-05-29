@@ -25,6 +25,12 @@ pub struct Config {
     /// Fee authority — receives any fee accruals once fees are wired
     /// (deferred to follow-up work; field exists for forward compatibility).
     pub fee_authority: Pubkey,
+    /// Treasury authority — custodian for collateral recovered from
+    /// permanently-stuck orders via `admin_force_expire_order`. Kept distinct
+    /// from `fee_authority` so custodial user funds (which an owner may later
+    /// reclaim off-chain) stay accounting-separate from protocol revenue.
+    /// Defaults to `admin` at `initialize_config`; rotate via `set_treasury`.
+    pub treasury: Pubkey,
     /// USDC mint used for all collateral on this deployment. Pinned at
     /// `initialize_config` time; markets reference it indirectly via the
     /// program's escrow PDAs.

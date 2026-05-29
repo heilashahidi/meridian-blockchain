@@ -21,6 +21,14 @@ use crate::state::{Config, Market, Outcome};
 /// `usdc_escrow == winning_supply` regardless of which side is chosen.
 pub const EMERGENCY_GRACE_SECONDS: i64 = 86_400;
 
+/// How long after a market is **settled** the admin may force-expire a
+/// permanently-stuck order and sweep its collateral to the treasury, in
+/// seconds (30 days). Far longer than [`EMERGENCY_GRACE_SECONDS`] because this
+/// moves *user* funds: a stuck owner must have ample time to un-freeze or
+/// re-open their canonical ATA so the normal `settle_sweep` crank can pay them
+/// before the protocol takes custody. Measured from `Market.settled_at`.
+pub const RECOVERY_GRACE_SECONDS: i64 = 30 * 86_400;
+
 #[derive(Accounts)]
 pub struct SetPaused<'info> {
     /// Admin authority. Must equal `config.admin`.
@@ -53,6 +61,17 @@ pub fn set_require_full_verification_handler(
 ) -> Result<()> {
     ctx.accounts.config.require_full_verification = require_full;
     msg!("set_require_full_verification: require_full={}", require_full);
+    Ok(())
+}
+
+/// Admin-only: rotate the treasury authority that receives collateral recovered
+/// from permanently-stuck orders (`admin_force_expire_order`). Reuses the
+/// [`SetPaused`] account context (same admin + Config check). Defaults to the
+/// admin at `initialize_config`; operators point it at a dedicated custody
+/// account before using the recovery path.
+pub fn set_treasury_handler(ctx: Context<SetPaused>, new_treasury: Pubkey) -> Result<()> {
+    ctx.accounts.config.treasury = new_treasury;
+    msg!("set_treasury: treasury={}", new_treasury);
     Ok(())
 }
 

@@ -103,6 +103,12 @@ pub mod meridian {
         instructions::admin::set_require_full_verification_handler(ctx, require_full)
     }
 
+    /// Admin-only: rotate the treasury authority that receives collateral
+    /// recovered from permanently-stuck orders via `admin_force_expire_order`.
+    pub fn set_treasury(ctx: Context<SetPaused>, new_treasury: Pubkey) -> Result<()> {
+        instructions::admin::set_treasury_handler(ctx, new_treasury)
+    }
+
     /// Admin-only emergency settlement (P1 stuck-oracle deadlock). Stamps
     /// `yes_wins`/!`yes_wins` as the outcome WITHOUT reading Pyth, but only
     /// after `expiry + EMERGENCY_GRACE_SECONDS` (24h) so normal oracle
