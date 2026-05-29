@@ -172,6 +172,12 @@ async function ataBalance(
   }
 }
 
+/** The winning token's mint for a settled market, or null if unsettled. */
+export function winningMint(m: MarketView): PublicKey | null {
+  if (!m.settled || !m.outcome) return null;
+  return m.outcome === "yesWins" ? m.yesMint : m.noMint;
+}
+
 export async function fetchBalances(
   connection: Connection,
   owner: PublicKey,

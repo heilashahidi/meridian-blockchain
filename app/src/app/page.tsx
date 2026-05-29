@@ -9,6 +9,7 @@ import { Balances } from "@/components/Balances";
 import { MintBurnPanel } from "@/components/MintBurnPanel";
 import { PlaceOrderPanel } from "@/components/PlaceOrderPanel";
 import { OpenOrders } from "@/components/OpenOrders";
+import { RedeemPanel } from "@/components/RedeemPanel";
 
 export default function Home() {
   const { config, configError } = useMeridian();
@@ -57,6 +58,7 @@ export default function Home() {
           <MintBurnPanel />
           <PlaceOrderPanel />
           <OpenOrders />
+          <RedeemPanel />
           <OrderBook />
         </div>
       </div>

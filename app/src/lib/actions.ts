@@ -5,7 +5,7 @@ import {
 } from "@solana/spl-token";
 import { Connection, PublicKey } from "@solana/web3.js";
 
-import type { BookView, MarketView } from "./market";
+import { winningMint, type BookView, type MarketView } from "./market";
 import { planFills, remainingAccountsFor, SIDE_BID } from "./matching";
 import {
   bookPda,
@@ -149,5 +149,37 @@ export async function cancelOrder(args: CancelArgs): Promise<string> {
       seq: new BN(seq.toString()),
     })
     .accounts(orderAccounts(market, usdcMint, user))
+    .rpc();
+}
+
+interface RedeemArgs {
+  program: MeridianProgram;
+  connection: Connection;
+  market: MarketView;
+  usdcMint: PublicKey;
+  user: PublicKey;
+  amount: bigint | number;
+}
+
+export async function redeem(args: RedeemArgs): Promise<string> {
+  const { program, connection, market, usdcMint, user, amount } = args;
+  const mint = winningMint(market);
+  if (!mint) throw new Error("Market is not settled yet");
+  const preIxs = await ensureAtaIxs(connection, user, user, [usdcMint]);
+  const accounts = {
+    user,
+    config: configPda(),
+    market: market.pubkey,
+    winningMint: mint,
+    userWinning: getAssociatedTokenAddressSync(mint, user),
+    userUsdc: getAssociatedTokenAddressSync(usdcMint, user),
+    usdcEscrow: usdcEscrowPda(market.pubkey),
+    mintAuthority: mintAuthorityPda(market.pubkey),
+    tokenProgram: TOKEN_PROGRAM_ID,
+  };
+  return program.methods
+    .redeem(new BN(amount.toString()))
+    .accounts(accounts)
+    .preInstructions(preIxs)
     .rpc();
 }
