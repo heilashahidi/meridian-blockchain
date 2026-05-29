@@ -38,6 +38,7 @@ pub use matching::{
 // satisfies the macro without polluting the public API with the
 // `handler` symbol collision (each module has its own `handler`).
 pub use instructions::admin::*;
+pub use instructions::admin_force_expire_order::*;
 pub use instructions::burn_pair::*;
 pub use instructions::buy_no::*;
 pub use instructions::cancel_order::*;
@@ -115,6 +116,16 @@ pub mod meridian {
     /// settlement always gets first claim. Solvent by the $1 invariant.
     pub fn admin_settle_market(ctx: Context<AdminSettleMarket>, yes_wins: bool) -> Result<()> {
         instructions::admin::admin_settle_market_handler(ctx, yes_wins)
+    }
+
+    /// Admin-only: recover a permanently-stuck order's collateral to the
+    /// treasury after the post-settlement recovery grace, provably only when
+    /// the order's owner canonical ATA is genuinely un-receivable.
+    pub fn admin_force_expire_order(
+        ctx: Context<AdminForceExpireOrder>,
+        args: AdminForceExpireOrderArgs,
+    ) -> Result<()> {
+        instructions::admin_force_expire_order::admin_force_expire_order_handler(ctx, args)
     }
 
     /// Admin-only: create a strike market (Market + Book + Yes/No mints

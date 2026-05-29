@@ -31,6 +31,7 @@
 //!       deadline.
 
 pub mod admin;
+pub mod admin_force_expire_order;
 pub mod burn_pair;
 pub mod buy_no;
 pub mod cancel_order;
