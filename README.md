@@ -8,6 +8,42 @@ for the implementation plan and
 [`docs/brainstorms/minimal-clob-scope-requirements.md`](docs/brainstorms/minimal-clob-scope-requirements.md)
 for the scope rationale.
 
+## Quick start / one-command setup
+
+From a clean clone (after the prerequisites below):
+
+```bash
+anchor build      # produces target/deploy/meridian.so + the IDL
+make dev          # boot a local validator, bootstrap Config + a market, start the app
+```
+
+`make dev` boots a local `solana-test-validator` in the background, deploys the
+program, creates a throwaway local USDC mint, runs `bootstrap-devnet.mjs` to
+initialize `Config` + one strike market, writes `app/.env.local`, and then starts
+the Next.js dev server in the foreground. Stop the app with Ctrl-C, then stop the
+validator with `pkill -f solana-test-validator`.
+
+### Run the trading lifecycle
+
+```bash
+make demo DEMO_RPC=http://127.0.0.1:8899   # create → mint → trade against your local validator
+```
+
+### Deploy to devnet
+
+```bash
+make devnet-deploy   # idempotent; preflights the deploy wallet's SOL balance
+make demo            # create → mint → trade against devnet (DEMO_RPC defaults to devnet)
+```
+
+`make devnet-deploy` requires the deploy wallet (`~/.config/solana/id.json`, the
+Anchor provider wallet) to hold ~8 SOL of devnet SOL. If it is underfunded the
+command exits non-zero **without** a partial deploy and prints the exact address
+to fund and the shortfall. Funding is a documented human step (faucet/transfer);
+see `scripts/README.md`.
+
+Run `make help` to list all targets.
+
 ## Prerequisites
 
 - Rust 1.78+
