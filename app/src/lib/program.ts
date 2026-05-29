@@ -67,4 +67,9 @@ export function getReadOnlyProgram(connection: Connection): MeridianProgram {
   return new Program(meridianIdl, provider);
 }
 
-export const isLocalRpc = /127\.0\.0\.1|localhost/.test(RPC_URL);
+/** True for a localhost / local-validator RPC URL. */
+export function isLocalUrl(url: string): boolean {
+  return /127\.0\.0\.1|localhost/.test(url);
+}
+
+export const isLocalRpc = isLocalUrl(RPC_URL);

@@ -52,5 +52,13 @@ or deploy + `scripts/bootstrap-devnet.mjs --rpc http://127.0.0.1:8899`). Markets
 are created by the scripts / an admin; this app lists what exists rather than
 creating markets.
 
+**Import the validator keypair into your wallet.** For local testing, import
+`~/.config/solana/id.json` (the keypair that deployed + bootstrapped the
+validator) into Phantom/Solflare. That key is the config admin and the test
+USDC mint authority, so the dev toolbar's "Mint test USDC" can sign. Then use
+the toolbar to airdrop SOL and mint yourself test USDC, and you're ready to
+mint pairs and trade. Settlement still needs a Pyth update (out of UI scope) —
+use `scripts/settle-redeem-demo.sh` to exercise settle + redeem.
+
 > **IDL:** the typed Anchor client reads a copy of `target/idl/meridian.json`
 > placed at `app/src/lib/idl/`. Re-copy it whenever the program changes.

@@ -10,6 +10,7 @@ import { MintBurnPanel } from "@/components/MintBurnPanel";
 import { PlaceOrderPanel } from "@/components/PlaceOrderPanel";
 import { OpenOrders } from "@/components/OpenOrders";
 import { RedeemPanel } from "@/components/RedeemPanel";
+import { DevToolbar } from "@/components/DevToolbar";
 
 export default function Home() {
   const { config, configError } = useMeridian();
@@ -34,6 +35,8 @@ export default function Home() {
         </div>
         <WalletButton />
       </header>
+
+      <DevToolbar />
 
       {configError && (
         <div
