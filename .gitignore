@@ -25,3 +25,6 @@ node_modules/
 *.swo
 .idea/
 .vscode/
+
+# Personal interview/eval prep — never push to the shared remote
+docs/INTERVIEW-PREP.md
