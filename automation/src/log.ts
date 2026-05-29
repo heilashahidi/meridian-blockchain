@@ -57,7 +57,7 @@ export async function alert(
   if (!webhook) return;
 
   try {
-    await fetch(webhook, {
+    const res = await fetch(webhook, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
@@ -65,6 +65,9 @@ export async function alert(
         ...(fields ?? {}),
       }),
     });
+    if (!res.ok) {
+      emit("warn", "alert webhook returned non-OK", { status: res.status });
+    }
   } catch (e) {
     emit("warn", "alert webhook post failed", {
       error: e instanceof Error ? e.message : String(e),

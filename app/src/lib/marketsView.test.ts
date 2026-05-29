@@ -3,6 +3,7 @@ import { PublicKey } from "@solana/web3.js";
 
 import type { BookView, MarketView } from "@/lib/market";
 import {
+  fractionUsd,
   groupActiveByTicker,
   impliedProbabilityLabel,
   isActiveMarket,
@@ -50,6 +51,16 @@ describe("isActiveMarket", () => {
     expect(
       isActiveMarket(
         mkMarket({ ticker: "AAPL", expiryUnix: BigInt(NOW - 1) }),
+        NOW,
+      ),
+    ).toBe(false);
+  });
+  it("is inactive at the exact expiry boundary (expiry == now)", () => {
+    // The gate is `expiryUnix > now`, so a market expiring exactly now is
+    // already inactive (not tradeable at the close instant).
+    expect(
+      isActiveMarket(
+        mkMarket({ ticker: "AAPL", expiryUnix: BigInt(NOW) }),
         NOW,
       ),
     ).toBe(false);
@@ -166,6 +177,14 @@ describe("strikeDollars", () => {
   it("formats microunits as a dollar string", () => {
     expect(strikeDollars(200_000_000n)).toBe("200.00");
     expect(strikeDollars(1_234_500_000n)).toBe("1,234.50");
+  });
+});
+
+describe("fractionUsd", () => {
+  it("formats a $0–$1 fraction as a 2dp dollar string", () => {
+    expect(fractionUsd(0.62)).toBe("$0.62");
+    expect(fractionUsd(0)).toBe("$0.00");
+    expect(fractionUsd(1)).toBe("$1.00");
   });
 });
 

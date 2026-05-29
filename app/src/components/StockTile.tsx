@@ -1,18 +1,9 @@
 "use client";
 
 import type { BookView, MarketView } from "@/lib/market";
-import type { PriceData } from "@/lib/prices";
+import { priceAgeLabel, type PriceData } from "@/lib/prices";
 import { yesMidFraction } from "@/lib/marketsView";
 import { MarketCard } from "@/components/MarketCard";
-
-function priceAgeLabel(p: PriceData | null): string {
-  if (!p) return "no data";
-  const ageSec = Math.max(0, Math.floor(Date.now() / 1000) - p.publishTime);
-  if (ageSec < 60) return "live";
-  if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`;
-  if (ageSec < 86400) return `${Math.floor(ageSec / 3600)}h ago`;
-  return `${Math.floor(ageSec / 86400)}d ago`;
-}
 
 /**
  * One MAG7 stock: live price header + a count of active strikes and a card per

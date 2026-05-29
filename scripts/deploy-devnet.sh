@@ -94,6 +94,10 @@ bar "anchor deploy --provider.cluster devnet"
 
 # ─── 3) confirm invokable ───────────────────────────────────────────────────
 bar "confirm program is invokable"
+if [ ! -f "$REPO_ROOT/target/deploy/meridian-keypair.json" ]; then
+  echo "error: target/deploy/meridian-keypair.json not found — run 'anchor build' first"
+  exit 2
+fi
 PROGRAM_ID="$(solana address -k "$REPO_ROOT/target/deploy/meridian-keypair.json")"
 echo "program id    : $PROGRAM_ID"
 for _ in $(seq 1 20); do

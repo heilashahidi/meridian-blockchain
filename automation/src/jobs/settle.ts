@@ -78,11 +78,8 @@ const RETRYABLE_ORACLE_PATTERNS = [
   "OracleStale",
   "OracleConfidenceTooWide",
   "OracleVerificationInsufficient",
-  "OracleFeedIdMismatch",
-  "InvalidOraclePrice",
   // Hermes returned no fresh update at all (off-hours) — same remedy: wait.
   "no parsed price",
-  "no fresh",
 ];
 
 /** "Already settled" — treat as idempotent success, never an error. */

@@ -3,18 +3,9 @@
 import Link from "next/link";
 
 import { MAG7 } from "@/lib/feeds";
-import { usePrices, type PriceData } from "@/lib/prices";
+import { priceAgeLabel, usePrices, type PriceData } from "@/lib/prices";
 import { useMeridian } from "@/lib/MeridianContext";
 import { WalletButton } from "@/components/WalletButton";
-
-function priceAgeLabel(p: PriceData | null): string {
-  if (!p) return "no data";
-  const ageSec = Math.max(0, Math.floor(Date.now() / 1000) - p.publishTime);
-  if (ageSec < 60) return "live";
-  if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`;
-  if (ageSec < 86400) return `${Math.floor(ageSec / 3600)}h ago`;
-  return `${Math.floor(ageSec / 86400)}d ago`;
-}
 
 function PriceTile({
   ticker,

@@ -38,8 +38,11 @@ const bs58 = { encode: b58encode };
 // Anchor 8-byte discriminators (must match src/lib/idl/meridian.json).
 const DISC = {
   mint_pair: [19, 149, 94, 110, 181, 186, 33, 107],
+  burn_pair: [145, 2, 176, 194, 32, 205, 57, 214],
   place_limit_order: [108, 176, 33, 186, 146, 229, 1, 197],
+  place_market_order: [90, 118, 192, 252, 192, 99, 39, 145],
   buy_no: [89, 240, 244, 16, 196, 201, 190, 163],
+  sell_no: [189, 194, 132, 42, 80, 249, 154, 103],
   cancel_order: [95, 129, 237, 240, 8, 49, 223, 132],
   redeem: [184, 12, 86, 149, 70, 196, 97, 225],
   settle_market: [193, 153, 95, 216, 166, 6, 144, 217],
@@ -71,7 +74,18 @@ describe("parseInstruction", () => {
       name: "place_limit_order",
       action: "trade",
     });
+    expect(parseInstruction(Uint8Array.from(DISC.burn_pair))).toEqual({
+      name: "burn_pair",
+      action: "burn",
+    });
+    expect(parseInstruction(Uint8Array.from(DISC.place_market_order))).toEqual({
+      name: "place_market_order",
+      action: "trade",
+    });
     expect(parseInstruction(Uint8Array.from(DISC.buy_no))?.action).toBe(
+      "trade",
+    );
+    expect(parseInstruction(Uint8Array.from(DISC.sell_no))?.action).toBe(
       "trade",
     );
     expect(parseInstruction(Uint8Array.from(DISC.cancel_order))?.action).toBe(
@@ -142,6 +156,17 @@ describe("parseHistoryEntry", () => {
     });
     expect(entry!.failed).toBe(true);
     expect(entry!.action).toBe("trade");
+  });
+
+  it("classifies a Meridian instruction with no data field as unknown", () => {
+    const entry = parseHistoryEntry({
+      ...base,
+      instructions: [{ programId: PID }], // a Meridian ix, but no decodable data
+      programId: PID,
+    });
+    expect(entry).not.toBeNull();
+    expect(entry!.action).toBe("unknown");
+    expect(entry!.instruction).toBe("unknown");
   });
 
   it("classifies an unrecognized Meridian discriminator as unknown", () => {

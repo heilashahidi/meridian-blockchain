@@ -27,7 +27,11 @@
 // approximation lives at the call site (Portfolio page) and is labelled in the
 // UI as "est." when it is not the exact mint basis.
 
+import { USDC_DECIMALS } from "./format";
 import type { MarketView, Outcome } from "./market";
+
+/** USDC base units per whole token (6-decimal mints). */
+const USDC_SCALE = 10 ** USDC_DECIMALS;
 
 /** Implicit per-leg cost basis of a mint_pair leg: $1 split into Yes + No. */
 export const MINT_PAIR_LEG_BASIS = 0.5;
@@ -129,7 +133,7 @@ export function canRedeem(
 
 /** Whole-contract quantity from 6-decimal token base units. */
 export function contractsFromBaseUnits(baseUnits: bigint): number {
-  return Number(baseUnits) / 1_000_000;
+  return Number(baseUnits) / USDC_SCALE;
 }
 
 /** Format a $0–$1-or-more dollar amount as "$1.23" (2 dp, sign-preserving). */

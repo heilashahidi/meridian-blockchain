@@ -5,7 +5,7 @@ import { useConnection } from "@solana/wallet-adapter-react";
 
 import { buyNo, placeLimitOrder, placeMarketOrder, sellNo } from "@/lib/actions";
 import { useMeridian } from "@/lib/MeridianContext";
-import { planFills } from "@/lib/matching";
+import { planFills, SIDE_BID } from "@/lib/matching";
 import {
   ONE_USDC,
   positionGuardDecision,
@@ -72,14 +72,15 @@ export function TradePanel() {
     });
     // The taker matches the opposing side of its Yes-leg side.
     const opposing =
-      path.side === 0 /* SIDE_BID */ ? book.asks : book.bids;
+      path.side === SIDE_BID ? book.asks : book.bids;
     return planFills(opposing, path.side, path.yesLegPrice, BigInt(qtyN));
   }, [ready, inputValid, book, action, priceMicro, qtyN]);
 
   const fillQty = preview ? preview.fills.reduce((a, f) => a + f.qty, 0n) : 0n;
 
   async function submit() {
-    if (!ready || !inputValid) return;
+    // Guard the async gap so a rapid double-click can't fire two submits.
+    if (!ready || !inputValid || busy) return;
     const path = resolveTradePath({
       action,
       price: priceMicro!,

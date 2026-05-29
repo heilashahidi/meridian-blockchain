@@ -7,6 +7,7 @@ import {
   computePnl,
   contractsFromBaseUnits,
   currentContractPrice,
+  fmtDollars,
   fmtPct,
   fmtSignedDollars,
   type Holding,
@@ -81,6 +82,13 @@ describe("currentContractPrice", () => {
   it("returns null when unsettled and no live price", () => {
     expect(currentContractPrice("yes", mkMarket(), null)).toBeNull();
   });
+
+  it("falls through to the live price when settled but the outcome is null", () => {
+    // A settled market with no recorded outcome can't pay $1/$0, so we fall
+    // back to the supplied live/mid price.
+    const m = mkMarket({ settled: true, outcome: null });
+    expect(currentContractPrice("yes", m, 0.5)).toBe(0.5);
+  });
 });
 
 describe("settled winner/loser end-to-end P&L", () => {
@@ -151,5 +159,11 @@ describe("formatters", () => {
     expect(fmtPct(0.25)).toBe("+25.0%");
     expect(fmtPct(-0.333)).toBe("-33.3%");
     expect(fmtPct(null)).toBe("—");
+  });
+
+  it("formats unsigned dollars (no leading + for positives)", () => {
+    expect(fmtDollars(2.5)).toBe("$2.50");
+    expect(fmtDollars(-0.1)).toBe("-$0.10");
+    expect(fmtDollars(0)).toBe("$0.00");
   });
 });

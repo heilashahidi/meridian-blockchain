@@ -101,6 +101,8 @@ describe("resolveTradePath — Buy/Sell Yes", () => {
     expect(p.instruction).toBe("placeMarketOrder");
     expect(p.side).toBe(SIDE_ASK);
     expect(p.args).toEqual({ side: SIDE_ASK, slippageBound: 580_000n, qty: 50n });
+    // The Yes-leg price (== input price for a Sell Yes market path).
+    expect(p.yesLegPrice).toBe(580_000n);
   });
 });
 
@@ -243,6 +245,14 @@ describe("toNoView", () => {
     expect(no.asks[0].price).toBe(400_000n);
     expect(no.asks[0].qty).toBe(3n);
     expect(no.bids).toHaveLength(0);
+  });
+
+  it("maps an empty book to an empty No view", () => {
+    const empty: BookView = { bids: [], asks: [], nextSeq: 0n };
+    const no = toNoView(empty);
+    expect(no.bids).toHaveLength(0);
+    expect(no.asks).toHaveLength(0);
+    expect(no.nextSeq).toBe(0n);
   });
 
   it("keeps No bids descending and No asks ascending (priority order)", () => {

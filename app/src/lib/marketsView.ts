@@ -11,10 +11,10 @@
 
 import type { BookView, MarketView } from "./market";
 import { MAG7 } from "./feeds";
-import { tickerToString } from "./format";
+import { tickerToString, USDC_DECIMALS } from "./format";
 
 /** USDC microunits per whole dollar (6-decimal mints). */
-const USDC_SCALE = 1_000_000;
+const USDC_SCALE = 10 ** USDC_DECIMALS;
 
 /** A market is "active" if it is unsettled and has not yet expired. */
 export function isActiveMarket(m: MarketView, nowUnix: number): boolean {

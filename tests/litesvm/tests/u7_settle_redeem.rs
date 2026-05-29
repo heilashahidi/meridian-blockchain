@@ -680,6 +680,23 @@ fn settle_minutes_after_expiry_within_window_succeeds() {
 }
 
 #[test]
+fn settle_minutes_after_expiry_within_window_no_wins() {
+    // NoWins mirror of settle_minutes_after_expiry_within_window_succeeds: a
+    // price BELOW strike ($550 vs strike $680) published a few minutes after
+    // expiry (within the 900s post-expiry window) must settle as NoWins.
+    let mut env = Env::new(1, 10_000);
+    let publish = EXPIRY_UNIX + 5 * 60; // 5 minutes after expiry
+    let ts = publish + 2; // settle called shortly after the update lands
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(550), 1_000, publish);
+    env.settle()
+        .expect("below-strike price minutes after expiry (within window) must settle");
+    let m = env.market();
+    assert!(m.settled, "market settled from a minutes-late Pyth update");
+    assert_eq!(m.outcome, Some(meridian::state::Outcome::NoWins));
+}
+
+#[test]
 fn settle_at_new_window_edge_succeeds() {
     // The last accepted instant is exactly `expiry + SETTLE_WINDOW_SECONDS`.
     // SETTLE_WINDOW_SECONDS = 900 (15 min); mirror that here so the boundary is

@@ -77,6 +77,10 @@ echo "balance       : $(solana balance "$(solana address -k "$KEYPAIR")" --url "
 # ─── 4) local USDC mint ─────────────────────────────────────────────────────
 bar "create local USDC mint (keypair = mint authority)"
 USDC_MINT="$(spl-token create-token --decimals 6 --url "$LOCAL" 2>/dev/null | awk '/Address:/{print $2}')"
+if [ -z "$USDC_MINT" ]; then
+  echo "error: failed to create local USDC mint (empty address); see $VALIDATOR_LOG"
+  exit 1
+fi
 echo "USDC mint     : $USDC_MINT"
 
 # ─── 5) deploy program ──────────────────────────────────────────────────────

@@ -55,6 +55,7 @@ export default function PortfolioPage() {
   const load = useCallback(async () => {
     if (!walletPubkey || !config) {
       setEnriched([]);
+      setLoading(false);
       return;
     }
     setLoading(true);

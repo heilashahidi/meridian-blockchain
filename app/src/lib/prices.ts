@@ -28,6 +28,20 @@ export interface PriceData {
 /** ticker → latest price (or null if that feed was missing/unparseable). */
 export type PriceMap = Record<string, PriceData | null>;
 
+/**
+ * Human "freshness" label for a price's publish time: "live" (<1m), then
+ * "Nm/Nh/Nd ago", or "no data" when absent. Equity feeds only publish during
+ * US market hours, so off-hours this surfaces the staleness.
+ */
+export function priceAgeLabel(p: PriceData | null): string {
+  if (!p) return "no data";
+  const ageSec = Math.max(0, Math.floor(Date.now() / 1000) - p.publishTime);
+  if (ageSec < 60) return "live";
+  if (ageSec < 3600) return `${Math.floor(ageSec / 60)}m ago`;
+  if (ageSec < 86400) return `${Math.floor(ageSec / 3600)}h ago`;
+  return `${Math.floor(ageSec / 86400)}d ago`;
+}
+
 /** The shape of one entry in a Hermes `/v2/updates/price/latest?parsed=true` response. */
 interface HermesParsedEntry {
   id?: string;

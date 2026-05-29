@@ -109,6 +109,17 @@ describe("settle: happy path", () => {
     expect(r.swept).toBe(true);
   });
 
+  it("an empty open-market list settles nothing and reports zeros", async () => {
+    const deps = happyDeps([]);
+    const report = await settle(deps, fastOpts());
+    expect(report).toMatchObject({
+      totalSettled: 0,
+      totalFailed: 0,
+      results: [],
+    });
+    expect(deps.oracleSettle).not.toHaveBeenCalled();
+  });
+
   it("settles each open market independently", async () => {
     const markets = [
       openMarket({ ticker: "AAPL", strikeMicro: 185_000_000n }),
@@ -188,6 +199,44 @@ describe("settle: admin-override fallback", () => {
     expect(r.settledVia).toBe("admin-override");
     expect(r.outcome).toBe("YesWins");
     expect(report.totalOverridden).toBe(1);
+    expect(report.totalFailed).toBe(0);
+  });
+
+  it("override at exactly the strike settles YesWins (price >= strike)", async () => {
+    const m = openMarket({ ticker: "AAPL", strikeMicro: 185_000_000n });
+    const deps = happyDeps([m]);
+    deps.oracleSettle = vi.fn(async (): Promise<SettleAttempt> => ({
+      ok: false,
+      error: new Error("OracleStale"),
+    }));
+
+    // overridePrice 185 == strike 185 → yesWins true.
+    const report = await settle(deps, {
+      ...fastOpts(),
+      overridePrices: { AAPL: 185 },
+    });
+    expect(deps.adminSettle).toHaveBeenCalledWith(m, true);
+    expect(report.results[0].outcome).toBe("YesWins");
+    expect(report.totalOverridden).toBe(1);
+  });
+
+  it("override whose adminSettle hits MarketSettled is treated as already-settled", async () => {
+    const m = openMarket({ ticker: "AAPL", strikeMicro: 185_000_000n });
+    const deps = happyDeps([m]);
+    deps.oracleSettle = vi.fn(async (): Promise<SettleAttempt> => ({
+      ok: false,
+      error: new Error("OracleStale"),
+    }));
+    deps.adminSettle = vi.fn(async () => {
+      throw new Error("AnchorError ... MarketSettled");
+    });
+
+    const report = await settle(deps, {
+      ...fastOpts(),
+      overridePrices: { AAPL: 190 },
+    });
+    expect(report.results[0].settledVia).toBe("already-settled");
+    expect(report.totalAlreadySettled).toBe(1);
     expect(report.totalFailed).toBe(0);
   });
 

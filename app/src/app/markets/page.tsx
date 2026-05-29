@@ -16,12 +16,13 @@ export default function MarketsPage() {
   const prices = usePrices();
 
   // Group on-chain markets into one entry per MAG7 stock (all 7 always present).
-  // `Date.now()` is read once per render; markets crossing expiry resolve on the
-  // next markets-list refresh from the context poll.
-  const nowUnix = Math.floor(Date.now() / 1000);
+  // `Date.now()` is read inside the memo body so the memo (and the book-poll
+  // effect that depends on it) only re-runs when `markets` changes; markets
+  // crossing expiry resolve on the next markets-list refresh from the context
+  // poll.
   const groups = useMemo(
-    () => groupActiveByTicker(markets, nowUnix),
-    [markets, nowUnix],
+    () => groupActiveByTicker(markets, Math.floor(Date.now() / 1000)),
+    [markets],
   );
 
   // The set of active market PDAs we need books for. Stable string key list so
