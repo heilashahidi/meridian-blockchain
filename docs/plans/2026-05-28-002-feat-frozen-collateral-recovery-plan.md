@@ -1,7 +1,7 @@
 ---
 title: "feat: Admin-gated recovery of permanently-stuck collateral after settlement"
 type: feat
-status: active
+status: completed
 created: 2026-05-28
 depth: deep
 related:
