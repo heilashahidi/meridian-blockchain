@@ -117,6 +117,7 @@ pub fn admin_settle_market_handler(ctx: Context<AdminSettleMarket>, yes_wins: bo
     };
     market.settled = true;
     market.outcome = Some(outcome);
+    market.settled_at = clock.unix_timestamp;
 
     msg!(
         "admin_settle_market: outcome={:?} (emergency, oracle bypassed)",

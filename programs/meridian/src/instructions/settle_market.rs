@@ -220,6 +220,7 @@ pub fn settle_market_handler(ctx: Context<SettleMarket>) -> Result<()> {
     // subsequent reader sees `settled → outcome.is_some()`.
     market.settled = true;
     market.outcome = Some(outcome);
+    market.settled_at = clock.unix_timestamp;
 
     msg!(
         "settle_market: outcome={:?} pyth_price={} pyth_expo={} strike={}",

@@ -66,6 +66,12 @@ pub struct Market {
     /// Pyth `PriceUpdateV2` feed id (32-byte) for the underlying.
     /// Pinned at market creation so settle can verify it.
     pub pyth_feed_id: [u8; 32],
+    /// Unix timestamp (seconds) at which the market was settled, stamped by
+    /// `settle_market` / `admin_settle_market`. `0` while unsettled. Used as
+    /// the precise base for the post-settlement recovery grace window in
+    /// `admin_force_expire_order` (a stuck order can only be force-expired
+    /// after `settled_at + RECOVERY_GRACE_SECONDS`).
+    pub settled_at: i64,
 }
 
 impl Market {
