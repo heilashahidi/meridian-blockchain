@@ -3,10 +3,10 @@
 The single home for all Meridian frontend code. Everything web/UI lives here —
 nothing frontend belongs anywhere else in the repo.
 
-> **Status: scoped, not yet built.** This directory is established as the
-> frontend's home. The implementation is planned in
-> [`docs/plans/2026-05-28-003-feat-minimal-frontend-trade-ui-plan.md`](../docs/plans/2026-05-28-003-feat-minimal-frontend-trade-ui-plan.md)
-> and built via that plan. The structure below is the intended layout.
+> **Status: built.** Implements the trade loop from
+> [`docs/plans/2026-05-28-003-feat-minimal-frontend-trade-ui-plan.md`](../docs/plans/2026-05-28-003-feat-minimal-frontend-trade-ui-plan.md):
+> connect wallet, pick market, live book + balances, mint/burn pair, place/cancel
+> limit orders (with on-chain matching), and redeem on a settled market.
 
 ## What it is
 

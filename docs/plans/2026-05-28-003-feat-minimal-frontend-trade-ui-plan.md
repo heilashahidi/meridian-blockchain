@@ -1,7 +1,7 @@
 ---
 date: 2026-05-28
 type: feat
-status: active
+status: completed
 depth: standard
 title: "feat: Minimal frontend trade UI for local testing"
 ---
