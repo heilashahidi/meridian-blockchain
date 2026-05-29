@@ -15,28 +15,22 @@
 // it attempted ended in failure (so cron/CI surfaces a total outage), while a
 // partial failure is reported but does not abort.
 
-// `@coral-xyz/anchor` re-exports BN dynamically from bn.js; under Node ESM the
-// named value export isn't statically resolvable (`import { BN }` throws at
-// runtime — the same quirk handled in scripts/bootstrap-devnet.mjs). So we take
-// the TYPE via a type-only import and the runtime VALUE from the namespace
-// (`anchor.BN ?? anchor.default?.BN`).
-import * as anchor from "@coral-xyz/anchor";
-import type { BN as BNType } from "@coral-xyz/anchor";
 import {
   Connection,
-  PublicKey,
   SystemProgram,
   SYSVAR_RENT_PUBKEY,
 } from "@solana/web3.js";
+import type { PublicKey } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import {
+  BN,
   buildClient,
   configPda,
+  fetchUsdcMint,
   marketPda,
   marketPdas,
   tickerBytes,
-  type MeridianProgram,
 } from "../client.js";
 import {
   computeStrikes,
@@ -47,10 +41,6 @@ import {
   type Ticker,
 } from "../config.js";
 import { alert, log } from "../log.js";
-
-// Runtime BN constructor (see the import note above).
-const BN: typeof BNType = (anchor.BN ??
-  (anchor as { default?: { BN?: typeof BNType } }).default?.BN) as typeof BNType;
 
 // NOTE: `../pyth.js` (and its `@pythnetwork/pyth-solana-receiver` →
 // `@pythnetwork/solana-utils` → `jito-ts` chain) is imported LAZILY inside
@@ -437,18 +427,6 @@ export function makeLiveDeps(cfg: AutomationConfig): CreateStrikesDeps {
   };
 }
 
-/** Read `Config.usdc_mint` once per create (cached on the program's connection). */
-let usdcMintCache: PublicKey | null = null;
-async function fetchUsdcMint(
-  program: MeridianProgram,
-  configAddr: PublicKey,
-): Promise<PublicKey> {
-  if (usdcMintCache) return usdcMintCache;
-  const config = await program.account.config.fetch(configAddr);
-  usdcMintCache = config.usdcMint as PublicKey;
-  return usdcMintCache;
-}
-
 /**
  * CLI entry point wired into `index.ts`'s `create-strikes` subcommand. Loads
  * config, builds live deps, runs the pipeline, and throws if every attempted
@@ -461,13 +439,37 @@ export async function runCreateStrikesJob(
 ): Promise<CreateStrikesReport> {
   const deps = makeLiveDeps(cfg);
   const report = await createStrikes(cfg, deps, options);
+  assertCreateStrikesOutcome(report);
+  return report;
+}
 
+/**
+ * Throw (so the CLI exits non-zero) on a total outage; otherwise return cleanly.
+ * Two distinct outages are surfaced:
+ *   - every attempted ticker failed entirely (planning threw for all), or
+ *   - every ticker planned fine but every strike CREATE failed (and none were
+ *     skipped) — i.e. the run did real work but produced zero markets.
+ * A partial failure is reported via per-ticker alerts and does NOT throw. Pure
+ * over the report so it's unit-testable without a live cluster.
+ */
+export function assertCreateStrikesOutcome(report: CreateStrikesReport): void {
   const attempted = report.results.length;
+  if (attempted === 0) return;
+
   const totalErroredTickers = report.results.filter((r) => r.errored).length;
-  if (attempted > 0 && totalErroredTickers === attempted) {
+  if (totalErroredTickers === attempted) {
+    throw new Error(`create-strikes: all ${attempted} tickers failed entirely`);
+  }
+  // Total CREATE outage: every ticker planned fine (so none `errored`) but every
+  // strike create failed and nothing was skipped — exit non-zero so cron/CI sees
+  // it. (Mirrors settle.ts's totalFailed===attempted intent.)
+  if (
+    report.totalCreated === 0 &&
+    report.totalSkipped === 0 &&
+    report.totalFailed > 0
+  ) {
     throw new Error(
-      `create-strikes: all ${attempted} tickers failed entirely`,
+      "create-strikes: no markets created — all strike creates failed",
     );
   }
-  return report;
 }

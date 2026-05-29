@@ -2,6 +2,7 @@ import { PublicKey } from "@solana/web3.js";
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  assertCreateStrikesOutcome,
   createStrikes,
   createWithRetry,
   planTicker,
@@ -232,6 +233,56 @@ describe("createStrikes: retry/backoff", () => {
       }),
     ).rejects.toThrow(/always fails/);
     expect(deps.createMarket).toHaveBeenCalledTimes(3);
+  });
+});
+
+// ─── total-outage exit (assertCreateStrikesOutcome) ────────────────────────────
+
+describe("createStrikes: total-outage exit code", () => {
+  it("throws when every strike create fails and nothing was created or skipped", async () => {
+    const cfg = testConfig({ tickers: ["AAPL", "NVDA"], strikesPerSide: 1 });
+    const deps = happyDeps({ AAPL: 187, NVDA: 120 });
+    // Tickers plan fine (price reads succeed) but every CREATE fails.
+    deps.createMarket = vi.fn(async () => {
+      throw new Error("simulated RPC failure");
+    });
+
+    const report = await createStrikes(cfg, deps, fastOpts);
+    expect(report.totalCreated).toBe(0);
+    expect(report.totalSkipped).toBe(0);
+    expect(report.totalFailed).toBeGreaterThan(0);
+    // No ticker is `errored` — planning succeeded — so only the create-outage
+    // guard catches this. Asserting the exit path.
+    expect(report.results.every((r) => !r.errored)).toBe(true);
+    expect(() => assertCreateStrikesOutcome(report)).toThrow(
+      /no markets created — all strike creates failed/,
+    );
+  });
+
+  it("does NOT throw on a partial failure (some created, some failed)", async () => {
+    const cfg = testConfig({ tickers: ["AAPL", "NVDA"], strikesPerSide: 1 });
+    const deps = happyDeps({ AAPL: 187, NVDA: 120 });
+    deps.createMarket = vi.fn(async (p: MarketPlan) => {
+      if (p.ticker === "AAPL") throw new Error("simulated RPC failure");
+      return `sig:${p.market.toBase58()}`;
+    });
+
+    const report = await createStrikes(cfg, deps, fastOpts);
+    expect(report.totalCreated).toBeGreaterThan(0);
+    expect(report.totalFailed).toBeGreaterThan(0);
+    expect(() => assertCreateStrikesOutcome(report)).not.toThrow();
+  });
+
+  it("does NOT throw when everything was skipped (all pre-existing)", async () => {
+    const cfg = testConfig({ tickers: ["AAPL"], strikesPerSide: 2 });
+    const deps = happyDeps({ AAPL: 187 });
+    deps.accountExists = vi.fn(async () => true);
+
+    const report = await createStrikes(cfg, deps, fastOpts);
+    expect(report.totalSkipped).toBeGreaterThan(0);
+    expect(report.totalCreated).toBe(0);
+    expect(report.totalFailed).toBe(0);
+    expect(() => assertCreateStrikesOutcome(report)).not.toThrow();
   });
 });
 

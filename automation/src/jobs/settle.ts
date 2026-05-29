@@ -30,21 +30,16 @@
 // `SettleDeps`, so unit tests drive the whole job with mocked deps and a fast
 // injected clock/sleep — the ~15min retry loop never actually sleeps in a test.
 
-// `@coral-xyz/anchor` re-exports BN dynamically from bn.js; under Node ESM the
-// named value export isn't statically resolvable (same quirk as createStrikes.ts
-// and scripts/bootstrap-devnet.mjs). Take the TYPE via a type-only import and the
-// runtime VALUE from the namespace.
-import * as anchor from "@coral-xyz/anchor";
-import type { BN as BNType } from "@coral-xyz/anchor";
 import { Connection, PublicKey } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 
 import {
   buildClient,
   configPda,
+  fetchUsdcMint,
   marketPda,
   marketPdas,
-  type MeridianProgram,
+  SETTLE_WINDOW_SECONDS,
 } from "../client.js";
 import {
   loadAdminKeypair,
@@ -54,10 +49,6 @@ import {
   type Ticker,
 } from "../config.js";
 import { alert, log } from "../log.js";
-
-// Runtime BN constructor (see the import note above).
-const BN: typeof BNType = (anchor.BN ??
-  (anchor as { default?: { BN?: typeof BNType } }).default?.BN) as typeof BNType;
 
 // NOTE: `../pyth.js` (and its heavy `@pythnetwork/pyth-solana-receiver` →
 // `jito-ts` ESM chain) is imported LAZILY inside `makeLiveDeps` only — exactly
@@ -80,7 +71,43 @@ const RETRYABLE_ORACLE_PATTERNS = [
   "OracleVerificationInsufficient",
   // Hermes returned no fresh update at all (off-hours) — same remedy: wait.
   "no parsed price",
+  // A per-call timeout (see withTimeout) — a hung Hermes/RPC socket. Waiting +
+  // retrying may catch a healthy endpoint; otherwise we eventually fall back to
+  // the override. (The withTimeout label below includes this marker.)
+  "timed out",
 ];
+
+// ─── per-call timeout ─────────────────────────────────────────────────────────
+
+/** Default per-call timeout, ms. Override via env `CALL_TIMEOUT_MS`. */
+const DEFAULT_CALL_TIMEOUT_MS = 60_000;
+
+function callTimeoutMs(): number {
+  const raw = process.env.CALL_TIMEOUT_MS;
+  const parsed = raw ? Number(raw) : NaN;
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_CALL_TIMEOUT_MS;
+}
+
+/**
+ * Race `p` against a timer that rejects with `<label>: timed out after <ms>ms`.
+ * Best-effort cancellation: the underlying socket isn't aborted, but the loop is
+ * unblocked so it can advance to the next attempt / eventually the override.
+ * The thrown message contains "timed out", which isRetryableOracleError matches.
+ */
+export function withTimeout<T>(
+  p: Promise<T>,
+  ms: number,
+  label: string,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label}: timed out after ${ms}ms`)),
+      ms,
+    );
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
 
 /** "Already settled" — treat as idempotent success, never an error. */
 const ALREADY_SETTLED_PATTERNS = ["MarketSettled", "already settled"];
@@ -575,19 +602,24 @@ export function makeLiveDeps(cfg: AutomationConfig): SettleDeps {
         // Lazy-load the Pyth helper (jito-ts ESM chain — see top-of-file note).
         const { fetchAndPostLatest, makeHermesClient } = await import("../pyth.js");
         const hermes = makeHermesClient(cfg.hermesUrl);
-        const posted = await fetchAndPostLatest(
-          connection,
-          admin,
-          hermes,
-          m.feedIdHex,
-          receiverProgramId,
+        // Per-call timeout so a hung Hermes/RPC socket can't block the whole job
+        // indefinitely — a timeout is classified RETRYABLE so the loop advances.
+        const posted = await withTimeout(
+          fetchAndPostLatest(
+            connection,
+            admin,
+            hermes,
+            m.feedIdHex,
+            receiverProgramId,
+          ),
+          callTimeoutMs(),
+          "oracle fetch+post",
         );
 
         // Pre-check the publish_time against the on-chain window so an off-hours
         // (stale) update fails fast as a retryable error rather than burning a
         // settle_market round-trip. Window = [expiry, expiry + 900s] (mirrors
-        // settle_market.rs SETTLE_WINDOW_SECONDS).
-        const SETTLE_WINDOW_SECONDS = 900;
+        // settle_market.rs SETTLE_WINDOW_SECONDS — imported from client.ts).
         const pt = posted.parsed.publishTime;
         if (pt < m.expiryUnix || pt > m.expiryUnix + SETTLE_WINDOW_SECONDS) {
           return {
@@ -598,15 +630,21 @@ export function makeLiveDeps(cfg: AutomationConfig): SettleDeps {
           };
         }
 
-        await program.methods
-          .settleMarket()
-          .accountsStrict({
-            caller: wallet.publicKey,
-            config: configAddr,
-            market: m.market,
-            priceUpdate: posted.priceUpdateAccount,
-          })
-          .rpc();
+        // Capture the actual settle tx signature — operators look up the
+        // settlement tx, not the upstream price-post. Timeout-guarded too.
+        const settleSig = await withTimeout(
+          program.methods
+            .settleMarket()
+            .accountsStrict({
+              caller: wallet.publicKey,
+              config: configAddr,
+              market: m.market,
+              priceUpdate: posted.priceUpdateAccount,
+            })
+            .rpc(),
+          callTimeoutMs(),
+          "settle_market rpc",
+        );
 
         const acct = (await program.account.market.fetch(m.market)) as {
           outcome: Record<string, unknown> | null;
@@ -618,7 +656,7 @@ export function makeLiveDeps(cfg: AutomationConfig): SettleDeps {
         return {
           ok: true,
           outcome,
-          signature: posted.signatures[posted.signatures.length - 1] ?? "",
+          signature: settleSig,
         };
       } catch (e) {
         return { ok: false, error: e };
@@ -710,18 +748,6 @@ export function makeLiveDeps(cfg: AutomationConfig): SettleDeps {
       }
     },
   };
-}
-
-/** Read `Config.usdc_mint` once (cached). */
-let usdcMintCache: PublicKey | null = null;
-async function fetchUsdcMint(
-  program: MeridianProgram,
-  configAddr: PublicKey,
-): Promise<PublicKey> {
-  if (usdcMintCache) return usdcMintCache;
-  const config = await program.account.config.fetch(configAddr);
-  usdcMintCache = config.usdcMint as PublicKey;
-  return usdcMintCache;
 }
 
 /**

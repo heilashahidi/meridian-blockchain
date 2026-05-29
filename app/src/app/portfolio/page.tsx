@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 
 import { WalletButton } from "@/components/WalletButton";
@@ -52,61 +52,98 @@ export default function PortfolioPage() {
     [markets],
   );
 
-  const load = useCallback(async () => {
-    if (!walletPubkey || !config) {
-      setEnriched([]);
-      setLoading(false);
-      return;
-    }
-    setLoading(true);
-    try {
-      // Enumerate Yes/No balances + book for every market in parallel.
-      const perMarket = await Promise.all(
-        markets.map(async (m) => {
-          const [balances, book] = await Promise.all([
-            fetchBalances(connection, walletPubkey, config.usdcMint, m),
-            fetchBook(program, m.pubkey).catch(() => null),
-          ]);
-          return { m, balances, book };
-        }),
-      );
+  // Monotonic sequence so an overlapping/stale poll can't overwrite the state a
+  // fresher poll already wrote. Each load() captures its number; only the most
+  // recently *started* load is allowed to commit. The effect's `cancelled` flag
+  // additionally drops any response that lands after unmount.
+  const seqRef = useRef(0);
 
-      const rows: EnrichedHolding[] = [];
-      for (const { m, balances, book } of perMarket) {
-        const sides: { side: PositionSide; amount: bigint }[] = [
-          { side: "yes", amount: balances.yes },
-          { side: "no", amount: balances.no },
-        ];
-        for (const { side, amount } of visiblePositions(
-          sides.map((s) => ({ market: m, side: s.side, amount: s.amount })),
-        )) {
-          const livePrice = sidePriceFromBook(book, side);
-          // Entry-basis approximation (documented in lib/pnl.ts): we lack a
-          // per-fill ledger, so use the current book mid as the cost estimate;
-          // when no mid exists fall back to the exact mint-pair leg basis of
-          // $0.50. The "est." flag in the row marks the mid-based estimate.
-          const entryIsEstimate = livePrice !== null;
-          const entryPrice = livePrice ?? MINT_PAIR_LEG_BASIS;
-          rows.push({
-            holding: { market: m, side, amount },
-            livePrice,
-            entryPrice,
-            entryIsEstimate,
-          });
+  // `isCurrent()` is supplied by the caller (the effect or onRedeem): it returns
+  // false once this load has been superseded or its owner cleaned up, so we
+  // guard every state write with it.
+  const load = useCallback(
+    async (isCurrent: () => boolean) => {
+      if (!walletPubkey || !config) {
+        if (isCurrent()) {
+          setEnriched([]);
+          setLoading(false);
         }
+        return;
       }
-      setEnriched(rows);
-    } finally {
-      setLoading(false);
-    }
-  }, [program, connection, walletPubkey, config, markets]);
+      if (isCurrent()) setLoading(true);
+      try {
+        // Enumerate Yes/No balances + book for every market in parallel.
+        const perMarket = await Promise.all(
+          markets.map(async (m) => {
+            const [balances, book] = await Promise.all([
+              fetchBalances(connection, walletPubkey, config.usdcMint, m),
+              fetchBook(program, m.pubkey).catch(() => null),
+            ]);
+            return { m, balances, book };
+          }),
+        );
+
+        const rows: EnrichedHolding[] = [];
+        for (const { m, balances, book } of perMarket) {
+          const sides: { side: PositionSide; amount: bigint }[] = [
+            { side: "yes", amount: balances.yes },
+            { side: "no", amount: balances.no },
+          ];
+          for (const { side, amount } of visiblePositions(
+            sides.map((s) => ({ market: m, side: s.side, amount: s.amount })),
+          )) {
+            const livePrice = sidePriceFromBook(book, side);
+            // Entry-basis approximation (documented in lib/pnl.ts): we lack a
+            // per-fill ledger, so use the current book mid as the cost estimate;
+            // when no mid exists fall back to the exact mint-pair leg basis of
+            // $0.50. The "est." flag in the row marks the mid-based estimate.
+            const entryIsEstimate = livePrice !== null;
+            const entryPrice = livePrice ?? MINT_PAIR_LEG_BASIS;
+            rows.push({
+              holding: { market: m, side, amount },
+              livePrice,
+              entryPrice,
+              entryIsEstimate,
+            });
+          }
+        }
+        // Drop a stale or post-unmount response rather than clobbering fresher
+        // state.
+        if (isCurrent()) setEnriched(rows);
+      } finally {
+        if (isCurrent()) setLoading(false);
+      }
+    },
+    [program, connection, walletPubkey, config, markets],
+  );
 
   useEffect(() => {
-    void load();
-    const id = setInterval(() => void load(), POLL_MS);
-    return () => clearInterval(id);
+    let cancelled = false;
+    // A poll is "current" only if its sequence is still the latest started and
+    // the effect hasn't been torn down.
+    const start = () => {
+      const mySeq = ++seqRef.current;
+      void load(() => !cancelled && seqRef.current === mySeq);
+    };
+    start();
+    const id = setInterval(start, POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletPubkey, config, marketKeys]);
+
+  // Track unmount for the onRedeem refresh path (which lives outside the polling
+  // effect). Set false on cleanup so a refresh that resolves after unmount is
+  // dropped.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const onRedeem = useCallback(
     async (h: Holding) => {
@@ -123,8 +160,11 @@ export default function PortfolioPage() {
           amount: h.amount,
         }),
       );
-      setRedeemingKey(null);
-      await load();
+      if (mountedRef.current) setRedeemingKey(null);
+      // Refresh as a fresh sequence; guard against unmount + supersession so a
+      // concurrent poll's response can't be clobbered by this stale refresh.
+      const mySeq = ++seqRef.current;
+      await load(() => mountedRef.current && seqRef.current === mySeq);
     },
     [program, connection, walletPubkey, config, tx, load],
   );

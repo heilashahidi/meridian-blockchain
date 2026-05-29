@@ -11,15 +11,37 @@
 // `BookSide32` so Anchor can construct + decode the book. Identical to
 // app/src/lib/idlPatch.ts — kept local so automation/ is self-contained.
 
+import * as anchor from "@coral-xyz/anchor";
 import { AnchorProvider, Program, Wallet } from "@coral-xyz/anchor";
+import type { BN as BNType } from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 
 import rawIdl from "./idl/meridian.json" with { type: "json" };
-import type { Meridian } from "./idl/meridian";
+import type { Meridian } from "./idl/meridian.js";
 
 export const PROGRAM_ID = new PublicKey(
   "6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX",
 );
+
+// ─── on-chain constant mirrors ─────────────────────────────────────────────
+//
+// These MUST stay in sync with the program. The jobs (U4/U5) reference them to
+// pre-check the oracle window / reason about the override grace off-chain.
+
+// MUST match programs/meridian/src/instructions/settle_market.rs (SETTLE_WINDOW_SECONDS)
+export const SETTLE_WINDOW_SECONDS = 900;
+
+// MUST match programs/meridian/src/instructions/admin.rs (EMERGENCY_GRACE_SECONDS)
+export const EMERGENCY_GRACE_SECONDS = 86_400;
+
+// ─── runtime BN constructor ─────────────────────────────────────────────────
+//
+// `@coral-xyz/anchor` re-exports BN dynamically from bn.js; under Node ESM the
+// named value export isn't statically resolvable (`import { BN }` throws at
+// runtime). Take the TYPE via a type-only import and the runtime VALUE from the
+// namespace. Shared by the jobs so the workaround lives in one place.
+export const BN: typeof BNType = (anchor.BN ??
+  (anchor as { default?: { BN?: typeof BNType } }).default?.BN) as typeof BNType;
 
 // ─── in-memory IDL patch (see app/src/lib/idlPatch.ts) ─────────────────────
 
@@ -180,4 +202,22 @@ export function marketPdas(market: PublicKey) {
     usdcEscrow: usdcEscrowPda(market),
     yesEscrow: yesEscrowPda(market),
   };
+}
+
+// ─── shared on-chain reads ──────────────────────────────────────────────────
+
+/**
+ * Read `Config.usdc_mint` once (cached process-wide). Shared by the jobs so the
+ * fetch + cache lives in one place. The mint is immutable for a deployment, so a
+ * single read is safe to cache for the life of the process.
+ */
+let usdcMintCache: PublicKey | null = null;
+export async function fetchUsdcMint(
+  program: MeridianProgram,
+  configAddr: PublicKey,
+): Promise<PublicKey> {
+  if (usdcMintCache) return usdcMintCache;
+  const config = await program.account.config.fetch(configAddr);
+  usdcMintCache = config.usdcMint as PublicKey;
+  return usdcMintCache;
 }
