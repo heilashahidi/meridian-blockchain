@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { fromUsdc, shortKey, tickerToString, toUsdc } from "./format";
+import { fromUsdc, shortKey, tickerToString, toUsdc } from "../format";
 
 describe("usdc conversion", () => {
   it("formats whole and fractional base units", () => {

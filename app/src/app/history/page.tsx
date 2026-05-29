@@ -11,7 +11,7 @@ import {
   type HistoryAction,
   type HistoryEntry,
 } from "@/lib/history";
-import { useMeridian } from "@/lib/MeridianContext";
+import { useMeridian } from "@/hooks/MeridianContext";
 
 const SOLSCAN_BASE = "https://solscan.io/tx";
 

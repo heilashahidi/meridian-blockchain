@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { parseHermesPrices, hermesLatestUrl } from "./prices";
-import { FEED_ID_BY_TICKER, MAG7_TICKERS } from "./feeds";
+import { parseHermesPrices, hermesLatestUrl } from "../prices";
+import { FEED_ID_BY_TICKER, MAG7_TICKERS } from "../feeds";
 
 // A trimmed, real-shaped Hermes `/v2/updates/price/latest?parsed=true` payload:
 // AAPL at $311.076 (expo -5), MSFT at $443.2055.

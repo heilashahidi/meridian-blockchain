@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { isLocalUrl } from "./program";
+import { isLocalUrl } from "../program";
 
 describe("isLocalUrl", () => {
   it("is true for local validator URLs", () => {

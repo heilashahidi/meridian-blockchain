@@ -5,8 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import { MAG7 } from "@/lib/feeds";
 import { fetchBook, type BookView } from "@/lib/market";
 import { groupActiveByTicker } from "@/lib/marketsView";
-import { useMeridian } from "@/lib/MeridianContext";
-import { usePrices } from "@/lib/prices";
+import { useMeridian } from "@/hooks/MeridianContext";
+import { usePrices } from "@/hooks/usePrices";
 import { StockTile } from "@/components/StockTile";
 
 const BOOK_POLL_MS = 6000;

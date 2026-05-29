@@ -23,9 +23,9 @@ import {
   type BookView,
   type ConfigView,
   type MarketView,
-} from "./market";
-import { configPda } from "./pdas";
-import { getProgram, getReadOnlyProgram, type MeridianProgram } from "./program";
+} from "@/lib/market";
+import { configPda } from "@/lib/pdas";
+import { getProgram, getReadOnlyProgram, type MeridianProgram } from "@/lib/program";
 
 const POLL_MS = 3000;
 

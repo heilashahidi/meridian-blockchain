@@ -6,11 +6,11 @@ import {
 import { Connection } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { burnPair, mintPair } from "./actions";
-import { loadLocalKeypair, reachable } from "./liveTestEnv";
-import { fetchBalances, fetchConfig, listMarkets } from "./market";
-import { configPda } from "./pdas";
-import { getProgram, RPC_URL } from "./program";
+import { burnPair, mintPair } from "../actions";
+import { loadLocalKeypair, reachable } from "../liveTestEnv";
+import { fetchBalances, fetchConfig, listMarkets } from "../market";
+import { configPda } from "../pdas";
+import { getProgram, RPC_URL } from "../program";
 
 // Drives mint_pair + burn_pair through the same `actions.ts` the UI uses,
 // against a running local validator with a funded keypair. Skips when the

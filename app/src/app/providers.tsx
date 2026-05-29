@@ -19,7 +19,7 @@ import {
 } from "@solana/wallet-adapter-wallets";
 
 import { RPC_URL } from "@/lib/program";
-import { MeridianProvider } from "@/lib/MeridianContext";
+import { MeridianProvider } from "@/hooks/MeridianContext";
 
 import "@solana/wallet-adapter-react-ui/styles.css";
 

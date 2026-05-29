@@ -15,8 +15,8 @@ import {
 } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { buyNo, mintPair, placeLimitOrder, redeem, sellNo } from "./actions";
-import { loadLocalKeypair, reachable } from "./liveTestEnv";
+import { buyNo, mintPair, placeLimitOrder, redeem, sellNo } from "../actions";
+import { loadLocalKeypair, reachable } from "../liveTestEnv";
 import {
   fetchBalances,
   fetchBook,
@@ -24,10 +24,10 @@ import {
   fetchMarket,
   winningMint,
   type MarketView,
-} from "./market";
-import { SIDE_ASK, SIDE_BID } from "./matching";
-import { configPda, marketPda, marketPdas, tickerBytes } from "./pdas";
-import { getProgram, type MeridianProgram, RPC_URL } from "./program";
+} from "../market";
+import { SIDE_ASK, SIDE_BID } from "../matching";
+import { configPda, marketPda, marketPdas, tickerBytes } from "../pdas";
+import { getProgram, type MeridianProgram, RPC_URL } from "../program";
 
 // ---------------------------------------------------------------------------
 // Multi-user integration test (PRD §338) — mirrors `place.live.test.ts`'s

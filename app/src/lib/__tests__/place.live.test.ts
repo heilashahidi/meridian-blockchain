@@ -17,18 +17,18 @@ import {
   cancelOrder,
   mintPair,
   placeLimitOrder,
-} from "./actions";
-import { loadLocalKeypair, reachable } from "./liveTestEnv";
+} from "../actions";
+import { loadLocalKeypair, reachable } from "../liveTestEnv";
 import {
   fetchBalances,
   fetchBook,
   fetchConfig,
   fetchMarket,
   type MarketView,
-} from "./market";
-import { SIDE_ASK, SIDE_BID } from "./matching";
-import { configPda, marketPda, marketPdas, tickerBytes } from "./pdas";
-import { getProgram, type MeridianProgram, RPC_URL } from "./program";
+} from "../market";
+import { SIDE_ASK, SIDE_BID } from "../matching";
+import { configPda, marketPda, marketPdas, tickerBytes } from "../pdas";
+import { getProgram, type MeridianProgram, RPC_URL } from "../program";
 
 // Create a fresh, unexpired market so place/cancel/cross is deterministic and
 // independent of how long the validator has been up. Expiry varies per run so

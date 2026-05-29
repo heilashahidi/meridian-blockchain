@@ -4,8 +4,8 @@ import { useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 
 import { redeem } from "@/lib/actions";
-import { useMeridian } from "@/lib/MeridianContext";
-import { useTx } from "@/lib/useTx";
+import { useMeridian } from "@/hooks/MeridianContext";
+import { useTx } from "@/hooks/useTx";
 
 export function RedeemPanel() {
   const { connection } = useConnection();

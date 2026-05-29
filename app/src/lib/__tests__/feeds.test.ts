@@ -6,7 +6,7 @@ import {
   FEED_ID_BY_TICKER,
   TICKER_BY_FEED_ID,
   tickerForFeedId,
-} from "./feeds";
+} from "../feeds";
 
 describe("MAG7 feed map", () => {
   it("has exactly the seven expected tickers", () => {

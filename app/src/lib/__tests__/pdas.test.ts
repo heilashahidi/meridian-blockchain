@@ -7,7 +7,7 @@ import {
   marketPda,
   marketPdas,
   tickerBytes,
-} from "./pdas";
+} from "../pdas";
 
 describe("tickerBytes", () => {
   it("right-zero-pads to 8 bytes", () => {

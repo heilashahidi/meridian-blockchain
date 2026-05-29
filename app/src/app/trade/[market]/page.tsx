@@ -9,10 +9,10 @@ import { PositionGuard } from "@/components/PositionGuard";
 import { RedeemPanel } from "@/components/RedeemPanel";
 import { TradePanel } from "@/components/TradePanel";
 import { tickerToString } from "@/lib/format";
-import { useMeridian } from "@/lib/MeridianContext";
+import { useMeridian } from "@/hooks/MeridianContext";
 import { distanceToStrike } from "@/lib/marketStats";
 import { yesMidFraction, strikeDollars } from "@/lib/marketsView";
-import { usePrices } from "@/lib/prices";
+import { usePrices } from "@/hooks/usePrices";
 
 function usd(n: number): string {
   return n.toLocaleString("en-US", {

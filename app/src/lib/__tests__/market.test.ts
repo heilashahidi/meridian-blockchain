@@ -1,7 +1,7 @@
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { winningMint, type MarketView, type Outcome } from "./market";
+import { winningMint, type MarketView, type Outcome } from "../market";
 
 const yes = Keypair.generate().publicKey;
 const no = Keypair.generate().publicKey;

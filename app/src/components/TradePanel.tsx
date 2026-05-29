@@ -4,7 +4,7 @@ import { useMemo, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 
 import { buyNo, placeLimitOrder, placeMarketOrder, sellNo } from "@/lib/actions";
-import { useMeridian } from "@/lib/MeridianContext";
+import { useMeridian } from "@/hooks/MeridianContext";
 import { planFills, SIDE_BID } from "@/lib/matching";
 import { payoffSummary } from "@/lib/marketStats";
 import { tickerToString } from "@/lib/format";
@@ -15,7 +15,7 @@ import {
   resolveTradePath,
   type TradeAction,
 } from "@/lib/tradePaths";
-import { useTx } from "@/lib/useTx";
+import { useTx } from "@/hooks/useTx";
 
 // Microunit <-> dollar helpers local to the panel. Prices are entered in
 // dollars ($0.00–$1.00); qty is whole shares.

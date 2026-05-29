@@ -1,10 +1,10 @@
 import { Connection } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import { reachable } from "./liveTestEnv";
-import { fetchBalances, fetchBook, fetchConfig, listMarkets } from "./market";
-import { configPda } from "./pdas";
-import { getReadOnlyProgram, RPC_URL } from "./program";
+import { reachable } from "../liveTestEnv";
+import { fetchBalances, fetchBook, fetchConfig, listMarkets } from "../market";
+import { configPda } from "../pdas";
+import { getReadOnlyProgram, RPC_URL } from "../program";
 
 // Integration check against a running local validator. Skips automatically when
 // the validator is unreachable so it never fails in CI / offline runs. When the

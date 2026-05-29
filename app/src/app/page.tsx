@@ -3,8 +3,9 @@
 import Link from "next/link";
 
 import { MAG7 } from "@/lib/feeds";
-import { priceAgeLabel, usePrices, type PriceData } from "@/lib/prices";
-import { useMeridian } from "@/lib/MeridianContext";
+import { priceAgeLabel, type PriceData } from "@/lib/prices";
+import { usePrices } from "@/hooks/usePrices";
+import { useMeridian } from "@/hooks/MeridianContext";
 import { WalletButton } from "@/components/WalletButton";
 
 /** One stock in the live MAG7 ticker strip. */

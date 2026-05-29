@@ -7,7 +7,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { WalletButton } from "@/components/WalletButton";
-import { useMeridian } from "@/lib/MeridianContext";
+import { useMeridian } from "@/hooks/MeridianContext";
 
 interface NavLink {
   href: string;

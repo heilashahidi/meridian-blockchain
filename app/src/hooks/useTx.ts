@@ -2,8 +2,8 @@
 
 import { useCallback, useState } from "react";
 
-import { useMeridian } from "./MeridianContext";
-import { formatError } from "./tx";
+import { useMeridian } from "@/hooks/MeridianContext";
+import { formatError } from "@/lib/tx";
 
 export interface TxRunner {
   busy: boolean;

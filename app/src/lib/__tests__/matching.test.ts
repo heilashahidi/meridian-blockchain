@@ -2,14 +2,14 @@ import { getAssociatedTokenAddressSync } from "@solana/spl-token";
 import { Keypair, PublicKey } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
-import type { BookLevel } from "./market";
+import type { BookLevel } from "../market";
 import {
   makerPayoutAtas,
   MAX_FILLS_PER_TX,
   planFills,
   SIDE_ASK,
   SIDE_BID,
-} from "./matching";
+} from "../matching";
 
 const USDC = Keypair.generate().publicKey;
 const YES = Keypair.generate().publicKey;

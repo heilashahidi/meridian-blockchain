@@ -8,7 +8,7 @@ import { WalletButton } from "@/components/WalletButton";
 import { PositionRow } from "@/components/PositionRow";
 import { redeem } from "@/lib/actions";
 import { fetchBalances, fetchBook, type BookView } from "@/lib/market";
-import { useMeridian } from "@/lib/MeridianContext";
+import { useMeridian } from "@/hooks/MeridianContext";
 import { noFromYes, yesMidFraction } from "@/lib/marketsView";
 import {
   MINT_PAIR_LEG_BASIS,
@@ -21,7 +21,7 @@ import {
   type Holding,
   type PositionSide,
 } from "@/lib/pnl";
-import { useTx } from "@/lib/useTx";
+import { useTx } from "@/hooks/useTx";
 
 const POLL_MS = 8000;
 
