@@ -5,10 +5,13 @@
   "private": true,
   "description": "One-off off-chain scripts for the Meridian on-chain CLOB. Not part of the production lifecycle automation service (separate workstream).",
   "scripts": {
-    "bootstrap:devnet": "node bootstrap-devnet.mjs"
+    "bootstrap:devnet": "node bootstrap-devnet.mjs",
+    "post-pyth-update": "node post-pyth-update.mjs"
   },
   "dependencies": {
     "@coral-xyz/anchor": "^0.32.1",
+    "@pythnetwork/hermes-client": "^3.1.0",
+    "@pythnetwork/pyth-solana-receiver": "^0.16.0",
     "@solana/spl-token": "^0.4.8",
     "@solana/web3.js": "^1.95.3"
   }

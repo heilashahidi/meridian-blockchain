@@ -18,7 +18,9 @@
 //!
 //! `settle_market` requires `clock.unix_timestamp >= market.expiry_unix`
 //! and an oracle `publish_time` inside the post-expiry window
-//! `[expiry, expiry + SETTLE_WINDOW_SECONDS]` (`SETTLE_WINDOW_SECONDS = 30`).
+//! `[expiry, expiry + SETTLE_WINDOW_SECONDS]` (`SETTLE_WINDOW_SECONDS = 900`,
+//! i.e. 15 minutes — widened from the original 30s in U2 so real Pyth
+//! settlement that lands minutes after a 4PM expiry still settles).
 //! LiteSVM's default `Clock` has a small unix_timestamp; we advance it via
 //! `set_clock_unix_ts` before each settle so the expiry + window checks are
 //! meaningful.
@@ -592,11 +594,11 @@ fn settle_fails_before_expiry() {
 #[test]
 fn settle_fails_stale_oracle() {
     let mut env = Env::new(1, 10_000);
-    let ts = EXPIRY_UNIX + 1000;
+    let ts = EXPIRY_UNIX + 7200;
     env.advance_clock(ts);
-    // publish_time is 880s after expiry → far outside the 30s settlement
+    // publish_time is 3600s (1h) after expiry → far outside the 900s settlement
     // window, so settle is rejected (OracleStale).
-    env.plant_pyth(dollars_to_pyth(700), 1_000, EXPIRY_UNIX + 880);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, EXPIRY_UNIX + 3600);
     let err = env.settle().expect_err("stale oracle must fail");
     let s = format!("{err:?}");
     assert!(
@@ -624,12 +626,12 @@ fn settle_fails_price_before_expiry() {
 
 #[test]
 fn settle_fails_price_after_window() {
-    // A price published more than SETTLE_WINDOW_SECONDS (30) after expiry is
+    // A price published more than SETTLE_WINDOW_SECONDS (900) after expiry is
     // rejected. This is the upper bound that bounds the cherry-pick window
     // regardless of how late settle is called.
     let mut env = Env::new(1, 10_000);
-    env.advance_clock(EXPIRY_UNIX + 100);
-    env.plant_pyth(dollars_to_pyth(700), 1_000, EXPIRY_UNIX + 45);
+    env.advance_clock(EXPIRY_UNIX + 2000);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, EXPIRY_UNIX + 1200);
     let err = env.settle().expect_err("post-window price must fail");
     let s = format!("{err:?}");
     assert!(
@@ -640,8 +642,10 @@ fn settle_fails_price_after_window() {
 
 #[test]
 fn settle_at_window_edge_succeeds() {
-    // publish_time exactly at expiry + SETTLE_WINDOW_SECONDS (30) is the last
-    // accepted instant — boundary is inclusive.
+    // A publish_time 30s after expiry is comfortably inside the widened 900s
+    // window and settles. (The exact upper edge — expiry + 900 — is pinned by
+    // settle_at_new_window_edge_succeeds; one second past it is rejected by
+    // settle_fails_price_after_new_window.)
     let mut env = Env::new(1, 10_000);
     let ts = EXPIRY_UNIX + 30;
     env.advance_clock(ts);
@@ -652,6 +656,85 @@ fn settle_at_window_edge_succeeds() {
         Some(meridian::state::Outcome::YesWins),
         "edge-of-window settle should record YesWins"
     );
+}
+
+#[test]
+fn settle_minutes_after_expiry_within_window_succeeds() {
+    // U2: real Pyth settlement lands MINUTES after a 4PM expiry (the receiver
+    // post + Hermes round-trip take time). A price published ~5 minutes after
+    // expiry must settle, which is the whole point of widening
+    // SETTLE_WINDOW_SECONDS from the demo-shaped 30s to a post-expiry window.
+    //
+    // With the old 30s window this fails (OracleStale, upper-bound reject);
+    // with the widened window (>= 5 minutes) it settles.
+    let mut env = Env::new(1, 10_000);
+    let publish = EXPIRY_UNIX + 5 * 60; // 5 minutes after expiry
+    let ts = publish + 2; // settle called shortly after the update lands
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, publish);
+    env.settle()
+        .expect("price published minutes after expiry (within window) must settle");
+    let m = env.market();
+    assert!(m.settled, "market settled from a minutes-late Pyth update");
+    assert_eq!(m.outcome, Some(meridian::state::Outcome::YesWins));
+}
+
+#[test]
+fn settle_minutes_after_expiry_within_window_no_wins() {
+    // NoWins mirror of settle_minutes_after_expiry_within_window_succeeds: a
+    // price BELOW strike ($550 vs strike $680) published a few minutes after
+    // expiry (within the 900s post-expiry window) must settle as NoWins.
+    let mut env = Env::new(1, 10_000);
+    let publish = EXPIRY_UNIX + 5 * 60; // 5 minutes after expiry
+    let ts = publish + 2; // settle called shortly after the update lands
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(550), 1_000, publish);
+    env.settle()
+        .expect("below-strike price minutes after expiry (within window) must settle");
+    let m = env.market();
+    assert!(m.settled, "market settled from a minutes-late Pyth update");
+    assert_eq!(m.outcome, Some(meridian::state::Outcome::NoWins));
+}
+
+#[test]
+fn settle_at_new_window_edge_succeeds() {
+    // The last accepted instant is exactly `expiry + SETTLE_WINDOW_SECONDS`.
+    // SETTLE_WINDOW_SECONDS = 900 (15 min); mirror that here so the boundary is
+    // pinned. A price published one second later is rejected
+    // (see settle_fails_price_after_new_window).
+    let mut env = Env::new(1, 10_000);
+    let publish = EXPIRY_UNIX + 900; // == expiry + SETTLE_WINDOW_SECONDS
+    let ts = publish + 5;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, publish);
+    env.settle()
+        .expect("publish_time at the widened window edge must settle");
+    assert_eq!(
+        env.market().outcome,
+        Some(meridian::state::Outcome::YesWins),
+        "edge-of-window settle should record YesWins"
+    );
+}
+
+#[test]
+fn settle_fails_price_after_new_window() {
+    // Just past the widened window (expiry + 900 + 1s) the update is rejected,
+    // bounding a permissionless caller's cherry-pick window regardless of how
+    // late settle is invoked. This is the upper bound of the new window.
+    let mut env = Env::new(1, 10_000);
+    let publish = EXPIRY_UNIX + 900 + 1; // 1s past the window edge
+    let ts = publish + 5;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, publish);
+    let err = env
+        .settle()
+        .expect_err("price published past the widened window must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("OracleStale") || s.contains("custom"),
+        "expected OracleStale, got {s}"
+    );
+    assert!(!env.market().settled, "market must stay unsettled");
 }
 
 #[test]

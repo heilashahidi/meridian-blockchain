@@ -1,11 +1,21 @@
 import type { Metadata } from "next";
+import { Inter } from "next/font/google";
 
+import { Nav } from "@/components/Nav";
 import { Providers } from "./providers";
 import "./globals.css";
 
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-inter",
+  display: "swap",
+});
+
 export const metadata: Metadata = {
-  title: "Meridian — trade",
-  description: "Minimal trade-loop UI for the Meridian on-chain CLOB",
+  title: "Meridian — MAG7 binary options",
+  description:
+    "Non-custodial MAG7 binary-options trading on Solana — live prices, an " +
+    "on-chain order book, and $1 settlement.",
 };
 
 export default function RootLayout({
@@ -14,9 +24,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="en" className={inter.variable}>
       <body>
-        <Providers>{children}</Providers>
+        <Providers>
+          <Nav />
+          {children}
+        </Providers>
       </body>
     </html>
   );

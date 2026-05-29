@@ -8,7 +8,7 @@
 # PriceUpdateV2) can't run against a real feed. We fake it: forge a byte-exact
 # PriceUpdateV2 with an arbitrary owner and load it via
 # `solana-test-validator --account`. settle_market pins the settlement price to
-# [expiry, expiry + 30s], so we forge the oracle with publish_time = T and
+# [expiry, expiry + 900s], so we forge the oracle with publish_time = T and
 # create the demo market with expiry = T - 1 (create_strike_market doesn't
 # clock-check expiry). The injected publish_time then lands in the window and we
 # settle immediately — no waiting, no freshness race.
@@ -38,7 +38,7 @@ pkill -f solana-test-validator 2>/dev/null || true
 sleep 1
 rm -f "$ORACLE_KEYPAIR" # fresh oracle address each run
 # One shared timestamp: the oracle's publish_time AND the anchor for the demo
-# market's expiry (settle_market pins the price to [expiry, expiry+30s], so the
+# market's expiry (settle_market pins the price to [expiry, expiry+900s], so the
 # two must agree). settle-redeem-demo.mjs sets expiry = PUBLISH_TIME - 1.
 PUBLISH_TIME="$(date +%s)"
 # Forge with price $700 vs strike $680 -> YesWins.

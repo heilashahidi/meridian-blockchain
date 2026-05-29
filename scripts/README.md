@@ -8,7 +8,41 @@ lifecycle automation service — that's a separate workstream (see plan
 
 | File | Purpose |
 |---|---|
-| `bootstrap-devnet.mjs` | Initialize `Config` + create one strike market on devnet. Idempotent. |
+| `local-dev.sh` | Boot a local validator, deploy the program, create a local USDC mint, bootstrap `Config` + a market, and write `app/.env.local`. The validator + bootstrap half of `make dev`. |
+| `deploy-devnet.sh` | Deploy the program to devnet. Preflights the deploy wallet's SOL balance and refuses a partial deploy if underfunded. The `make devnet-deploy` entry point. |
+| `bootstrap-devnet.mjs` | Initialize `Config` + create one strike market. Idempotent. Cluster-agnostic via `--rpc` (used for both localnet and devnet). |
+| `lifecycle-demo.mjs` | Exercise create → mint → trade → cancel → burn end-to-end against a running cluster. The `make demo` entry point. `--rpc` selects the cluster. |
+| `forge-pyth-account.mjs` | Forge a byte-exact `PriceUpdateV2` genesis fixture so `settle_market` can run on a vanilla localnet (no real Pyth). |
+| `settle-redeem-demo.{sh,mjs}` | Drive `settle_market` + `redeem` on a dedicated localnet using a forged Pyth account. |
+
+## One-command setup (Makefile)
+
+These scripts are normally driven from the repo-root `Makefile`:
+
+```bash
+make dev            # local validator + bootstrap + app dev server (runs local-dev.sh)
+make devnet-deploy  # deploy to devnet, balance-preflighted (runs deploy-devnet.sh)
+make demo           # create → mint → trade lifecycle (runs lifecycle-demo.mjs)
+```
+
+`make demo` targets devnet by default; override with `make demo DEMO_RPC=http://127.0.0.1:8899`
+to run against the local validator started by `make dev`.
+
+### Devnet deploy + lifecycle (manual equivalent)
+
+```bash
+anchor build
+make devnet-deploy        # fails fast with a fund-this-address message if < 8 SOL
+
+# Bootstrap Config + a market on devnet. Use a USDC mint you control (so the
+# demo can mint test USDC), e.g. spl-token create-token --decimals 6 --url devnet.
+cd scripts && node bootstrap-devnet.mjs \
+  --usdc-mint <your-devnet-usdc-mint> \
+  --pyth-receiver rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ \
+  --rpc https://api.devnet.solana.com
+
+make demo                 # runs lifecycle-demo.mjs against devnet
+```
 
 ## Prerequisites
 

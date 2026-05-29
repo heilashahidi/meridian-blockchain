@@ -28,3 +28,4 @@ node_modules/
 
 # Personal interview/eval prep — never push to the shared remote
 docs/INTERVIEW-PREP.md
+.gstack/

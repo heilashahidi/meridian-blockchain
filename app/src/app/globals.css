@@ -1,12 +1,46 @@
+/* Meridian design system — see docs/DESIGN.md.
+   Direction: approachable prediction-market (Polymarket/Kalshi clarity +
+   Coinbase/Phantom polish). */
+
 :root {
-  --bg: #0b0e14;
-  --panel: #141923;
-  --border: #232a38;
-  --text: #e6e9ef;
-  --muted: #8b93a7;
-  --accent: #5b8cff;
-  --bid: #2bd47d;
-  --ask: #ff6b6b;
+  /* Surfaces — refined deep slate, not pure black */
+  --bg: #0a0c11;
+  --bg-grad: radial-gradient(1200px 600px at 70% -10%, #161a2e 0%, #0a0c11 55%);
+  --surface: #161a24;
+  --surface-2: #1c212d;
+  --surface-3: #232838;
+  --border: #262c3a;
+  --border-strong: #343b4e;
+
+  /* Text */
+  --text: #eef1f6;
+  --text-dim: #aab2c5;
+  --muted: #6c7488;
+
+  /* Brand / accent */
+  --accent: #6d6afe;
+  --accent-2: #9b8cff;
+  --accent-dim: rgba(109, 106, 254, 0.16);
+
+  /* Outcome semantics */
+  --yes: #2bd47d;
+  --yes-dim: rgba(43, 212, 125, 0.14);
+  --no: #ff5c79;
+  --no-dim: rgba(255, 92, 121, 0.14);
+  --warn: #ffb547;
+
+  /* Back-compat aliases (existing components reference these) */
+  --panel: var(--surface);
+  --bid: var(--yes);
+  --ask: var(--no);
+
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 20px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -12px rgba(0, 0, 0, 0.6);
+  --ring: 0 0 0 3px rgba(109, 106, 254, 0.35);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
 }
 
 * {
@@ -18,54 +52,256 @@ body {
   margin: 0;
   padding: 0;
   background: var(--bg);
+  background-image: var(--bg-grad);
+  background-attachment: fixed;
   color: var(--text);
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-family: var(--font-sans);
   font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
 a {
   color: var(--accent);
+  text-decoration: none;
+}
+a:hover {
+  color: var(--accent-2);
 }
 
 button {
   font: inherit;
 }
 
+h1,
+h2,
+h3 {
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin: 0;
+}
+
+/* ── Surfaces ─────────────────────────────────────────────── */
 .panel {
-  background: var(--panel);
+  background: linear-gradient(180deg, var(--surface), var(--surface) 60%, #14171f);
   border: 1px solid var(--border);
-  border-radius: 10px;
-  padding: 16px;
+  border-radius: var(--radius);
+  padding: 18px;
+  box-shadow: var(--shadow);
 }
 
 .muted {
   color: var(--muted);
 }
-
+.dim {
+  color: var(--text-dim);
+}
 .mono {
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
+/* ── Buttons ──────────────────────────────────────────────── */
 .btn {
   background: var(--accent);
   color: #fff;
   border: none;
-  border-radius: 8px;
-  padding: 8px 14px;
+  border-radius: var(--radius-sm);
+  padding: 10px 16px;
+  font-weight: 600;
   cursor: pointer;
+  transition: filter 0.14s ease, transform 0.06s ease, box-shadow 0.14s ease;
 }
-
+.btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+.btn:focus-visible {
+  outline: none;
+  box-shadow: var(--ring);
+}
 .btn:disabled {
-  opacity: 0.5;
+  opacity: 0.45;
   cursor: not-allowed;
 }
+.btn-yes {
+  background: var(--yes);
+  color: #06231a;
+}
+.btn-no {
+  background: var(--no);
+  color: #2a0810;
+}
+.btn-ghost {
+  background: var(--surface-2);
+  color: var(--text);
+  border: 1px solid var(--border-strong);
+}
 
+/* segmented toggle (Buy Yes / Buy No / Sell …) */
+.seg {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.14s ease;
+}
+.seg:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+.seg:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.seg[data-active="yes"] {
+  border-color: var(--yes);
+  color: var(--yes);
+  background: var(--yes-dim);
+}
+.seg[data-active="no"] {
+  border-color: var(--no);
+  color: var(--no);
+  background: var(--no-dim);
+}
+
+/* ── Inputs ───────────────────────────────────────────────── */
 input,
-select {
+select,
+.input {
   background: #0e131c;
   border: 1px solid var(--border);
   color: var(--text);
-  border-radius: 8px;
-  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+input:focus,
+select:focus,
+.input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: var(--ring);
+}
+
+/* ── Pills / badges ───────────────────────────────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  color: var(--text-dim);
+}
+.pill-yes {
+  color: var(--yes);
+  border-color: var(--yes);
+  background: var(--yes-dim);
+}
+.pill-no {
+  color: var(--no);
+  border-color: var(--no);
+  background: var(--no-dim);
+}
+
+/* ── Stat (label + value) ─────────────────────────────────── */
+.stat {
+  display: grid;
+  gap: 2px;
+}
+.stat-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.stat-value {
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Implied-probability bar ──────────────────────────────── */
+.prob-bar {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  background: var(--no);
+  overflow: hidden;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+}
+.prob-bar > .prob-yes {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--yes);
+  transition: width 0.3s ease;
+}
+
+/* ── Order-book depth row ─────────────────────────────────── */
+.depth-row {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 8px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  border-radius: 6px;
+}
+.depth-row > .depth-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  border-radius: 6px;
+  opacity: 0.16;
+  z-index: 0;
+}
+.depth-row > span {
+  position: relative;
+  z-index: 1;
+}
+
+/* price flash on change */
+@keyframes flash-yes {
+  from {
+    background: var(--yes-dim);
+  }
+  to {
+    background: transparent;
+  }
+}
+@keyframes flash-no {
+  from {
+    background: var(--no-dim);
+  }
+  to {
+    background: transparent;
+  }
+}
+
+/* countdown urgency pulse (<5 min) */
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
 }
