@@ -10,5 +10,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+    // The `*.live.test.ts` integration tests share one local validator and one
+    // keypair; running files in parallel races their balance assertions. Serialize
+    // file execution so they don't interfere. The pure tests are fast regardless.
+    fileParallelism: false,
   },
 });
