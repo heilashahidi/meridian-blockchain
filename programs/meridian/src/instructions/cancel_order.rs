@@ -206,14 +206,8 @@ pub fn cancel_order_handler(ctx: Context<CancelOrder>, args: CancelOrderArgs) ->
         debug_assert_eq!(removed.owner, entry.owner);
 
         let refund_amount = match side {
-            Side::Bid => {
-                // Refund: qty * price USDC.
-                let amt = (removed.qty as u128)
-                    .checked_mul(removed.key.price() as u128)
-                    .ok_or(MeridianError::InvalidAmount)?;
-                require!(amt <= u64::MAX as u128, MeridianError::InvalidAmount);
-                amt as u64
-            }
+            // Refund: qty * price USDC.
+            Side::Bid => crate::token_util::bid_notional(removed.qty, removed.key.price())?,
             Side::Ask => removed.qty,
         };
         (side, refund_amount)

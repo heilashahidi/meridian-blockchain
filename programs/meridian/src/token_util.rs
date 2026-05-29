@@ -11,6 +11,21 @@
 use anchor_lang::prelude::*;
 use anchor_spl::associated_token::get_associated_token_address;
 
+use crate::error::MeridianError;
+
+/// USDC notional for a resting **bid** of `qty` tokens at `price`: `qty * price`
+/// in USDC microunits. Computes in `u128` and bounds the result to `u64`, the
+/// shared math for every escrow path that refunds or recovers bid collateral
+/// (`cancel_order`, `settle_sweep`, `admin_force_expire_order`). The ask side
+/// is trivial (`qty` Yes) and needs no helper.
+pub(crate) fn bid_notional(qty: u64, price: u64) -> Result<u64> {
+    let amt = (qty as u128)
+        .checked_mul(price as u128)
+        .ok_or(MeridianError::InvalidAmount)?;
+    require!(amt <= u64::MAX as u128, MeridianError::InvalidAmount);
+    Ok(amt as u64)
+}
+
 /// True iff `info` is a live SPL token account that can actually receive a
 /// transfer right now: its data is the fixed token-account length and the
 /// account-state byte is `Initialized` (1), not `Uninitialized`/closed (0)

@@ -167,4 +167,17 @@ pub enum MeridianError {
     /// collateral's mint.
     #[msg("Recovery destination is not the treasury's canonical associated token account.")]
     InvalidTreasuryAccount,
+
+    /// `admin_force_expire_order` was called while `Config.treasury` still equals
+    /// `Config.admin` (its default). Recovering user collateral to the admin's
+    /// own account is a self-deal; operators must rotate `set_treasury` to a
+    /// dedicated custody account first.
+    #[msg("Treasury is not configured (still equals admin); call set_treasury first.")]
+    TreasuryNotConfigured,
+
+    /// The treasury's canonical ATA supplied to `admin_force_expire_order` is not
+    /// receivable (uninitialized / frozen / not SPL-owned). The admin must
+    /// create/unfreeze it before recovery can transfer collateral into it.
+    #[msg("Treasury associated token account is not receivable; create or unfreeze it first.")]
+    TreasuryAtaNotReceivable,
 }

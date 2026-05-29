@@ -89,7 +89,7 @@ pub mod meridian {
     /// Admin-only: flip the global `config.paused` kill switch. `true`
     /// pauses every user-facing instruction; `false` resumes. The only
     /// way to toggle the flag that `initialize_config` sets to `false`.
-    pub fn set_paused(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
+    pub fn set_paused(ctx: Context<AdminConfig>, paused: bool) -> Result<()> {
         instructions::admin::set_paused_handler(ctx, paused)
     }
 
@@ -98,7 +98,7 @@ pub mod meridian {
     /// `true` at `initialize_config`; relax on devnet if only `Partial`
     /// updates are available.
     pub fn set_require_full_verification(
-        ctx: Context<SetPaused>,
+        ctx: Context<AdminConfig>,
         require_full: bool,
     ) -> Result<()> {
         instructions::admin::set_require_full_verification_handler(ctx, require_full)
@@ -106,7 +106,7 @@ pub mod meridian {
 
     /// Admin-only: rotate the treasury authority that receives collateral
     /// recovered from permanently-stuck orders via `admin_force_expire_order`.
-    pub fn set_treasury(ctx: Context<SetPaused>, new_treasury: Pubkey) -> Result<()> {
+    pub fn set_treasury(ctx: Context<AdminConfig>, new_treasury: Pubkey) -> Result<()> {
         instructions::admin::set_treasury_handler(ctx, new_treasury)
     }
 

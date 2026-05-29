@@ -233,13 +233,7 @@ pub fn settle_sweep_handler<'info>(
 
         // Compute refund amount.
         let refund_amount: u64 = match side {
-            Side::Bid => {
-                let amt = (entry.qty as u128)
-                    .checked_mul(entry.key.price() as u128)
-                    .ok_or(MeridianError::InvalidAmount)?;
-                require!(amt <= u64::MAX as u128, MeridianError::InvalidAmount);
-                amt as u64
-            }
+            Side::Bid => crate::token_util::bid_notional(entry.qty, entry.key.price())?,
             Side::Ask => entry.qty,
         };
 

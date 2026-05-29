@@ -142,6 +142,9 @@ pub struct AdminForceExpireOrderArgs {
 pub struct StuckOrderRecovered {
     pub market: Pubkey,
     pub owner: Pubkey,
+    /// The recovered collateral's mint (USDC for a Bid, the market's Yes mint
+    /// for an Ask) — so an off-chain custody ledger needn't re-derive it.
+    pub mint: Pubkey,
     /// 0 = Bid (USDC recovered), 1 = Ask (Yes recovered).
     pub side: u8,
     pub price: u64,
@@ -155,6 +158,24 @@ pub fn admin_force_expire_order_handler(
 ) -> Result<()> {
     require!(!ctx.accounts.config.paused, MeridianError::ProgramPaused);
     require!(ctx.accounts.market.settled, MeridianError::MarketNotSettled);
+
+    // Treasury must be a DISTINCT custody account, not the admin itself. The
+    // treasury defaults to `admin` at `initialize_config`; recovering user
+    // collateral to the admin's own ATA is a self-deal. Force operators to
+    // rotate `set_treasury` to a dedicated account before any recovery.
+    require!(
+        ctx.accounts.config.treasury != ctx.accounts.config.admin,
+        MeridianError::TreasuryNotConfigured
+    );
+
+    // Defense-in-depth: a settled market always has `settled_at` stamped by
+    // both settle paths, but guard against a `settled_at == 0` market (e.g. a
+    // future zero-filling migration of legacy settled markets) whose grace
+    // window would otherwise resolve to 1970 and open instantly.
+    require!(
+        ctx.accounts.market.settled_at > 0,
+        MeridianError::InvariantBroken
+    );
 
     // Grace gate: measured from settlement, not expiry, so a delayed settlement
     // doesn't open the recovery window early. Overflow is only reachable for a
@@ -191,7 +212,7 @@ pub fn admin_force_expire_order_handler(
     let treasury = ctx.accounts.config.treasury;
 
     // ---- Locate, prove stuck, validate destination — all BEFORE mutation. ----
-    let (owner_bytes, order_qty, refund_amount) = {
+    let (owner_bytes, order_qty, recovery_amount) = {
         let mut book = ctx.accounts.book.load_mut()?;
 
         let side_ref = match side {
@@ -218,7 +239,10 @@ pub fn admin_force_expire_order_handler(
             MeridianError::OrderNotStuck
         );
 
-        // Destination must be the configured treasury's canonical ATA.
+        // Destination must be the configured treasury's canonical ATA, and it
+        // must be receivable RIGHT NOW — the transfer CPI below would otherwise
+        // abort the whole tx with an opaque SPL error. A typed error tells the
+        // operator to create/unfreeze the treasury ATA first.
         require!(
             is_canonical_ata(
                 &ctx.accounts.treasury_ata.to_account_info(),
@@ -226,6 +250,10 @@ pub fn admin_force_expire_order_handler(
                 &payout_mint
             ),
             MeridianError::InvalidTreasuryAccount
+        );
+        require!(
+            token_account_receivable(&ctx.accounts.treasury_ata.to_account_info()),
+            MeridianError::TreasuryAtaNotReceivable
         );
 
         // All guards passed — remove the order.
@@ -239,17 +267,14 @@ pub fn admin_force_expire_order_handler(
         debug_assert_eq!(removed.qty, entry.qty);
         debug_assert_eq!(removed.owner, entry.owner);
 
-        let refund_amount = match side {
-            Side::Bid => {
-                let amt = (removed.qty as u128)
-                    .checked_mul(removed.key.price() as u128)
-                    .ok_or(MeridianError::InvalidAmount)?;
-                require!(amt <= u64::MAX as u128, MeridianError::InvalidAmount);
-                amt as u64
-            }
+        // Collateral moving to the treasury (NOT refunded to the owner — that
+        // is the whole point of recovery). Bid escrowed USDC = qty*price; Ask
+        // escrowed Yes = qty.
+        let recovery_amount = match side {
+            Side::Bid => crate::token_util::bid_notional(removed.qty, removed.key.price())?,
             Side::Ask => removed.qty,
         };
-        (entry.owner, removed.qty, refund_amount)
+        (entry.owner, removed.qty, recovery_amount)
     };
 
     // ---- Transfer the recovered collateral to the treasury. ----
@@ -274,22 +299,23 @@ pub fn admin_force_expire_order_handler(
             },
             signer_seeds,
         ),
-        refund_amount,
+        recovery_amount,
     )?;
 
     emit!(StuckOrderRecovered {
         market: market_key,
         owner: Pubkey::new_from_array(owner_bytes),
+        mint: payout_mint,
         side: args.side,
         price: args.price,
         qty: order_qty,
-        amount: refund_amount,
+        amount: recovery_amount,
     });
     msg!(
         "admin_force_expire_order: recovered side={} price={} amount={} to treasury",
         args.side,
         args.price,
-        refund_amount,
+        recovery_amount,
     );
 
     Ok(())

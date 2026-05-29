@@ -30,7 +30,7 @@ pub const EMERGENCY_GRACE_SECONDS: i64 = 86_400;
 pub const RECOVERY_GRACE_SECONDS: i64 = 30 * 86_400;
 
 #[derive(Accounts)]
-pub struct SetPaused<'info> {
+pub struct AdminConfig<'info> {
     /// Admin authority. Must equal `config.admin`.
     pub admin: Signer<'info>,
 
@@ -45,18 +45,18 @@ pub struct SetPaused<'info> {
     pub config: Account<'info, Config>,
 }
 
-pub fn set_paused_handler(ctx: Context<SetPaused>, paused: bool) -> Result<()> {
+pub fn set_paused_handler(ctx: Context<AdminConfig>, paused: bool) -> Result<()> {
     ctx.accounts.config.paused = paused;
     msg!("set_paused: paused={}", paused);
     Ok(())
 }
 
 /// Admin-only: toggle the Pyth `VerificationLevel::Full` requirement on
-/// `settle_market`. Reuses the [`SetPaused`] account context (same admin +
+/// `settle_market`. Reuses the [`AdminConfig`] account context (same admin +
 /// Config check). Default is `true` (set at `initialize_config`); operators
 /// relax it on devnet where only `Partial` updates are posted.
 pub fn set_require_full_verification_handler(
-    ctx: Context<SetPaused>,
+    ctx: Context<AdminConfig>,
     require_full: bool,
 ) -> Result<()> {
     ctx.accounts.config.require_full_verification = require_full;
@@ -66,10 +66,10 @@ pub fn set_require_full_verification_handler(
 
 /// Admin-only: rotate the treasury authority that receives collateral recovered
 /// from permanently-stuck orders (`admin_force_expire_order`). Reuses the
-/// [`SetPaused`] account context (same admin + Config check). Defaults to the
+/// [`AdminConfig`] account context (same admin + Config check). Defaults to the
 /// admin at `initialize_config`; operators point it at a dedicated custody
 /// account before using the recovery path.
-pub fn set_treasury_handler(ctx: Context<SetPaused>, new_treasury: Pubkey) -> Result<()> {
+pub fn set_treasury_handler(ctx: Context<AdminConfig>, new_treasury: Pubkey) -> Result<()> {
     ctx.accounts.config.treasury = new_treasury;
     msg!("set_treasury: treasury={}", new_treasury);
     Ok(())
