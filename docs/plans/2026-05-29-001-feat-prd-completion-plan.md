@@ -1,7 +1,7 @@
 ---
 date: 2026-05-29
 type: feat
-status: active
+status: completed
 depth: deep
 title: "feat: Complete Meridian to a PRD-passing submission (devnet, frontend, automation)"
 ---
