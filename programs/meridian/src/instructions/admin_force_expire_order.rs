@@ -237,6 +237,7 @@ pub fn admin_force_expire_order_handler(
             .cancel_by_id(side, id)
             .map_err(|_| MeridianError::OrderNotFound)?;
         debug_assert_eq!(removed.qty, entry.qty);
+        debug_assert_eq!(removed.owner, entry.owner);
 
         let refund_amount = match side {
             Side::Bid => {

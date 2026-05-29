@@ -29,6 +29,10 @@
 //!       on a settled market and refunds escrowed collateral (R15b).
 //!     * [`redeem`] — winning-token holders burn for $1 USDC; no
 //!       deadline.
+//!   * Post-ship hardening:
+//!     * [`admin_force_expire_order`] — admin recovery of a permanently-stuck
+//!       order's collateral to the treasury after settlement + a 30-day grace,
+//!       provable-stuck only.
 
 pub mod admin;
 pub mod admin_force_expire_order;
