@@ -1,0 +1,31 @@
+{
+  "name": "meridian-automation",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Daily automation service for the Meridian on-chain CLOB: create-strikes (morning) and settle (after close) jobs.",
+  "type": "module",
+  "bin": {
+    "meridian-automation": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "start": "node --import tsx src/index.ts",
+    "create-strikes": "node --import tsx src/index.ts create-strikes",
+    "settle": "node --import tsx src/index.ts settle",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@coral-xyz/anchor": "^0.32.1",
+    "@pythnetwork/hermes-client": "^3.1.0",
+    "@pythnetwork/pyth-solana-receiver": "^0.16.0",
+    "@solana/spl-token": "^0.4.8",
+    "@solana/web3.js": "^1.95.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.5.3",
+    "vitest": "^2.0.5"
+  }
+}
