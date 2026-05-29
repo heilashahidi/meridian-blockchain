@@ -12,6 +12,7 @@
 
 import { loadConfig } from "./config.js";
 import { log } from "./log.js";
+import { runCreateStrikesJob } from "./jobs/createStrikes.js";
 
 const USAGE = `meridian-automation — daily jobs for the Meridian on-chain CLOB
 
@@ -25,6 +26,8 @@ Commands:
 
 Options:
   -h, --help        Show this help and exit.
+      --dry-run     (create-strikes) Plan + diff against existing markets but
+                    make no on-chain writes.
 
 Environment:
   RPC_URL               Solana RPC (default https://api.devnet.solana.com)
@@ -41,14 +44,9 @@ Environment:
 type Command = "create-strikes" | "settle";
 
 /**
- * Placeholder dispatchers. U4 replaces `runCreateStrikes` with an import of
- * src/jobs/createStrikes.ts; U5 replaces `runSettle` with src/jobs/settle.ts.
- * The seam: both take the loaded config and return a promise.
+ * Job dispatchers. `create-strikes` is implemented (U4) — it delegates to the
+ * job in src/jobs/createStrikes.ts. `settle` remains a stub until U5.
  */
-async function runCreateStrikes(): Promise<void> {
-  throw new Error("create-strikes is not implemented yet (U4)");
-}
-
 async function runSettle(): Promise<void> {
   throw new Error("settle is not implemented yet (U5)");
 }
@@ -61,29 +59,33 @@ export function printHelp(): void {
 export function parseArgs(argv: string[]): {
   command: Command | null;
   help: boolean;
+  dryRun: boolean;
   unknown?: string;
 } {
   const args = argv.slice(2);
   let help = false;
+  let dryRun = false;
   let command: Command | null = null;
   let unknown: string | undefined;
 
   for (const a of args) {
     if (a === "-h" || a === "--help") {
       help = true;
+    } else if (a === "--dry-run") {
+      dryRun = true;
     } else if (a === "create-strikes" || a === "settle") {
       command = a;
     } else if (!a.startsWith("-") && command === null) {
       unknown = a;
     }
-    // Job-specific flags are parsed inside the jobs (U4/U5); ignore here.
+    // Other job-specific flags are ignored here.
   }
 
-  return { command, help, unknown };
+  return { command, help, dryRun, unknown };
 }
 
 export async function main(argv: string[] = process.argv): Promise<number> {
-  const { command, help, unknown } = parseArgs(argv);
+  const { command, help, dryRun, unknown } = parseArgs(argv);
 
   if (help || (command === null && unknown === undefined)) {
     printHelp();
@@ -104,7 +106,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
   });
 
   try {
-    if (command === "create-strikes") await runCreateStrikes();
+    if (command === "create-strikes") await runCreateStrikesJob(cfg, { dryRun });
     else if (command === "settle") await runSettle();
     log.info("job complete", { command });
     return 0;
