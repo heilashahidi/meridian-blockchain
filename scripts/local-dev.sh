@@ -35,6 +35,13 @@ LEDGER="${LEDGER:-/tmp/meridian-dev-ledger}"
 VALIDATOR_LOG="${VALIDATOR_LOG:-/tmp/meridian-dev-validator.log}"
 KEYPAIR="${KEYPAIR:-$HOME/.config/solana/id.json}"
 PROGRAM_ID="6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX"
+# Pin the gossip + dynamic port range off Solana's defaults (gossip starts at
+# 8000). The 8000-range collides with unrelated local services on many dev
+# machines (e.g. a Python dev server on :8000), which makes the validator panic
+# with "gossip_addr bind_to port 8000: Address already in use". Mirror
+# settle-redeem-demo.sh and bind 8010-8040 instead. Override if those clash too.
+GOSSIP_PORT="${GOSSIP_PORT:-8010}"
+DYNAMIC_PORT_RANGE="${DYNAMIC_PORT_RANGE:-8010-8040}"
 
 bar() { printf '════════ %s ════════\n' "$1"; }
 
@@ -60,6 +67,7 @@ sleep 1
 rm -rf "$LEDGER"
 solana-test-validator --reset --quiet \
   --ledger "$LEDGER" \
+  --gossip-port "$GOSSIP_PORT" --dynamic-port-range "$DYNAMIC_PORT_RANGE" \
   --rpc-port 8899 >"$VALIDATOR_LOG" 2>&1 &
 VALIDATOR_PID=$!
 echo "validator pid : $VALIDATOR_PID   (logs: $VALIDATOR_LOG)"
