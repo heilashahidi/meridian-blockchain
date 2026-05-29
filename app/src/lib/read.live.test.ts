@@ -1,6 +1,7 @@
 import { Connection } from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
+import { reachable } from "./liveTestEnv";
 import { fetchBalances, fetchBook, fetchConfig, listMarkets } from "./market";
 import { configPda } from "./pdas";
 import { getReadOnlyProgram, RPC_URL } from "./program";
@@ -10,18 +11,6 @@ import { getReadOnlyProgram, RPC_URL } from "./program";
 // validator is up (and bootstrapped), it exercises the codified read layer
 // end-to-end — the U2 "scratch call logs the bootstrapped market and book"
 // verification, made repeatable.
-async function reachable(): Promise<boolean> {
-  try {
-    const got = await Promise.race([
-      new Connection(RPC_URL, "confirmed").getVersion(),
-      new Promise((_, rej) => setTimeout(() => rej(new Error("timeout")), 1500)),
-    ]);
-    return Boolean(got);
-  } catch {
-    return false;
-  }
-}
-
 const isUp = await reachable();
 const maybe = isUp ? it : it.skip;
 

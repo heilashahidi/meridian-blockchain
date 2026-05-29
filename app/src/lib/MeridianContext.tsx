@@ -101,10 +101,25 @@ export function MeridianProvider({ children }: { children: React.ReactNode }) {
     void loadConfigAndMarkets();
   }, [loadConfigAndMarkets]);
 
+  // Latest selection, read inside async fetches to discard results that arrive
+  // after the user switched markets (in-flight-request guard).
+  const selectedRef = useRef<PublicKey | null>(selected);
+  selectedRef.current = selected;
+
+  // Switching markets clears the prior market's data immediately so a stale
+  // book/balances never render under the newly-selected market.
+  const selectMarket = useCallback((m: PublicKey | null) => {
+    setSelected(m);
+    setMarket(null);
+    setBook(null);
+    setBalances(null);
+  }, []);
+
   // Selected-market data (market + book + balances). Stored in a ref so the
   // poll interval always calls the latest closure without re-subscribing.
   const refreshSelected = useCallback(async () => {
-    if (!selected || !config) {
+    const target = selected;
+    if (!target || !config) {
       setMarket(null);
       setBook(null);
       setBalances(null);
@@ -112,18 +127,17 @@ export function MeridianProvider({ children }: { children: React.ReactNode }) {
     }
     try {
       const [mv, bk] = await Promise.all([
-        fetchMarket(program, selected),
-        fetchBook(program, selected),
+        fetchMarket(program, target),
+        fetchBook(program, target),
       ]);
+      const bal = walletPubkey
+        ? await fetchBalances(connection, walletPubkey, config.usdcMint, mv)
+        : null;
+      // Discard if the user switched markets while this fetch was in flight.
+      if (!selectedRef.current || !selectedRef.current.equals(target)) return;
       setMarket(mv);
       setBook(bk);
-      if (walletPubkey) {
-        setBalances(
-          await fetchBalances(connection, walletPubkey, config.usdcMint, mv),
-        );
-      } else {
-        setBalances(null);
-      }
+      setBalances(bal);
     } catch {
       // transient RPC hiccup — keep last good data
     }
@@ -142,10 +156,11 @@ export function MeridianProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(id);
   }, [selected]);
 
+  // After a tx, refresh the selected market's data only — config and the market
+  // set don't change in response to a trade, so don't re-scan them every time.
   const refresh = useCallback(async () => {
-    await loadConfigAndMarkets();
     await refreshRef.current();
-  }, [loadConfigAndMarkets]);
+  }, []);
 
   const value: MeridianState = {
     program,
@@ -155,7 +170,7 @@ export function MeridianProvider({ children }: { children: React.ReactNode }) {
     configError,
     markets,
     selected,
-    selectMarket: setSelected,
+    selectMarket,
     market,
     book,
     balances,

@@ -51,7 +51,6 @@ export function PlaceOrderPanel() {
         side,
         price: priceN,
         qty: qtyN,
-        book: book!,
       });
       const verb = side === SIDE_BID ? "Bid" : "Ask";
       return `${verb} ${qtyN} @ ${priceN} placed`;

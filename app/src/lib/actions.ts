@@ -5,7 +5,7 @@ import {
 } from "@solana/spl-token";
 import { Connection, PublicKey } from "@solana/web3.js";
 
-import { winningMint, type BookView, type MarketView } from "./market";
+import { fetchBook, winningMint, type MarketView } from "./market";
 import { planFills, remainingAccountsFor, SIDE_BID } from "./matching";
 import {
   bookPda,
@@ -97,13 +97,14 @@ interface PlaceArgs {
   side: number; // 0 = Bid, 1 = Ask
   price: bigint | number;
   qty: bigint | number;
-  /** Current book — used to plan which makers a crossing order will hit. */
-  book: BookView;
 }
 
 export async function placeLimitOrder(args: PlaceArgs): Promise<string> {
-  const { program, connection, market, usdcMint, user, side, price, qty, book } =
-    args;
+  const { program, connection, market, usdcMint, user, side, price, qty } = args;
+  // Plan fills against a freshly-fetched book, not a possibly-stale UI snapshot:
+  // the maker ATAs in remaining_accounts must match the makers the on-chain
+  // match actually hits, or the tx reverts with BadMakerAccount.
+  const book = await fetchBook(program, market.pubkey);
   const opposing = side === SIDE_BID ? book.asks : book.bids;
   const plan = planFills(opposing, side, BigInt(price), BigInt(qty));
   const remaining = remainingAccountsFor(

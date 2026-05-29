@@ -81,6 +81,7 @@ export function remainingAccountsFor(
   usdcMint: PublicKey,
   yesMint: PublicKey,
 ): AccountMeta[] {
+  // Single source of truth for the payout-ATA rule (makerPayoutAtas).
   return makerPayoutAtas(fills, side, usdcMint, yesMint).map((pubkey) => ({
     pubkey,
     isSigner: false,

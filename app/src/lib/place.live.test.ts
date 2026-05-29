@@ -1,10 +1,16 @@
-import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
-
-import { Wallet } from "@coral-xyz/anchor";
-import { getOrCreateAssociatedTokenAccount, mintTo } from "@solana/spl-token";
-import { Connection, Keypair } from "@solana/web3.js";
+import { BN, Wallet } from "@coral-xyz/anchor";
+import {
+  getOrCreateAssociatedTokenAccount,
+  mintTo,
+  TOKEN_PROGRAM_ID,
+} from "@solana/spl-token";
+import {
+  Connection,
+  Keypair,
+  PublicKey,
+  SystemProgram,
+  SYSVAR_RENT_PUBKEY,
+} from "@solana/web3.js";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -12,32 +18,56 @@ import {
   mintPair,
   placeLimitOrder,
 } from "./actions";
-import { fetchBalances, fetchBook, fetchConfig, listMarkets } from "./market";
+import { loadLocalKeypair, reachable } from "./liveTestEnv";
+import {
+  fetchBalances,
+  fetchBook,
+  fetchConfig,
+  fetchMarket,
+  type MarketView,
+} from "./market";
 import { SIDE_ASK, SIDE_BID } from "./matching";
-import { configPda } from "./pdas";
-import { getProgram, RPC_URL } from "./program";
+import { configPda, marketPda, marketPdas, tickerBytes } from "./pdas";
+import { getProgram, type MeridianProgram, RPC_URL } from "./program";
 
-function loadLocalKeypair(): Keypair | null {
-  try {
-    const path = join(homedir(), ".config/solana/id.json");
-    return Keypair.fromSecretKey(
-      Uint8Array.from(JSON.parse(readFileSync(path, "utf8"))),
-    );
-  } catch {
-    return null;
-  }
-}
-async function reachable(): Promise<boolean> {
-  try {
-    return Boolean(
-      await Promise.race([
-        new Connection(RPC_URL, "confirmed").getVersion(),
-        new Promise((_, rej) => setTimeout(() => rej(new Error("t")), 1500)),
-      ]),
-    );
-  } catch {
-    return false;
-  }
+// Create a fresh, unexpired market so place/cancel/cross is deterministic and
+// independent of how long the validator has been up. Expiry varies per run so
+// repeated runs don't collide on the `init` market PDA.
+async function createFreshMarket(
+  program: MeridianProgram,
+  admin: Keypair,
+  usdcMint: PublicKey,
+): Promise<MarketView> {
+  const ticker = "QA";
+  const strike = 680_000_000;
+  const expiry = Math.floor(Date.now() / 1000) + 3600; // +1h
+  const market = marketPda(ticker, strike, expiry);
+  const p = marketPdas(market);
+  const accounts = {
+    admin: admin.publicKey,
+    config: configPda(),
+    market,
+    book: p.book,
+    yesMint: p.yesMint,
+    noMint: p.noMint,
+    mintAuthority: p.mintAuthority,
+    usdcEscrow: p.usdcEscrow,
+    yesEscrow: p.yesEscrow,
+    usdcMint,
+    tokenProgram: TOKEN_PROGRAM_ID,
+    systemProgram: SystemProgram.programId,
+    rent: SYSVAR_RENT_PUBKEY,
+  };
+  await program.methods
+    .createStrikeMarket({
+      ticker: Array.from(tickerBytes(ticker)),
+      strikePrice: new BN(strike),
+      expiryUnix: new BN(expiry),
+      pythFeedId: Array.from({ length: 32 }, () => 1),
+    })
+    .accounts(accounts)
+    .rpc();
+  return fetchMarket(program, market);
 }
 
 const kp = loadLocalKeypair();
@@ -53,8 +83,7 @@ describe("place / cancel / cross (live validator)", () => {
       const user = kp!.publicKey;
 
       const cfg = await fetchConfig(program, configPda());
-      const market = (await listMarkets(program)).find((m) => !m.settled);
-      if (!market) return;
+      const market = await createFreshMarket(program, kp!, cfg.usdcMint);
 
       // Fund USDC + acquire Yes inventory.
       const ata = await getOrCreateAssociatedTokenAccount(
@@ -83,13 +112,7 @@ describe("place / cancel / cross (live validator)", () => {
 
       // --- A) resting ask: high price so it cannot cross, then cancel ---
       const yesBefore = (await fetchBalances(connection, user, cfg.usdcMint, market)).yes;
-      await placeLimitOrder({
-        ...base,
-        side: SIDE_ASK,
-        price: 1000,
-        qty: 200,
-        book: await fetchBook(program, market.pubkey),
-      });
+      await placeLimitOrder({ ...base, side: SIDE_ASK, price: 1000, qty: 200 });
 
       const afterAsk = await fetchBook(program, market.pubkey);
       const myAsk = afterAsk.asks.find(
@@ -106,13 +129,7 @@ describe("place / cancel / cross (live validator)", () => {
       expect(yesAfterCancel).toBe(yesBefore); // fully refunded
 
       // --- B) self-cross: rest an ask @40, cross it with a bid @50 ---
-      await placeLimitOrder({
-        ...base,
-        side: SIDE_ASK,
-        price: 40,
-        qty: 200,
-        book: await fetchBook(program, market.pubkey),
-      });
+      await placeLimitOrder({ ...base, side: SIDE_ASK, price: 40, qty: 200 });
       const beforeCross = await fetchBook(program, market.pubkey);
       expect(
         beforeCross.asks.some((l) => l.owner.equals(user) && l.price === 40n),
@@ -120,13 +137,7 @@ describe("place / cancel / cross (live validator)", () => {
 
       const yesPreCross = (await fetchBalances(connection, user, cfg.usdcMint, market)).yes;
       // Bid @50 crosses the ask @40 — exercises remaining_accounts on-chain.
-      await placeLimitOrder({
-        ...base,
-        side: SIDE_BID,
-        price: 50,
-        qty: 200,
-        book: beforeCross,
-      });
+      await placeLimitOrder({ ...base, side: SIDE_BID, price: 50, qty: 200 });
 
       const afterCross = await fetchBook(program, market.pubkey);
       // ask consumed, bid fully filled (no residual rests)
