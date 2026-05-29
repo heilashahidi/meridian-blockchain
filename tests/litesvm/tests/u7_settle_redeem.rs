@@ -549,6 +549,33 @@ impl Env {
         self.advance_clock(settled_at + RECOVERY_GRACE_SECONDS + 1);
     }
 
+    /// Raw-mutate the Market's `settled_at` field to `new_settled_at`,
+    /// preserving every other field. Mirrors `force_paused`'s
+    /// load → modify → re-serialize → set_account pattern (Market is a
+    /// Borsh `#[account]`, so the whole struct round-trips through
+    /// `try_serialize`). Used to construct a `settled == true` but
+    /// `settled_at == 0` market that the on-chain `InvariantBroken` guard
+    /// must reject.
+    fn force_settled_at(&mut self, new_settled_at: i64) {
+        let market: meridian::state::Market = load_anchor_account(&self.fx.svm, &self.market_pda);
+        let updated = meridian::state::Market {
+            settled_at: new_settled_at,
+            ..market
+        };
+        let mut account = self
+            .fx
+            .svm
+            .get_account(&self.market_pda)
+            .expect("market exists");
+        let mut buf: Vec<u8> = Vec::new();
+        updated.try_serialize(&mut buf).expect("serialize Market");
+        account.data = buf;
+        self.fx
+            .svm
+            .set_account(self.market_pda, account)
+            .expect("set_account settled_at");
+    }
+
     /// Build + submit `admin_force_expire_order`, signed by `signer`. The
     /// `owner_ata`/`treasury_ata` are supplied explicitly so error-path tests
     /// can pass deliberately-wrong accounts. Accounts are in the ABI order
@@ -2126,4 +2153,265 @@ fn force_expire_full_drain_to_empty_book() {
     );
     // user0 reclaimed their 500 via the normal sweep.
     assert_eq!(env.balances(0).usdc, 10_000, "u0 fully refunded via sweep");
+}
+
+/// Treasury == admin (default, never rotated): even with a settled, post-grace,
+/// genuinely-stuck order, recovery must REJECT with `TreasuryNotConfigured`
+/// until `set_treasury` rotates the treasury to a distinct account. Book +
+/// escrow unchanged.
+#[test]
+fn force_expire_treasury_equals_admin_rejected() {
+    let mut env = Env::new(1, 10_000);
+    let admin = env.fx.admin.insecure_clone();
+    let usdc_mint = env.fx.usdc_mint.pubkey();
+
+    env.place_limit(0, /* Bid */ 0, 40, 10, &[]).expect("bid posts");
+    let (price, seq) = env.sole_bid_key();
+    assert_eq!(env.usdc_escrow_amount(), 400, "bid collateral escrowed");
+
+    // Treasury still defaults to the admin — do NOT call set_treasury.
+    assert_eq!(env.config().treasury, admin.pubkey(), "treasury defaults to admin");
+    // Provide admin's canonical USDC ATA as the (would-be) treasury ATA; it
+    // is irrelevant because the treasury==admin guard fires first.
+    let admin_usdc = create_canonical_ata(&mut env.fx.svm, &admin.pubkey(), &usdc_mint);
+
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle ok");
+    // Owner ATA genuinely stuck (frozen) so the ONLY remaining objection is
+    // the unconfigured treasury.
+    freeze_token_account(&mut env.fx.svm, &env.users[0].usdc);
+    env.advance_past_recovery_grace();
+
+    let escrow_pre = env.usdc_escrow_amount();
+    let bids_pre = env.book().bids.len();
+    let err = env
+        .force_expire(&admin, 0, price, seq, env.users[0].usdc, admin_usdc)
+        .expect_err("force-expire with treasury==admin must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("TreasuryNotConfigured") || s.contains("custom"),
+        "expected TreasuryNotConfigured, got {s}"
+    );
+    assert_eq!(env.usdc_escrow_amount(), escrow_pre, "escrow unchanged");
+    assert_eq!(env.book().bids.len(), bids_pre, "book unchanged");
+    assert_eq!(read_token_account(&env.fx.svm, &admin_usdc).amount, 0, "treasury untouched");
+}
+
+/// Treasury rotated to a distinct account, but its canonical ATA is FROZEN
+/// (not receivable): recovery must REJECT with `TreasuryAtaNotReceivable`.
+/// Book + escrow unchanged.
+#[test]
+fn force_expire_treasury_ata_not_receivable_rejected() {
+    let mut env = Env::new(1, 10_000);
+    let admin = env.fx.admin.insecure_clone();
+    let usdc_mint = env.fx.usdc_mint.pubkey();
+
+    env.place_limit(0, /* Bid */ 0, 40, 10, &[]).expect("bid posts");
+    let (price, seq) = env.sole_bid_key();
+    assert_eq!(env.usdc_escrow_amount(), 400, "bid collateral escrowed");
+
+    // Rotate treasury to a distinct custody account, create its canonical ATA,
+    // then FREEZE it → live address but not receivable.
+    let treasury = Keypair::new().pubkey();
+    env.set_treasury(&admin, treasury).expect("set treasury");
+    let treasury_usdc = create_canonical_ata(&mut env.fx.svm, &treasury, &usdc_mint);
+    freeze_token_account(&mut env.fx.svm, &treasury_usdc);
+
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle ok");
+    freeze_token_account(&mut env.fx.svm, &env.users[0].usdc);
+    env.advance_past_recovery_grace();
+
+    let escrow_pre = env.usdc_escrow_amount();
+    let bids_pre = env.book().bids.len();
+    let err = env
+        .force_expire(&admin, 0, price, seq, env.users[0].usdc, treasury_usdc)
+        .expect_err("force-expire into a frozen treasury ATA must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("TreasuryAtaNotReceivable") || s.contains("custom"),
+        "expected TreasuryAtaNotReceivable, got {s}"
+    );
+    assert_eq!(env.usdc_escrow_amount(), escrow_pre, "escrow unchanged");
+    assert_eq!(env.book().bids.len(), bids_pre, "book unchanged");
+    assert_eq!(read_token_account(&env.fx.svm, &treasury_usdc).amount, 0, "treasury untouched");
+}
+
+/// ProgramPaused gate: a fully-valid recovery setup, then `force_paused()` →
+/// recovery must REJECT with `ProgramPaused`. Book + escrow unchanged.
+#[test]
+fn force_expire_when_paused_rejected() {
+    let mut env = Env::new(1, 10_000);
+    let admin = env.fx.admin.insecure_clone();
+    let usdc_mint = env.fx.usdc_mint.pubkey();
+
+    env.place_limit(0, /* Bid */ 0, 40, 10, &[]).expect("bid posts");
+    let (price, seq) = env.sole_bid_key();
+
+    let treasury = Keypair::new().pubkey();
+    env.set_treasury(&admin, treasury).expect("set treasury");
+    let treasury_usdc = create_canonical_ata(&mut env.fx.svm, &treasury, &usdc_mint);
+
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle ok");
+    freeze_token_account(&mut env.fx.svm, &env.users[0].usdc);
+    env.advance_past_recovery_grace();
+
+    // Everything is valid; pausing must block the recovery.
+    env.force_paused();
+
+    let escrow_pre = env.usdc_escrow_amount();
+    let bids_pre = env.book().bids.len();
+    let err = env
+        .force_expire(&admin, 0, price, seq, env.users[0].usdc, treasury_usdc)
+        .expect_err("force-expire on a paused program must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("ProgramPaused") || s.contains("custom"),
+        "expected ProgramPaused, got {s}"
+    );
+    assert_eq!(env.usdc_escrow_amount(), escrow_pre, "escrow unchanged");
+    assert_eq!(env.book().bids.len(), bids_pre, "book unchanged");
+    assert_eq!(read_token_account(&env.fx.svm, &treasury_usdc).amount, 0, "treasury untouched");
+}
+
+/// Double force-expire → OrderNotFound: a successful recovery, then a second
+/// recovery with the SAME (side, price, seq) must fail `OrderNotFound` (the
+/// order was already removed). A fresh blockhash makes the second tx distinct
+/// so it reaches the handler instead of being deduped as AlreadyProcessed.
+#[test]
+fn force_expire_double_order_not_found() {
+    let mut env = Env::new(1, 10_000);
+    let admin = env.fx.admin.insecure_clone();
+    let usdc_mint = env.fx.usdc_mint.pubkey();
+
+    env.place_limit(0, /* Bid */ 0, 40, 10, &[]).expect("bid posts");
+    let (price, seq) = env.sole_bid_key();
+    assert_eq!(env.usdc_escrow_amount(), 400, "bid collateral escrowed");
+
+    let treasury = Keypair::new().pubkey();
+    env.set_treasury(&admin, treasury).expect("set treasury");
+    let treasury_usdc = create_canonical_ata(&mut env.fx.svm, &treasury, &usdc_mint);
+
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle ok");
+    freeze_token_account(&mut env.fx.svm, &env.users[0].usdc);
+    env.advance_past_recovery_grace();
+
+    // First recovery succeeds: order removed, escrow → treasury.
+    env.force_expire(&admin, 0, price, seq, env.users[0].usdc, treasury_usdc)
+        .expect("first force-expire succeeds");
+    assert_eq!(read_token_account(&env.fx.svm, &treasury_usdc).amount, 400, "treasury custodies 400");
+    assert_eq!(env.usdc_escrow_amount(), 0, "escrow drained");
+    assert_eq!(env.book().bids.len(), 0, "order gone");
+
+    // Second recovery with the SAME key must fail OrderNotFound. Expire the
+    // blockhash so the re-submit is a DISTINCT tx that reaches the handler.
+    env.fx.svm.expire_blockhash();
+    let err = env
+        .force_expire(&admin, 0, price, seq, env.users[0].usdc, treasury_usdc)
+        .expect_err("re-force-expiring a removed order must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("OrderNotFound") || s.contains("custom"),
+        "expected OrderNotFound, got {s}"
+    );
+    // No second confiscation occurred.
+    assert_eq!(read_token_account(&env.fx.svm, &treasury_usdc).amount, 400, "treasury unchanged");
+    assert_eq!(env.usdc_escrow_amount(), 0, "escrow still zero");
+}
+
+/// Invalid side byte: `side = 2` (neither Bid=0 nor Ask=1) → `InvalidAmount`;
+/// book + escrow unchanged.
+#[test]
+fn force_expire_invalid_side_rejected() {
+    let mut env = Env::new(1, 10_000);
+    let admin = env.fx.admin.insecure_clone();
+    let usdc_mint = env.fx.usdc_mint.pubkey();
+
+    env.place_limit(0, /* Bid */ 0, 40, 10, &[]).expect("bid posts");
+    let (price, seq) = env.sole_bid_key();
+
+    let treasury = Keypair::new().pubkey();
+    env.set_treasury(&admin, treasury).expect("set treasury");
+    let treasury_usdc = create_canonical_ata(&mut env.fx.svm, &treasury, &usdc_mint);
+
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle ok");
+    freeze_token_account(&mut env.fx.svm, &env.users[0].usdc);
+    env.advance_past_recovery_grace();
+
+    let escrow_pre = env.usdc_escrow_amount();
+    let bids_pre = env.book().bids.len();
+    let err = env
+        .force_expire(&admin, /* invalid side */ 2, price, seq, env.users[0].usdc, treasury_usdc)
+        .expect_err("force-expire with side byte 2 must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("InvalidAmount") || s.contains("custom"),
+        "expected InvalidAmount, got {s}"
+    );
+    assert_eq!(env.usdc_escrow_amount(), escrow_pre, "escrow unchanged");
+    assert_eq!(env.book().bids.len(), bids_pre, "book unchanged");
+    assert_eq!(read_token_account(&env.fx.svm, &treasury_usdc).amount, 0, "treasury untouched");
+}
+
+/// `settled == true` but `settled_at == 0`: an impossible-but-defended state
+/// (the recovery grace base would be 0, letting confiscation happen instantly).
+/// We mutate a genuinely-settled market's `settled_at` back to 0 (mirroring how
+/// `force_paused` raw-mutates Config), advance the clock far, and assert the
+/// `require!(market.settled_at > 0, InvariantBroken)` guard rejects.
+#[test]
+fn force_expire_settled_at_zero_rejected() {
+    let mut env = Env::new(1, 10_000);
+    let admin = env.fx.admin.insecure_clone();
+    let usdc_mint = env.fx.usdc_mint.pubkey();
+
+    env.place_limit(0, /* Bid */ 0, 40, 10, &[]).expect("bid posts");
+    let (price, seq) = env.sole_bid_key();
+
+    let treasury = Keypair::new().pubkey();
+    env.set_treasury(&admin, treasury).expect("set treasury");
+    let treasury_usdc = create_canonical_ata(&mut env.fx.svm, &treasury, &usdc_mint);
+
+    let ts = EXPIRY_UNIX + 10;
+    env.advance_clock(ts);
+    env.plant_pyth(dollars_to_pyth(700), 1_000, ts);
+    env.settle().expect("settle ok");
+    assert!(env.market().settled, "market is settled");
+    assert!(env.market().settled_at > 0, "settle stamped a non-zero settled_at");
+
+    // Corrupt settled_at back to 0 while keeping settled == true.
+    env.force_settled_at(0);
+    assert!(env.market().settled, "still settled");
+    assert_eq!(env.market().settled_at, 0, "settled_at forced to 0");
+
+    // Freeze the owner ATA and advance the clock far past any grace so the ONLY
+    // remaining objection is the settled_at > 0 invariant.
+    freeze_token_account(&mut env.fx.svm, &env.users[0].usdc);
+    env.advance_clock(ts + RECOVERY_GRACE_SECONDS + 10);
+
+    let escrow_pre = env.usdc_escrow_amount();
+    let bids_pre = env.book().bids.len();
+    let err = env
+        .force_expire(&admin, 0, price, seq, env.users[0].usdc, treasury_usdc)
+        .expect_err("force-expire on a settled_at==0 market must fail");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("InvariantBroken") || s.contains("custom"),
+        "expected InvariantBroken, got {s}"
+    );
+    assert_eq!(env.usdc_escrow_amount(), escrow_pre, "escrow unchanged");
+    assert_eq!(env.book().bids.len(), bids_pre, "book unchanged");
+    assert_eq!(read_token_account(&env.fx.svm, &treasury_usdc).amount, 0, "treasury untouched");
 }
