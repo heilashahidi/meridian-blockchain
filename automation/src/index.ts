@@ -13,6 +13,7 @@
 import { loadConfig } from "./config.js";
 import { log } from "./log.js";
 import { runCreateStrikesJob } from "./jobs/createStrikes.js";
+import { runSettleJob } from "./jobs/settle.js";
 
 const USAGE = `meridian-automation — daily jobs for the Meridian on-chain CLOB
 
@@ -39,17 +40,11 @@ Environment:
   EXPIRY_HOURS_FROM_NOW Market expiry horizon in hours (default 24)
   LOG_LEVEL             debug|info|warn|error (default info)
   ALERT_WEBHOOK         Optional webhook URL for alert() escalations
+  OVERRIDE_PRICES       (settle) Comma-separated TICKER=price for the admin
+                        override fallback, e.g. AAPL=187.5,NVDA=120
 `;
 
 type Command = "create-strikes" | "settle";
-
-/**
- * Job dispatchers. `create-strikes` is implemented (U4) — it delegates to the
- * job in src/jobs/createStrikes.ts. `settle` remains a stub until U5.
- */
-async function runSettle(): Promise<void> {
-  throw new Error("settle is not implemented yet (U5)");
-}
 
 export function printHelp(): void {
   process.stdout.write(USAGE);
@@ -107,7 +102,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
 
   try {
     if (command === "create-strikes") await runCreateStrikesJob(cfg, { dryRun });
-    else if (command === "settle") await runSettle();
+    else if (command === "settle") await runSettleJob(cfg);
     log.info("job complete", { command });
     return 0;
   } catch (e) {
