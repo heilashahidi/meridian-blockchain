@@ -27,19 +27,15 @@ export function PositionGuard({ balances }: { balances: Balances | null }) {
   return (
     <div
       className="panel"
-      style={{ borderColor: "var(--ask)", display: "grid", gap: 6 }}
+      style={{ borderColor: "var(--border-strong)", display: "grid", gap: 10 }}
     >
-      <div className="muted" style={{ fontSize: 12 }}>
-        Your position
-      </div>
-      <div className="mono" style={{ fontSize: 14, display: "flex", gap: 16 }}>
-        <span style={{ color: "var(--bid)" }}>
-          Yes {balances.yes.toString()}
-        </span>
-        <span style={{ color: "var(--ask)" }}>No {balances.no.toString()}</span>
+      <div className="stat-label">Your position</div>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <span className="pill pill-yes mono">Yes {balances.yes.toString()}</span>
+        <span className="pill pill-no mono">No {balances.no.toString()}</span>
       </div>
       {reason && (
-        <div style={{ fontSize: 13 }}>
+        <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
           {reason}{" "}
           <span className="muted">
             (no position holds both Yes and No from trading)

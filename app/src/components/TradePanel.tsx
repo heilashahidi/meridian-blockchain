@@ -6,6 +6,9 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import { buyNo, placeLimitOrder, placeMarketOrder, sellNo } from "@/lib/actions";
 import { useMeridian } from "@/lib/MeridianContext";
 import { planFills, SIDE_BID } from "@/lib/matching";
+import { payoffSummary } from "@/lib/marketStats";
+import { tickerToString } from "@/lib/format";
+import { strikeDollars } from "@/lib/marketsView";
 import {
   ONE_USDC,
   positionGuardDecision,
@@ -22,11 +25,18 @@ function dollarsToMicro(d: string): bigint | null {
   return BigInt(Math.round(n * 1_000_000));
 }
 
-const ACTIONS: { key: TradeAction; label: string; tone: "bid" | "ask" }[] = [
-  { key: "buyYes", label: "Buy Yes", tone: "bid" },
-  { key: "sellYes", label: "Sell Yes", tone: "ask" },
-  { key: "buyNo", label: "Buy No", tone: "bid" },
-  { key: "sellNo", label: "Sell No", tone: "ask" },
+function usd(n: number): string {
+  return n.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+const ACTIONS: { key: TradeAction; label: string; tone: "yes" | "no" }[] = [
+  { key: "buyYes", label: "Buy Yes", tone: "yes" },
+  { key: "sellYes", label: "Sell Yes", tone: "yes" },
+  { key: "buyNo", label: "Buy No", tone: "no" },
+  { key: "sellNo", label: "Sell No", tone: "no" },
 ];
 
 const isNoAction = (a: TradeAction) => a === "buyNo" || a === "sellNo";
@@ -133,13 +143,28 @@ export function TradePanel() {
     });
   }
 
-  const noLabel = isNoAction(action) ? "No" : "Yes";
+  const side: "yes" | "no" = isNoAction(action) ? "no" : "yes";
+  const sideLabel = side === "no" ? "No" : "Yes";
+  const submitLabel = ACTIONS.find((x) => x.key === action)!.label;
+
+  // Live payoff / return summary from the entered price + shares (display only).
+  const ticker = market ? tickerToString(market.ticker) : "";
+  const strike = market ? strikeDollars(market.strikePrice) : "";
+  const payoff =
+    inputValid && priceMicro !== null
+      ? payoffSummary({ action, priceDollars: Number(price), shares: qtyN })
+      : null;
+  // Win condition wording: Yes wins above strike, No wins at or below.
+  const winText =
+    side === "no"
+      ? `${ticker} closes at or below $${strike}`
+      : `${ticker} closes above $${strike}`;
 
   return (
-    <div className="panel" style={{ display: "grid", gap: 12 }}>
-      <div className="muted">Trade</div>
+    <div className="panel" style={{ display: "grid", gap: 14 }}>
+      <div style={{ fontSize: 15, fontWeight: 700 }}>Trade</div>
 
-      {/* Action selector — 2x2 grid of the four paths. */}
+      {/* Action selector — 2x2 grid of the four paths as segmented buttons. */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         {ACTIONS.map((a) => {
           const allowed = guard[a.key].allowed;
@@ -148,20 +173,12 @@ export function TradePanel() {
             <button
               key={a.key}
               type="button"
+              className="seg"
               onClick={() => setAction(a.key)}
               disabled={!allowed}
               title={allowed ? undefined : guard[a.key].reason}
               aria-label={a.key}
-              style={{
-                padding: "8px 0",
-                borderRadius: 8,
-                border: `1px solid ${selected ? `var(--${a.tone})` : "var(--border)"}`,
-                background: selected ? "var(--panel)" : "transparent",
-                color: allowed ? `var(--${a.tone})` : "var(--muted)",
-                cursor: allowed ? "pointer" : "not-allowed",
-                fontWeight: selected ? 700 : 400,
-                opacity: allowed ? 1 : 0.5,
-              }}
+              data-active={selected ? a.tone : undefined}
             >
               {a.label}
             </button>
@@ -169,42 +186,82 @@ export function TradePanel() {
         })}
       </div>
 
-      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-        <label className="muted" style={{ fontSize: 12 }}>
-          {noLabel} price ($)
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+        <label style={{ display: "grid", gap: 4 }}>
+          <span className="stat-label">{sideLabel} price ($)</span>
           <input
+            className="input mono"
             type="number"
             min={0.01}
             max={0.99}
             step={0.01}
             value={price}
             onChange={(e) => setPrice(e.target.value)}
-            style={{ width: 90, marginLeft: 6 }}
             aria-label="price"
           />
         </label>
-        <label className="muted" style={{ fontSize: 12 }}>
-          shares
+        <label style={{ display: "grid", gap: 4 }}>
+          <span className="stat-label">shares</span>
           <input
+            className="input mono"
             type="number"
             min={1}
             value={qty}
             onChange={(e) => setQty(e.target.value)}
-            style={{ width: 90, marginLeft: 6 }}
             aria-label="qty"
           />
         </label>
-        <button
-          className="btn"
-          disabled={!ready || !inputValid || !gate.allowed || busy}
-          onClick={submit}
-        >
-          {ACTIONS.find((x) => x.key === action)!.label}
-        </button>
       </div>
 
+      {/* Payoff / return summary — max gain/loss known at entry (PRD). */}
+      {payoff && (
+        <div
+          className="panel"
+          style={{
+            padding: 12,
+            background: side === "yes" ? "var(--yes-dim)" : "var(--no-dim)",
+            border: `1px solid ${side === "yes" ? "var(--yes)" : "var(--no)"}`,
+            boxShadow: "none",
+            display: "grid",
+            gap: 4,
+          }}
+        >
+          {payoff.kind === "buy" ? (
+            <>
+              <div style={{ fontSize: 14 }}>
+                Pay <span className="mono" style={{ fontWeight: 700 }}>${usd(payoff.cost)}</span>{" "}
+                → Win{" "}
+                <span className="mono" style={{ fontWeight: 700 }}>
+                  ${usd(payoff.payout)}
+                </span>{" "}
+                if {winText}
+              </div>
+              <div className="mono" style={{ fontSize: 13, color: "var(--text-dim)" }}>
+                +{payoff.returnPct.toFixed(1)}% return · Max loss ${usd(payoff.maxLoss)}
+              </div>
+            </>
+          ) : (
+            <div style={{ fontSize: 14 }}>
+              Receive ~
+              <span className="mono" style={{ fontWeight: 700 }}>
+                ${usd(payoff.proceeds)}
+              </span>{" "}
+              <span className="muted" style={{ fontSize: 12 }}>(closing proceeds)</span>
+            </div>
+          )}
+        </div>
+      )}
+
+      <button
+        className={side === "yes" ? "btn btn-yes" : "btn btn-no"}
+        disabled={!ready || !inputValid || !gate.allowed || busy}
+        onClick={submit}
+      >
+        {submitLabel}
+      </button>
+
       {!gate.allowed && (
-        <div style={{ color: "var(--ask)", fontSize: 13 }}>{gate.reason}</div>
+        <div style={{ color: "var(--no)", fontSize: 13 }}>{gate.reason}</div>
       )}
 
       {preview && gate.allowed && (
@@ -225,8 +282,8 @@ export function TradePanel() {
       {!walletPubkey && (
         <div className="muted">Connect a wallet to trade.</div>
       )}
-      {status && <div style={{ color: "var(--bid)" }}>{status}</div>}
-      {error && <div style={{ color: "var(--ask)" }}>{error}</div>}
+      {status && <div style={{ color: "var(--yes)" }}>{status}</div>}
+      {error && <div style={{ color: "var(--no)" }}>{error}</div>}
 
       <div className="muted" style={{ fontSize: 11 }}>
         Max price $1.00 (one Yes + one No = $1.00). No-side prices map to the
