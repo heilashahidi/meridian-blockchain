@@ -20,7 +20,7 @@ import { fetchHistory, type HistoryEntry } from "@/lib/history";
 import { useMeridian } from "@/hooks/MeridianContext";
 import { usePrices } from "@/hooks/usePrices";
 import { WalletButton } from "@/components/WalletButton";
-import { type MoneynessFilter } from "@/components/StockTile";
+import { StockTile, passesFilter, type MoneynessFilter } from "@/components/StockTile";
 
 const BOOK_POLL_MS = 6000;
 const usd = (n: number) =>
@@ -113,37 +113,6 @@ function StatCard({
     <Link href={tradeHref(market.pubkey)} className="panel stat-card">{inner}</Link>
   ) : (
     <div className="panel stat-card stat-card-empty">{inner}</div>
-  );
-}
-
-function MarketRow({ ticker, market, yesMid, spot }: { ticker: string; market: MarketView; yesMid: number | null; spot: number | null }) {
-  const strikeNum = Number(market.strikePrice) / 1_000_000;
-  const dist = distanceToStrike(spot, strikeNum);
-  const yesW = yesMid !== null ? Math.round(yesMid * 100) : 0;
-  const noMid = yesMid !== null ? noFromYes(yesMid) : null;
-  return (
-    <div className="market-row">
-      <span className="ticker-badge mono" style={{ width: 34, height: 34, fontSize: 10 }}>{ticker}</span>
-      <div className="market-row-main">
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-          <span style={{ fontWeight: 600, fontSize: 13 }}>Will {ticker} close above <span className="mono">${strikeDollars(market.strikePrice)}</span>?</span>
-          <span className="mono" style={{ fontWeight: 700, color: yesMid !== null ? "var(--yes)" : "var(--muted)" }}>{pct(yesMid)}</span>
-        </div>
-        <div className="prob-bar" style={{ margin: "6px 0" }}>
-          <span className="prob-yes" style={{ width: `${yesW}%` }} />
-        </div>
-        <div className="muted" style={{ fontSize: 11 }}>
-          Yes {pct(yesMid)} · No {noMid !== null ? `${Math.round(noMid * 100)}%` : "—"}
-          {dist !== null && (
-            <span style={{ color: dist.aboveStrike ? "var(--yes)" : "var(--no)", marginLeft: 8 }}>{dist.aboveStrike ? "+" : "−"}${usd(Math.abs(dist.delta))} vs strike</span>
-          )}
-        </div>
-      </div>
-      <div className="market-row-actions">
-        <Link href={tradeHref(market.pubkey)} className="btn btn-yes" style={{ padding: "7px 16px", fontSize: 13 }}>Yes</Link>
-        <Link href={tradeHref(market.pubkey)} className="btn btn-no" style={{ padding: "7px 16px", fontSize: 13 }}>No</Link>
-      </div>
-    </div>
   );
 }
 
@@ -443,6 +412,7 @@ export default function Dashboard() {
   const { program, markets, walletPubkey, configError } = useMeridian();
   const prices = usePrices();
   const [filter, setFilter] = useState<MoneynessFilter>("all");
+  const [selectedTicker, setSelectedTicker] = useState("");
 
   const groups = useMemo(() => groupActiveByTicker(markets, Math.floor(Date.now() / 1000)), [markets]);
   const active = useMemo(() => groups.flatMap((g) => g.active), [groups]);
@@ -471,11 +441,20 @@ export default function Dashboard() {
   const yesMidOf = (m: MarketView) => yesMidFraction(books[m.pubkey.toBase58()] ?? null);
   const spotOf = (t: string) => prices[t]?.price ?? null;
 
-  // Stat cards: active markets nearest a coin-flip first, padded to 4 with MAG7
-  // stocks that have no market yet (spot-only) so the row always reads as 4.
+  // Stat cards: the market nearest a coin-flip for each stock, one card per
+  // company (so no ticker repeats), the four closest to 50/50 first, padded to
+  // 4 with MAG7 stocks that have no market yet (spot-only).
   const statCards = useMemo(() => {
-    const cards: { ticker: string; market: MarketView | null }[] = [...active]
-      .sort((a, b) => Math.abs((yesMidOf(a) ?? 0.5) - 0.5) - Math.abs((yesMidOf(b) ?? 0.5) - 0.5))
+    const flip = (m: MarketView) => Math.abs((yesMidOf(m) ?? 0.5) - 0.5);
+    // Pick each ticker's single nearest-coin-flip market.
+    const bestPerTicker = new Map<string, MarketView>();
+    for (const m of active) {
+      const t = tickerOf(m);
+      const cur = bestPerTicker.get(t);
+      if (!cur || flip(m) < flip(cur)) bestPerTicker.set(t, m);
+    }
+    const cards: { ticker: string; market: MarketView | null }[] = [...bestPerTicker.values()]
+      .sort((a, b) => flip(a) - flip(b))
       .slice(0, 4)
       .map((m) => ({ ticker: tickerOf(m), market: m }));
     const used = new Set(cards.map((c) => c.ticker));
@@ -567,32 +546,80 @@ export default function Dashboard() {
 
       {configError && <p className="muted" style={{ color: "var(--no)", fontSize: 13 }}>{configError}</p>}
 
-      {/* Row 1 — today's markets (the bets) + activity */}
-      <div className="dash-2col">
-        <section className="panel" style={{ padding: 18 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
-            <div>
-              <h2 style={{ fontSize: 17 }}>Today&apos;s markets</h2>
-              <p className="muted" style={{ fontSize: 12, margin: "2px 0 0" }}>Daily binary options · settle at the 4:00 PM ET close</p>
-            </div>
-            <div className="filter-pills">
-              {FILTERS.map((f) => (
-                <button key={f.key} type="button" className="filter-pill" data-active={filter === f.key ? "true" : undefined} onClick={() => setFilter(f.key)}>{f.label}</button>
-              ))}
-            </div>
+      {/* Row 1 — today's markets (the bets) as a company card grid */}
+      <section className="bets-section">
+        <div className="bets-head">
+          <div>
+            <h2 style={{ fontSize: 17 }}>Today&apos;s markets</h2>
+            <p className="muted" style={{ fontSize: 12, margin: "2px 0 0" }}>Daily binary options · settle at the 4:00 PM ET close</p>
           </div>
-          {active.length > 0 ? (
-            <div className="market-row-list">
-              {active.map((m) => (
-                <MarketRow key={m.pubkey.toBase58()} ticker={tickerOf(m)} market={m} yesMid={yesMidOf(m)} spot={spotOf(tickerOf(m))} />
-              ))}
+          <div className="filter-pills">
+            {FILTERS.map((f) => (
+              <button key={f.key} type="button" className="filter-pill" data-active={filter === f.key ? "true" : undefined} onClick={() => setFilter(f.key)}>{f.label}</button>
+            ))}
+          </div>
+        </div>
+        {(() => {
+          // Per-company strike count under the current moneyness filter.
+          const shownCount = (t: string) =>
+            (byTicker[t]?.active ?? []).filter((m) => passesFilter(yesMidOf(m), filter)).length;
+          const available = MAG7.filter((f) => shownCount(f.ticker) > 0);
+          if (available.length === 0) {
+            return <p className="muted" style={{ fontSize: 13 }}>No active markets yet — the morning job creates the day&apos;s strikes.</p>;
+          }
+          // Selected company, clamped to one that still has matching strikes.
+          const sel = available.find((f) => f.ticker === selectedTicker)?.ticker ?? available[0].ticker;
+          const selName = tickerName[sel] ?? "";
+          return (
+            <div className="bets-twopane">
+              {/* Left rail — pick a company */}
+              <div className="company-rail">
+                {MAG7.map((f) => {
+                  const n = shownCount(f.ticker);
+                  const sp = spotOf(f.ticker);
+                  return (
+                    <button
+                      key={f.ticker}
+                      type="button"
+                      className="company-rail-item"
+                      data-active={f.ticker === sel ? "true" : undefined}
+                      disabled={n === 0}
+                      onClick={() => setSelectedTicker(f.ticker)}
+                    >
+                      <span className="ticker-badge mono">{f.ticker}</span>
+                      <div className="company-rail-meta">
+                        <div className="company-rail-name">
+                          <span style={{ fontWeight: 700, fontSize: 13 }}>{f.ticker}</span>
+                          <span className="muted" style={{ fontSize: 11 }}> · {f.name}</span>
+                        </div>
+                        <div className="muted" style={{ fontSize: 11 }}>
+                          {n > 0 ? `${n} strike${n === 1 ? "" : "s"}` : "no strikes"}
+                          {sp !== null ? ` · $${usd(sp)}` : ""}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Right pane — the selected company's strikes */}
+              <div className="company-detail">
+                <StockTile
+                  key={sel}
+                  ticker={sel}
+                  name={selName}
+                  price={prices[sel] ?? null}
+                  active={byTicker[sel]?.active ?? []}
+                  books={books}
+                  filter={filter}
+                />
+              </div>
             </div>
-          ) : (
-            <p className="muted" style={{ fontSize: 13 }}>No active markets yet — the morning job creates the day&apos;s strikes.</p>
-          )}
-        </section>
-        <ActivityPanel />
-      </div>
+          );
+        })()}
+      </section>
+
+      {/* Row 1b — trading activity (full width) */}
+      <ActivityPanel />
 
       {/* Row 2 — stat cards */}
       <div className="stat-card-grid">

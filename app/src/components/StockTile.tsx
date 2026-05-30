@@ -8,7 +8,7 @@ import { MarketCard } from "@/components/MarketCard";
 export type MoneynessFilter = "all" | "itm" | "near" | "long";
 
 /** Classify a strike by its Yes mid: in-the-money, near strike, or long shot. */
-function passesFilter(yesMid: number | null, filter: MoneynessFilter): boolean {
+export function passesFilter(yesMid: number | null, filter: MoneynessFilter): boolean {
   if (filter === "all") return true;
   if (yesMid === null) return filter === "near"; // unknown → treat as near
   if (filter === "itm") return yesMid >= 0.6;

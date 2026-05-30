@@ -905,6 +905,76 @@ select:focus,
   border-right: none;
 }
 
+/* Bets — full-width company card grid */
+.bets-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.bets-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+/* Two-pane: company rail (left) + selected company's strikes (right) */
+.bets-twopane {
+  display: grid;
+  grid-template-columns: minmax(200px, 240px) 1fr;
+  gap: 16px;
+  align-items: start;
+}
+.company-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.company-rail-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: var(--radius, 10px);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: inherit;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.company-rail-item:hover:not(:disabled) {
+  border-color: var(--border-strong, var(--border));
+}
+.company-rail-item[data-active="true"] {
+  border-color: var(--accent, var(--text));
+  background: color-mix(in srgb, var(--accent, #6d6afe) 12%, var(--surface));
+}
+.company-rail-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.company-rail-meta {
+  min-width: 0;
+}
+.company-rail-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.company-detail {
+  min-width: 0;
+}
+/* Stack the rail above the detail when the panel gets narrow */
+@media (max-width: 720px) {
+  .bets-twopane {
+    grid-template-columns: 1fr;
+  }
+  .company-rail {
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+}
 .market-row-list {
   display: flex;
   flex-direction: column;
