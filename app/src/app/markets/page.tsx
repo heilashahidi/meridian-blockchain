@@ -7,13 +7,23 @@ import { fetchBook, type BookView } from "@/lib/market";
 import { groupActiveByTicker } from "@/lib/marketsView";
 import { useMeridian } from "@/hooks/MeridianContext";
 import { usePrices } from "@/hooks/usePrices";
-import { StockTile } from "@/components/StockTile";
+import { StockTile, type MoneynessFilter } from "@/components/StockTile";
 
 const BOOK_POLL_MS = 6000;
+
+const FILTERS: { key: MoneynessFilter; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "itm", label: "In the money" },
+  { key: "near", label: "Near strike" },
+  { key: "long", label: "Long shots" },
+];
 
 export default function MarketsPage() {
   const { program, markets, configError } = useMeridian();
   const prices = usePrices();
+
+  const [q, setQ] = useState("");
+  const [filter, setFilter] = useState<MoneynessFilter>("all");
 
   // Group on-chain markets into one entry per MAG7 stock (all 7 always present).
   // `Date.now()` is read inside the memo body so the memo (and the book-poll
@@ -97,8 +107,45 @@ export default function MarketsPage() {
         </p>
       )}
 
+      {/* Search + moneyness filter row. */}
+      <div className="markets-toolbar">
+        <div className="markets-search">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <circle cx="11" cy="11" r="7" />
+            <path d="M21 21l-4-4" />
+          </svg>
+          <input
+            className="markets-search-input"
+            placeholder="Search the seven…"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            aria-label="Search markets"
+          />
+        </div>
+        <div className="filter-pills">
+          {FILTERS.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              className="filter-pill"
+              data-active={filter === f.key ? "true" : undefined}
+              onClick={() => setFilter(f.key)}
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div style={{ display: "grid", gap: 16 }}>
-        {MAG7.map((f) => {
+        {MAG7.filter((f) => {
+          const term = q.trim().toLowerCase();
+          if (!term) return true;
+          return (
+            f.ticker.toLowerCase().includes(term) ||
+            f.name.toLowerCase().includes(term)
+          );
+        }).map((f) => {
           const group = byTicker[f.ticker];
           return (
             <StockTile
@@ -108,6 +155,7 @@ export default function MarketsPage() {
               price={prices[f.ticker] ?? null}
               active={group ? group.active : []}
               books={books}
+              filter={filter}
             />
           );
         })}
