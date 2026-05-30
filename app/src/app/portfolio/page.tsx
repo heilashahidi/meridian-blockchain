@@ -299,7 +299,7 @@ function EmptyPositions() {
         building your portfolio.
       </p>
       <div style={{ marginTop: 8 }}>
-        <Link href="/markets" className="btn" style={{ display: "inline-block" }}>
+        <Link href="/" className="btn" style={{ display: "inline-block" }}>
           Browse markets
         </Link>
       </div>

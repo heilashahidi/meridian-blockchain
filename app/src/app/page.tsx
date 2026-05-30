@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useSearchParams } from "next/navigation";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 
@@ -408,11 +409,36 @@ function InsightsPanel({ items, onAsk }: { items: { ticker: string; text: string
   );
 }
 
+// useSearchParams must sit under a Suspense boundary (Next.js app router).
 export default function Dashboard() {
+  return (
+    <Suspense fallback={null}>
+      <DashboardInner />
+    </Suspense>
+  );
+}
+
+function DashboardInner() {
   const { program, markets, walletPubkey, configError } = useMeridian();
   const prices = usePrices();
   const [filter, setFilter] = useState<MoneynessFilter>("all");
   const [selectedTicker, setSelectedTicker] = useState("");
+
+  // Topbar search routes here as /?q=… — pre-select the matching company in the
+  // two-pane browser (by ticker or company name).
+  const searchParams = useSearchParams();
+  const q = searchParams.get("q");
+  useEffect(() => {
+    if (!q) return;
+    const term = q.trim().toLowerCase();
+    const hit = MAG7.find(
+      (f) =>
+        f.ticker.toLowerCase() === term ||
+        f.ticker.toLowerCase().includes(term) ||
+        f.name.toLowerCase().includes(term),
+    );
+    if (hit) setSelectedTicker(hit.ticker);
+  }, [q]);
 
   const groups = useMemo(() => groupActiveByTicker(markets, Math.floor(Date.now() / 1000)), [markets]);
   const active = useMemo(() => groups.flatMap((g) => g.active), [groups]);

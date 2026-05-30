@@ -89,9 +89,9 @@ const I = {
 };
 
 const LINKS: NavLink[] = [
-  { href: "/", label: "Dashboard", icon: I.dashboard, match: (p) => p === "/" },
-  { href: "/markets", label: "Markets", icon: I.markets, match: (p) => p.startsWith("/markets") },
-  { href: "/trade", label: "Trade", icon: I.trade, match: (p) => p.startsWith("/trade") },
+  // The dashboard is the browse-and-pick surface; clicking a strike opens the
+  // trade screen at /trade/[market]. No separate Markets/Trade nav items.
+  { href: "/", label: "Dashboard", icon: I.dashboard, match: (p) => p === "/" || p.startsWith("/trade") },
   { href: "/portfolio", label: "Portfolio", icon: I.portfolio, match: (p) => p.startsWith("/portfolio") },
   { href: "/history", label: "History", icon: I.history, match: (p) => p.startsWith("/history") },
 ];
@@ -164,7 +164,7 @@ function BuyingPower() {
         {walletPubkey ? `$${usdc !== null ? fmtUsd(usdc) : "—"}` : "$0.00"}
       </div>
       <div className="muted buying-sub">USDC · non-custodial</div>
-      <Link href="/markets" className="btn buying-deposit">
+      <Link href="/" className="btn buying-deposit">
         + Deposit USDC
       </Link>
       {walletPubkey && (

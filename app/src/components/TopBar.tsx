@@ -120,9 +120,10 @@ function DateChip() {
 }
 
 /**
- * Top bar of the app-shell. Search (routes to Markets), live market clock,
- * date, and the wallet connect. The per-market settlement countdown still lives
- * on the Trade screen; this is the global status strip.
+ * Top bar of the app-shell. Search (routes to the dashboard, pre-selecting the
+ * matching company), live market clock, date, and the wallet connect. The
+ * per-market settlement countdown still lives on the Trade screen; this is the
+ * global status strip.
  */
 export function TopBar() {
   const router = useRouter();
@@ -130,7 +131,7 @@ export function TopBar() {
 
   const onSearch = (e: FormEvent) => {
     e.preventDefault();
-    router.push(q.trim() ? `/markets?q=${encodeURIComponent(q.trim())}` : "/markets");
+    router.push(q.trim() ? `/?q=${encodeURIComponent(q.trim())}` : "/");
   };
 
   return (
