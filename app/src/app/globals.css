@@ -1159,3 +1159,18 @@ select:focus,
 @media (max-width: 1000px) {
   .topbar-bell { display: none; }
 }
+
+/* Force the wallet-adapter button/modal/dropdown onto the site font (its
+   bundled styles.css ships DM Sans, which broke font consistency). */
+.wallet-adapter-button,
+.wallet-adapter-button-trigger,
+.wallet-adapter-modal,
+.wallet-adapter-modal-wrapper,
+.wallet-adapter-modal-title,
+.wallet-adapter-modal-list,
+.wallet-adapter-modal *,
+.wallet-adapter-dropdown,
+.wallet-adapter-dropdown-list,
+.wallet-adapter-dropdown-list * {
+  font-family: var(--font-sans) !important;
+}
