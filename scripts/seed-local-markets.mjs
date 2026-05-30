@@ -2,14 +2,24 @@
 //
 // seed-local-markets.mjs — populate a LOCAL validator with the MAG7 markets and
 // resting (non-crossing) bid/ask liquidity, so the frontend dashboard/markets
-// render with varied, real implied probabilities (like the reference UI).
+// render with varied implied probabilities (like the reference UI).
+//
+// Strike levels are derived from REAL oracle prices: it reads each ticker's
+// latest price from Pyth Hermes (the same off-chain source the morning
+// create-strikes job uses — allowed per PRD §292) and builds the PRD strike
+// ladder (±3/6/9%, rounded to $10, deduped) around it. Off-hours Hermes returns
+// the last published price (the previous close), which is exactly what the PRD
+// wants for morning strike generation. Pass --no-oracle to use the offline
+// fallback reference prices instead (no network).
 //
 // For each ticker it: creates a strike market (skips if it already exists),
 // mints a Yes/No pair to the admin, then rests an ask above and a bid below a
 // target mid (in µUSDC per Yes, where 500_000 = $0.50). The book mid drives the
 // frontend's implied-probability bar.
 //
-// Usage: node seed-local-markets.mjs [--rpc http://127.0.0.1:8899] [--keypair ~/.config/solana/id.json]
+// Usage: node seed-local-markets.mjs [--rpc http://127.0.0.1:8899]
+//          [--keypair ~/.config/solana/id.json] [--no-oracle]
+//          [--hermes https://hermes.pyth.network]
 
 import fs from "node:fs";
 import os from "node:os";
@@ -20,6 +30,7 @@ import { fileURLToPath } from "node:url";
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount, mintTo } from "@solana/spl-token";
+import { HermesClient } from "@pythnetwork/hermes-client";
 
 const BN = anchor.BN ?? anchor.default?.BN;
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -39,18 +50,68 @@ function parseArgs(argv) {
 const args = parseArgs(process.argv);
 const RPC_URL = args.rpc ?? "http://127.0.0.1:8899";
 const KEYPAIR_PATH = (args.keypair ?? path.join(os.homedir(), ".config/solana/id.json")).replace(/^~/, os.homedir());
+const HERMES_URL = args.hermes ?? "https://hermes.pyth.network";
+const USE_ORACLE = args["no-oracle"] !== "true";
 
-// ticker → { strike $, target Yes prob }. Strikes near current MAG7 spots; the
-// target probability is what the resting bid/ask straddle produces.
+// ticker → { Pyth feed id, offline fallback reference $ }. Feed IDs are kept in
+// sync with automation/src/config.ts (RAW_TICKERS). The fallback is used only
+// when --no-oracle is set or Hermes is unreachable for that ticker, so a fresh
+// `make dev` still produces a sensible board with no network.
 const SEED = [
-  { ticker: "AAPL", strike: 310, prob: 0.64 },
-  { ticker: "MSFT", strike: 500, prob: 0.37 },
-  { ticker: "GOOGL", strike: 380, prob: 0.43 },
-  { ticker: "AMZN", strike: 270, prob: 0.65 },
-  { ticker: "NVDA", strike: 210, prob: 0.52 },
-  { ticker: "TSLA", strike: 435, prob: 0.41 },
-  { ticker: "META", strike: 620, prob: 0.58 },
+  { ticker: "AAPL", feedId: "49f6b65cb1de6b10eaf75e7c03ca029c306d0357e91b5311b175084a5ad55688", fallback: 310 },
+  { ticker: "MSFT", feedId: "d0ca23c1cc005e004ccf1db5bf76aeb6a49218f43dac3d4b275e92de12ded4d1", fallback: 500 },
+  { ticker: "GOOGL", feedId: "5a48c03e9b9cb337801073ed9d166817473697efff0d138874e0f6a33d6d5aa6", fallback: 380 },
+  { ticker: "AMZN", feedId: "b5d0e0fa58a1f8b81498ae670ce93c872d14434b72c364885d4fa1b257cbb07a", fallback: 270 },
+  { ticker: "NVDA", feedId: "b1073854ed24cbc755dc527418f52b7d271f6cc967bbf8d8129112b18860a593", fallback: 210 },
+  { ticker: "TSLA", feedId: "16dad506d7db8da01c87581c87ca897a012a153557d4d578c3b9c9e1bc0632f1", fallback: 435 },
+  { ticker: "META", feedId: "78a3e3b8e676a8f73c439f5d749737034b139bbbe899ba5775216fba596607fe", fallback: 680 },
 ];
+
+// Read the latest price for each feed from Pyth Hermes in one batch. Returns a
+// Map<feedId(no 0x), { price, ageHours }>. Throws only on total failure; the
+// caller falls back per-ticker for any feed Hermes omits.
+async function fetchOraclePrices(feedIds) {
+  const hermes = new HermesClient(HERMES_URL, {});
+  const norm = (f) => (f.startsWith("0x") ? f.slice(2) : f);
+  const resp = await hermes.getLatestPriceUpdates(feedIds.map(norm), { encoding: "base64", parsed: true });
+  const nowSec = Math.floor(Date.now() / 1000);
+  const out = new Map();
+  for (const e of resp.parsed ?? []) {
+    const price = Number(e.price.price) * 10 ** e.price.expo;
+    out.set(norm(e.id), { price, ageHours: (nowSec - e.price.publish_time) / 3600 });
+  }
+  return out;
+}
+
+// PRD "Strike Generation" (§ Automated Market Creation): generate strikes at
+// ±3%, ±6%, ±9% from the previous close, round to the nearest $10, and
+// deduplicate. This produces 6 strikes per stock (3 above, 3 below), collapsing
+// to fewer for low-priced stocks where adjacent offsets round together (e.g.
+// AAPL −3%/−6% both → $220). Mirrors automation/src/jobs/createStrikes.ts so
+// the seeded book matches what the morning automation job would create.
+const STRIKE_OFFSETS_PCT = [-9, -6, -3, 3, 6, 9];
+
+function strikesForPrevClose(prevClose) {
+  const seen = new Set();
+  const out = [];
+  for (const pct of STRIKE_OFFSETS_PCT) {
+    const strike = Math.round((prevClose * (1 + pct / 100)) / 10) * 10;
+    if (seen.has(strike)) continue;
+    seen.add(strike);
+    out.push(strike);
+  }
+  return out.sort((a, b) => a - b);
+}
+
+// Yes price ≈ the market-implied probability the stock closes AT/ABOVE the
+// strike (PRD § "What Is a Meridian Contract?"). Strikes below the prev close
+// are more likely to be exceeded (higher Yes prob); strikes above are less
+// likely. Linear in the % distance from the prev close, clamped to [0.10, 0.90]
+// so every book stays two-sided.
+function probForStrike(strike, prevClose) {
+  const pct = strike / prevClose - 1; // ≈ [-0.09, +0.09]
+  return Math.min(0.9, Math.max(0.1, 0.5 - pct * 3.3));
+}
 
 const idl = JSON.parse(fs.readFileSync(IDL_PATH, "utf8"));
 const PROGRAM_ID = new PublicKey(idl.address);
@@ -141,20 +202,52 @@ async function main() {
   const usdcMint = cfg.usdcMint;
   console.log(`  Config USDC mint ${usdcMint.toBase58()}`);
 
-  // Fund the admin with plenty of test USDC for the resting bids (admin is the mint authority).
+  // Read real reference prices from the oracle (Pyth Hermes). One batch call;
+  // per-ticker fallback if a feed is missing. --no-oracle skips the network.
+  let oracle = new Map();
+  if (USE_ORACLE) {
+    try {
+      oracle = await fetchOraclePrices(SEED.map((s) => s.feedId));
+      console.log(`  oracle: read ${oracle.size}/${SEED.length} feeds from Hermes (${HERMES_URL})`);
+    } catch (e) {
+      console.warn(`  ⚠ oracle read failed (${(e?.message ?? e).toString().slice(0, 80)}) — using fallback prices`);
+    }
+  } else {
+    console.log("  oracle: skipped (--no-oracle) — using fallback prices");
+  }
+
+  // Expand each ticker's reference price into the PRD strike ladder, computing a
+  // target Yes prob per strike. Flat list of one job per (ticker, strike).
+  const jobs = [];
+  for (const { ticker, feedId, fallback } of SEED) {
+    const hit = oracle.get(feedId);
+    const reference = hit ? hit.price : fallback;
+    const src = hit ? `oracle $${hit.price.toFixed(2)}${hit.ageHours > 1 ? ` (${hit.ageHours.toFixed(0)}h old — prev close)` : ""}` : `fallback $${fallback}`;
+    const strikes = strikesForPrevClose(reference);
+    console.log(`  ${ticker} (${src}) → ${strikes.length} strikes: ${strikes.map((s) => "$" + s).join(", ")}`);
+    for (const strike of strikes) {
+      jobs.push({ ticker, strike, prob: probForStrike(strike, reference) });
+    }
+  }
+  console.log(`  ${jobs.length} markets across ${SEED.length} tickers`);
+
+  // Fund the admin with enough test USDC for every market: mint-pair costs
+  // $QTY (=$25) of collateral + a resting bid of ~QTY × <$1. $50/market is
+  // generous headroom; admin is the mint authority so this is free test USDC.
   const userUsdc = (await getOrCreateAssociatedTokenAccount(connection, payer, usdcMint, payer.publicKey)).address;
-  await mintTo(connection, payer, usdcMint, userUsdc, payer, 2_000_000_000n); // $2,000
+  const fundUsdc = BigInt(jobs.length) * 50n * 1_000_000n; // jobs × $50, in µUSDC
+  await mintTo(connection, payer, usdcMint, userUsdc, payer, fundUsdc);
 
   // Deterministic expiry = the next UTC midnight. Stable for the whole UTC day,
   // so re-running the seed reuses the SAME market PDA (create skips) instead of
   // creating a duplicate market per ticker each run.
   const nowSec = Math.floor(Date.now() / 1000);
   const expiryUnix = (Math.floor(nowSec / 86400) + 1) * 86400;
-  for (const s of SEED) {
+  for (const job of jobs) {
     try {
-      await seedOne(cfg, usdcMint, userUsdc, s, expiryUnix);
+      await seedOne(cfg, usdcMint, userUsdc, job, expiryUnix);
     } catch (e) {
-      console.error(`  ✗ ${s.ticker} failed: ${(e?.message ?? e).toString().slice(0, 140)}`);
+      console.error(`  ✗ ${job.ticker} @ $${job.strike} failed: ${(e?.message ?? e).toString().slice(0, 140)}`);
     }
   }
   console.log("Done.");

@@ -92,6 +92,10 @@ const STRIKE_DOLLARS = Number(args["strike-dollars"] ?? 680);
 const EXPIRY_HOURS = Number(args["expiry-hours-from-now"] ?? 24);
 const PYTH_FEED_ID_HEX = args["pyth-feed-id"] ?? "01".repeat(32);
 const FEE_AUTHORITY_STR = args["fee-authority"]; // optional; defaults to admin
+// --config-only: run initialize_config and stop, skipping create_strike_market.
+// Used by local-dev.sh, where seed-local-markets.mjs creates the full board from
+// real oracle prices and a bootstrap market would only add a stray strike.
+const CONFIG_ONLY = args["config-only"] === "true";
 
 if (!USDC_MINT_STR) {
   console.error("error: --usdc-mint is required (devnet USDC mint pubkey)");
@@ -294,6 +298,12 @@ async function main() {
   }
 
   // ─── 2) create_strike_market (idempotent) ─────────────────────────────
+  if (CONFIG_ONLY) {
+    header("Summary (config-only)");
+    kv("Config", configAddr.toBase58());
+    console.log("\n  ✓ Config initialized; skipped create_strike_market (--config-only).\n");
+    return;
+  }
   header("2) create_strike_market");
 
   const strikeMicro = Math.round(STRIKE_DOLLARS * 1_000_000);
