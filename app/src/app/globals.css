@@ -41,7 +41,7 @@
   --ring: 0 0 0 3px rgba(109, 106, 254, 0.35);
   --font-sans: var(--font-space), var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
   --font-display: var(--font-space), var(--font-inter), ui-sans-serif, system-ui, sans-serif;
-  --font-mono: var(--font-jetbrains-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  --font-mono: var(--font-space-mono), ui-monospace, "SF Mono", Menlo, monospace;
 
   /* App-shell geometry (matches the Meridian dashboard design). */
   --sidebar-w: 248px;
