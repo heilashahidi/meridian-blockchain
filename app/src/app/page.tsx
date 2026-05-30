@@ -546,7 +546,7 @@ export default function Dashboard() {
 
       {configError && <p className="muted" style={{ color: "var(--no)", fontSize: 13 }}>{configError}</p>}
 
-      {/* Row 1 — today's markets (the bets) as a company card grid */}
+      {/* Row 1 — today's markets (the bets) as a two-pane company browser */}
       <section className="bets-section">
         <div className="bets-head">
           <div>
@@ -628,20 +628,7 @@ export default function Dashboard() {
         ))}
       </div>
 
-      {/* Row 3 — ticker strip */}
-      <div className="ticker-strip">
-        {MAG7.map((f) => {
-          const p = prices[f.ticker];
-          return (
-            <div className="ticker-cell" key={f.ticker}>
-              <span className="mono" style={{ fontWeight: 700, fontSize: 12 }}>{f.ticker}</span>
-              <span className="mono" style={{ fontSize: 12, color: "var(--text-dim)" }}>{p ? `$${usd(p.price)}` : "—"}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Row 4 — portfolio + insights */}
+      {/* Row 3 — portfolio + insights */}
       <div className="dash-2col">
         <PortfolioPanel active={active} books={books} />
         <InsightsPanel items={insights} onAsk={onAsk} />

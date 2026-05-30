@@ -884,27 +884,6 @@ select:focus,
   border-top: 1px solid var(--border);
 }
 
-.ticker-strip {
-  display: flex;
-  gap: 0;
-  overflow-x: auto;
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  background: var(--surface);
-  box-shadow: var(--shadow);
-}
-.ticker-cell {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 11px 16px;
-  border-right: 1px solid var(--border);
-  white-space: nowrap;
-}
-.ticker-cell:last-child {
-  border-right: none;
-}
-
 /* Bets — full-width company card grid */
 .bets-section {
   display: flex;
