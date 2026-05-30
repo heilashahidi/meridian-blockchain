@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
+import { PublicKey } from "@solana/web3.js";
 
 import { MAG7 } from "@/lib/feeds";
 import { fetchBalances, fetchBook, type BookView, type MarketView } from "@/lib/market";
@@ -25,6 +26,15 @@ const BOOK_POLL_MS = 6000;
 const usd = (n: number) =>
   n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const pct = (yes: number | null) => (yes === null ? "—" : `${Math.round(yes * 100)}%`);
+
+// Optional read-only preview wallet (a real on-chain account): when no wallet is
+// connected, the activity + portfolio panels show THIS account's live data so a
+// fresh/logged-out dashboard isn't empty. Read-only (public key only, no signing).
+const DEMO_WALLET: PublicKey | null = (() => {
+  const s = process.env.NEXT_PUBLIC_DEMO_WALLET;
+  if (!s) return null;
+  try { return new PublicKey(s); } catch { return null; }
+})();
 
 const FILTERS: { key: MoneynessFilter; label: string }[] = [
   { key: "all", label: "All" },
@@ -161,15 +171,17 @@ function ActivityPanel() {
   const { walletPubkey } = useMeridian();
   const { connection } = useConnection();
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
+  const eff = walletPubkey ?? DEMO_WALLET;
+  const preview = !walletPubkey && !!DEMO_WALLET;
 
   useEffect(() => {
-    if (!walletPubkey) { setEntries([]); return; }
+    if (!eff) { setEntries([]); return; }
     let cancelled = false;
-    fetchHistory(connection, walletPubkey)
+    fetchHistory(connection, eff)
       .then((e) => { if (!cancelled) setEntries(e); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [connection, walletPubkey]);
+  }, [connection, eff]);
 
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const rows = ["10 AM", "12 PM", "2 PM", "4 PM"];
@@ -199,9 +211,9 @@ function ActivityPanel() {
     <aside className="panel dash-aside">
       <div className="dash-aside-head">
         <h3 style={{ fontSize: 15 }}>Trading activity</h3>
-        <span className="market-strikes-badge">Last 7 days</span>
+        <span className="market-strikes-badge">{preview ? "Demo · 7 days" : "Last 7 days"}</span>
       </div>
-      {!walletPubkey ? (
+      {!eff ? (
         <p className="muted" style={{ fontSize: 13 }}>Connect a wallet to see your trading activity.</p>
       ) : (
         <>
@@ -245,21 +257,23 @@ const RANGES: { key: string; ms: number }[] = [
 function PortfolioPanel({ active, books }: { active: MarketView[]; books: Record<string, BookView | null> }) {
   const { walletPubkey, config } = useMeridian();
   const { connection } = useConnection();
+  const eff = walletPubkey ?? DEMO_WALLET;
+  const preview = !walletPubkey && !!DEMO_WALLET;
   const [value, setValue] = useState<number | null>(null);
   const [positions, setPositions] = useState(0);
   const [series, setSeries] = useState<PvPoint[]>([]);
   const [range, setRange] = useState("1M");
 
   const activeSig = active.map((m) => m.pubkey.toBase58()).sort().join(",");
-  const key = walletPubkey ? `meridian.pv.${walletPubkey.toBase58()}` : null;
+  const key = eff ? `meridian.pv.${eff.toBase58()}` : null;
 
   useEffect(() => {
-    if (!walletPubkey || !config) { setValue(null); setPositions(0); setSeries([]); return; }
+    if (!eff || !config) { setValue(null); setPositions(0); setSeries([]); return; }
     let cancelled = false;
     const load = async () => {
       let usdc = 0, posVal = 0, posCount = 0;
       const per = await Promise.all(active.map(async (m) => {
-        try { return [m, await fetchBalances(connection, walletPubkey, config.usdcMint, m)] as const; }
+        try { return [m, await fetchBalances(connection, eff, config.usdcMint, m)] as const; }
         catch { return [m, null] as const; }
       }));
       for (const [m, bals] of per) {
@@ -294,7 +308,7 @@ function PortfolioPanel({ active, books }: { active: MarketView[]; books: Record
     const id = setInterval(() => void load(), 30_000);
     return () => { cancelled = true; clearInterval(id); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [connection, walletPubkey, config, activeSig, books]);
+  }, [connection, eff, config, activeSig, books]);
 
   const usd2 = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const rangeMs = RANGES.find((r) => r.key === range)?.ms ?? Infinity;
@@ -323,8 +337,9 @@ function PortfolioPanel({ active, books }: { active: MarketView[]; books: Record
       <div className="dash-portfolio-stats">
         <div className="stat"><span className="stat-label">Portfolio value</span><span className="mono dash-big">{value !== null ? usd2(value) : "—"}</span></div>
         <div className="stat"><span className="stat-label">Range P&amp;L</span><span className="mono stat-value" style={{ color: todayPnl === null ? "var(--text-dim)" : todayPnl >= 0 ? "var(--yes)" : "var(--no)" }}>{todayPnl === null ? "—" : `${todayPnl >= 0 ? "+" : "−"}${usd2(Math.abs(todayPnl)).slice(1)}`}</span></div>
-        <div className="stat"><span className="stat-label">Open positions</span><span className="mono stat-value">{walletPubkey ? positions : "—"}</span></div>
-        <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+        <div className="stat"><span className="stat-label">Open positions</span><span className="mono stat-value">{eff ? positions : "—"}</span></div>
+        <div style={{ marginLeft: "auto", display: "flex", gap: 6, alignItems: "center" }}>
+          {preview && <span className="badge-devnet" style={{ marginLeft: 0 }}>Demo</span>}
           {RANGES.map((r) => (
             <button key={r.key} type="button" className="dash-range" data-active={range === r.key ? "true" : undefined} onClick={() => setRange(r.key)}>{r.key}</button>
           ))}
@@ -346,8 +361,8 @@ function PortfolioPanel({ active, books }: { active: MarketView[]; books: Record
             </>
           )}
         </svg>
-        {(!walletPubkey || pts.length < 2) && (
-          <div className="dash-chart-note muted">{walletPubkey ? "Your value plots here as it's recorded over time (revisit to build the curve)." : "Connect a wallet to track your portfolio value over time."}</div>
+        {(!eff || pts.length < 2) && (
+          <div className="dash-chart-note muted">{eff ? "Value plots here as it's sampled over time (revisit/trade to build the curve)." : "Connect a wallet to track your portfolio value over time."}</div>
         )}
       </div>
     </section>
