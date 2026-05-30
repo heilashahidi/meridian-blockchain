@@ -834,3 +834,109 @@ select:focus,
   border-color: var(--accent);
   background: var(--accent-dim);
 }
+
+/* ── Dashboard home ──────────────────────────────────────────── */
+.dashboard {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 24px 22px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.dashboard-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.stat-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 14px;
+}
+.stat-card {
+  display: flex;
+  flex-direction: column;
+  text-decoration: none;
+  color: var(--text);
+  padding: 16px;
+  transition: border-color 0.14s ease, transform 0.06s ease;
+}
+.stat-card:hover {
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+  color: var(--text);
+}
+.stat-card-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.stat-card-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: auto;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.ticker-strip {
+  display: flex;
+  gap: 0;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.ticker-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 16px;
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+}
+.ticker-cell:last-child {
+  border-right: none;
+}
+
+.market-row-list {
+  display: flex;
+  flex-direction: column;
+}
+.market-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 4px;
+  border-top: 1px solid var(--border);
+}
+.market-row:first-child {
+  border-top: none;
+}
+.market-row-main {
+  flex: 1;
+  min-width: 0;
+}
+.market-row-actions {
+  display: flex;
+  gap: 8px;
+  flex: none;
+}
+.market-row-actions .btn {
+  text-decoration: none;
+}
+
+@media (max-width: 720px) {
+  .market-row {
+    flex-wrap: wrap;
+  }
+  .market-row-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}

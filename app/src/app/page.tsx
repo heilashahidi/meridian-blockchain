@@ -1,405 +1,274 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useMemo, useState } from "react";
 
 import { MAG7 } from "@/lib/feeds";
-import { priceAgeLabel, type PriceData } from "@/lib/prices";
-import { usePrices } from "@/hooks/usePrices";
+import { fetchBook, type BookView, type MarketView } from "@/lib/market";
+import {
+  groupActiveByTicker,
+  noFromYes,
+  strikeDollars,
+  tradeHref,
+  yesMidFraction,
+} from "@/lib/marketsView";
+import { distanceToStrike } from "@/lib/marketStats";
 import { useMeridian } from "@/hooks/MeridianContext";
+import { usePrices } from "@/hooks/usePrices";
 import { WalletButton } from "@/components/WalletButton";
 
-/** One stock in the live MAG7 ticker strip. */
-function TickerCell({
+const BOOK_POLL_MS = 6000;
+const usd = (n: number) =>
+  n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pct = (yes: number | null) => (yes === null ? "—" : `${Math.round(yes * 100)}%`);
+
+/** Big market stat card (top row of the dashboard). */
+function StatCard({
   ticker,
   name,
-  data,
+  market,
+  yesMid,
+  spot,
 }: {
   ticker: string;
   name: string;
-  data: PriceData | null;
+  market: MarketView;
+  yesMid: number | null;
+  spot: number | null;
 }) {
-  const fresh = data && Date.now() / 1000 - data.publishTime < 60;
+  const strikeNum = Number(market.strikePrice) / 1_000_000;
+  const dist = distanceToStrike(spot, strikeNum);
+  const yesW = yesMid !== null ? Math.round(yesMid * 100) : 0;
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 10,
-        padding: "10px 16px",
-        borderRight: "1px solid var(--border)",
-        whiteSpace: "nowrap",
-      }}
-    >
-      <span
-        aria-hidden
-        style={{
-          width: 7,
-          height: 7,
-          borderRadius: 999,
-          flexShrink: 0,
-          background: fresh ? "var(--yes)" : "var(--muted)",
-          boxShadow: fresh ? "0 0 8px var(--yes)" : "none",
-        }}
-      />
-      <div style={{ display: "grid", lineHeight: 1.2 }}>
-        <span style={{ fontWeight: 700, fontSize: 13 }}>{ticker}</span>
+    <Link href={tradeHref(market.pubkey)} className="panel stat-card">
+      <div className="stat-card-head">
+        <span className="ticker-badge mono">{ticker}</span>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 700 }}>{ticker}</div>
+          <div className="muted" style={{ fontSize: 11 }}>{name}</div>
+        </div>
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="var(--muted)" strokeWidth="1.8" style={{ marginLeft: "auto" }} aria-hidden>
+          <path d="M3 17l5-5 4 3 6-7" />
+          <path d="M16 8h5v5" />
+        </svg>
+      </div>
+      <div className="muted" style={{ fontSize: 12 }}>
+        Will close above <span className="mono">${strikeDollars(market.strikePrice)}</span>?
+      </div>
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 6 }}>
+        <span className="mono" style={{ fontSize: 30, fontWeight: 800, color: yesMid !== null ? "var(--yes)" : "var(--muted)" }}>
+          {pct(yesMid)}
+        </span>
+        <span className="muted" style={{ fontSize: 11 }}>Yes implied</span>
+      </div>
+      <div className="prob-bar" style={{ margin: "8px 0 10px" }}>
+        <span className="prob-yes" style={{ width: `${yesW}%` }} />
+      </div>
+      <div className="stat-card-foot">
         <span className="muted" style={{ fontSize: 11 }}>
-          {name}
+          Spot <span className="mono" style={{ color: "var(--text-dim)" }}>{spot !== null ? `$${usd(spot)}` : "—"}</span>
         </span>
-      </div>
-      <div style={{ display: "grid", textAlign: "right", marginLeft: 8 }}>
-        <span className="mono" style={{ fontSize: 14, fontWeight: 600 }}>
-          {data ? `$${data.price.toFixed(2)}` : "—"}
-        </span>
-        <span
-          className="mono"
-          style={{
-            fontSize: 10,
-            color: fresh ? "var(--yes)" : "var(--muted)",
-          }}
-        >
-          {priceAgeLabel(data)}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/** A "how it works" step with a CSS-shape glyph (no emojis). */
-function Step({
-  n,
-  glyph,
-  title,
-  body,
-}: {
-  n: number;
-  glyph: React.ReactNode;
-  title: string;
-  body: React.ReactNode;
-}) {
-  return (
-    <div className="panel" style={{ display: "grid", gap: 12 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-        <div
-          aria-hidden
-          style={{
-            width: 44,
-            height: 44,
-            borderRadius: 12,
-            display: "grid",
-            placeItems: "center",
-            background: "var(--accent-dim)",
-            border: "1px solid var(--border-strong)",
-            color: "var(--accent-2)",
-          }}
-        >
-          {glyph}
-        </div>
-        <span className="mono muted" style={{ fontSize: 12 }}>
-          STEP {n}
-        </span>
-      </div>
-      <h3 style={{ fontSize: 16, margin: 0 }}>{title}</h3>
-      <p className="dim" style={{ fontSize: 13, margin: 0, lineHeight: 1.55 }}>
-        {body}
-      </p>
-    </div>
-  );
-}
-
-export default function Home() {
-  const prices = usePrices();
-  const { walletPubkey } = useMeridian();
-
-  return (
-    <main style={{ maxWidth: 1080, margin: "0 auto", padding: "0 16px 64px" }}>
-      {/* ── Hero ─────────────────────────────────────────────── */}
-      <section
-        style={{
-          position: "relative",
-          overflow: "hidden",
-          borderRadius: "var(--radius-lg)",
-          border: "1px solid var(--border)",
-          margin: "28px 0",
-          padding: "clamp(40px, 7vw, 80px) clamp(24px, 5vw, 64px)",
-          background:
-            "radial-gradient(900px 420px at 78% -10%, rgba(109,106,254,0.28), transparent 60%), " +
-            "radial-gradient(700px 380px at 8% 120%, rgba(43,212,125,0.10), transparent 55%), " +
-            "linear-gradient(180deg, var(--surface), #11141d)",
-        }}
-      >
-        <span
-          className="pill"
-          style={{ marginBottom: 18, borderColor: "var(--accent)", color: "var(--accent-2)" }}
-        >
-          <span
-            aria-hidden
-            style={{
-              width: 6,
-              height: 6,
-              borderRadius: 999,
-              background: "var(--yes)",
-              boxShadow: "0 0 8px var(--yes)",
-            }}
-          />
-          Live on Solana · 0DTE binary options
-        </span>
-
-        <h1
-          style={{
-            fontSize: "clamp(34px, 5.5vw, 56px)",
-            margin: "0 0 18px",
-            maxWidth: 760,
-            lineHeight: 1.05,
-          }}
-        >
-          Will{" "}
-          <span style={{ color: "var(--accent-2)" }}>AAPL close above $230</span>{" "}
-          today?
-          <br />
-          Take a side for{" "}
-          <span className="mono" style={{ color: "var(--yes)" }}>
-            $1
+        {dist !== null && (
+          <span style={{ fontSize: 11, fontWeight: 600, color: dist.aboveStrike ? "var(--yes)" : "var(--no)" }}>
+            {dist.aboveStrike ? "In the money" : "Below strike"}
           </span>
-          .
-        </h1>
+        )}
+      </div>
+    </Link>
+  );
+}
 
-        <p
-          className="dim"
-          style={{
-            fontSize: 17,
-            maxWidth: 620,
-            lineHeight: 1.55,
-            margin: "0 0 12px",
-          }}
-        >
-          Meridian is a non-custodial order book for daily binary options on the
-          Magnificent Seven. Buy <strong style={{ color: "var(--yes)" }}>Yes</strong> or{" "}
-          <strong style={{ color: "var(--no)" }}>No</strong> on whether a stock
-          closes above its strike. Every Yes + No pair is worth exactly{" "}
-          <span className="mono" style={{ color: "var(--text)" }}>$1 USDC</span> —
-          your <strong style={{ color: "var(--text)" }}>max gain and max loss
-          are known at entry</strong>. No Greeks, no margin, no liquidations.
-        </p>
-        <p className="muted" style={{ fontSize: 14, margin: "0 0 28px" }}>
-          Same-day settle at 4:00 PM ET against a Pyth oracle. The winning side
-          redeems for <span className="mono">$1</span>; the other expires worthless.
-        </p>
-
-        {/* CTAs */}
-        <div
-          style={{
-            display: "flex",
-            gap: 12,
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          {walletPubkey ? (
-            <Link
-              href="/markets"
-              className="btn"
-              style={{ textDecoration: "none", fontSize: 15, padding: "12px 22px" }}
-            >
-              Explore markets →
-            </Link>
-          ) : (
-            <WalletButton />
-          )}
-          <Link
-            href="/markets"
-            className="btn-ghost"
-            style={{
-              textDecoration: "none",
-              fontSize: 15,
-              padding: "11px 20px",
-              borderRadius: "var(--radius-sm)",
-              fontWeight: 600,
-            }}
-          >
-            {walletPubkey ? "How it works" : "Explore markets"}
-          </Link>
-          {!walletPubkey && (
-            <span className="muted" style={{ fontSize: 13 }}>
-              Connect a wallet to start trading — no sign-up, no KYC.
+/** A row in the "Today's markets" list, with Yes/No buttons into the book. */
+function MarketRow({
+  ticker,
+  market,
+  yesMid,
+  spot,
+}: {
+  ticker: string;
+  market: MarketView;
+  yesMid: number | null;
+  spot: number | null;
+}) {
+  const strikeNum = Number(market.strikePrice) / 1_000_000;
+  const dist = distanceToStrike(spot, strikeNum);
+  const yesW = yesMid !== null ? Math.round(yesMid * 100) : 0;
+  const noMid = yesMid !== null ? noFromYes(yesMid) : null;
+  return (
+    <div className="market-row">
+      <span className="ticker-badge mono" style={{ width: 34, height: 34, fontSize: 10 }}>{ticker}</span>
+      <div className="market-row-main">
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+          <span style={{ fontWeight: 600, fontSize: 13 }}>
+            Will {ticker} close above <span className="mono">${strikeDollars(market.strikePrice)}</span>?
+          </span>
+          <span className="mono" style={{ fontWeight: 700, color: yesMid !== null ? "var(--yes)" : "var(--muted)" }}>
+            {pct(yesMid)}
+          </span>
+        </div>
+        <div className="prob-bar" style={{ margin: "6px 0" }}>
+          <span className="prob-yes" style={{ width: `${yesW}%` }} />
+        </div>
+        <div className="muted" style={{ fontSize: 11 }}>
+          Yes {pct(yesMid)} · No {noMid !== null ? `${Math.round(noMid * 100)}%` : "—"}
+          {dist !== null && (
+            <span style={{ color: dist.aboveStrike ? "var(--yes)" : "var(--no)", marginLeft: 8 }}>
+              {dist.aboveStrike ? "+" : "−"}${usd(Math.abs(dist.delta))} vs strike
             </span>
           )}
         </div>
+      </div>
+      <div className="market-row-actions">
+        <Link href={tradeHref(market.pubkey)} className="btn btn-yes" style={{ padding: "7px 16px", fontSize: 13 }}>Yes</Link>
+        <Link href={tradeHref(market.pubkey)} className="btn btn-no" style={{ padding: "7px 16px", fontSize: 13 }}>No</Link>
+      </div>
+    </div>
+  );
+}
 
-        {/* Trust / feature chips */}
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            flexWrap: "wrap",
-            marginTop: 28,
-          }}
-        >
-          {["Non-custodial", "On-chain CLOB", "Pyth oracle", "No KYC"].map((c) => (
-            <span key={c} className="pill">
-              {c}
-            </span>
-          ))}
-        </div>
-      </section>
+export default function Dashboard() {
+  const { program, markets, walletPubkey, configError } = useMeridian();
+  const prices = usePrices();
 
-      {/* ── Live MAG7 ticker strip ───────────────────────────── */}
-      <section style={{ marginBottom: 56 }}>
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            alignItems: "baseline",
-            marginBottom: 12,
-          }}
-        >
-          <h2 style={{ fontSize: 14, margin: 0, color: "var(--muted)", fontWeight: 600, letterSpacing: "0.04em", textTransform: "uppercase" }}>
-            Live MAG7 prices
-          </h2>
-          <Link href="/markets" style={{ fontSize: 13 }}>
-            View all markets →
-          </Link>
+  const groups = useMemo(
+    () => groupActiveByTicker(markets, Math.floor(Date.now() / 1000)),
+    [markets],
+  );
+  const active = useMemo(() => groups.flatMap((g) => g.active), [groups]);
+  const activeSig = active.map((m) => m.pubkey.toBase58()).sort().join(",");
+
+  const [books, setBooks] = useState<Record<string, BookView | null>>({});
+  useEffect(() => {
+    if (active.length === 0) {
+      setBooks({});
+      return;
+    }
+    let cancelled = false;
+    const load = async () => {
+      const entries = await Promise.all(
+        active.map(async (m) => {
+          try {
+            return [m.pubkey.toBase58(), await fetchBook(program, m.pubkey)] as const;
+          } catch {
+            return [m.pubkey.toBase58(), null] as const;
+          }
+        }),
+      );
+      if (!cancelled) setBooks(Object.fromEntries(entries));
+    };
+    void load();
+    const id = setInterval(() => void load(), BOOK_POLL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [program, activeSig]);
+
+  const tickerName = useMemo(
+    () => Object.fromEntries(MAG7.map((f) => [f.ticker, f.name])),
+    [],
+  );
+  const tickerOf = (m: MarketView) =>
+    groups.find((g) => g.active.includes(m))?.ticker ?? "";
+  const yesMidOf = (m: MarketView) => yesMidFraction(books[m.pubkey.toBase58()] ?? null);
+  const spotOf = (t: string) => prices[t]?.price ?? null;
+
+  // Top cards: the markets nearest a coin-flip (most interesting), up to 4.
+  const topCards = useMemo(
+    () =>
+      [...active]
+        .sort(
+          (a, b) =>
+            Math.abs((yesMidOf(a) ?? 0.5) - 0.5) - Math.abs((yesMidOf(b) ?? 0.5) - 0.5),
+        )
+        .slice(0, 4),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeSig, books],
+  );
+
+  return (
+    <main className="dashboard">
+      <div className="dashboard-head">
+        <div>
+          <h1 style={{ fontSize: 26 }}>Dashboard</h1>
+          <p className="muted" style={{ fontSize: 13, margin: "4px 0 0" }}>
+            Daily binary options on the Magnificent Seven · settle at the 4:00 PM ET close.
+          </p>
         </div>
-        <div
-          className="panel"
-          style={{
-            padding: 0,
-            overflowX: "auto",
-            background:
-              "linear-gradient(90deg, rgba(109,106,254,0.07), rgba(43,212,125,0.04) 60%, transparent), " +
-              "linear-gradient(180deg, var(--surface), #14171f)",
-          }}
-        >
-          <div style={{ display: "flex", minWidth: "max-content" }}>
-            {MAG7.map((f) => (
-              <TickerCell
-                key={f.ticker}
-                ticker={f.ticker}
-                name={f.name}
-                data={prices[f.ticker] ?? null}
+        {!walletPubkey && <WalletButton />}
+      </div>
+
+      {configError && (
+        <p className="muted" style={{ color: "var(--no)", fontSize: 13 }}>{configError}</p>
+      )}
+
+      {/* Top stat cards */}
+      {topCards.length > 0 ? (
+        <div className="stat-card-grid">
+          {topCards.map((m) => {
+            const t = tickerOf(m);
+            return (
+              <StatCard
+                key={m.pubkey.toBase58()}
+                ticker={t}
+                name={tickerName[t] ?? ""}
+                market={m}
+                yesMid={yesMidOf(m)}
+                spot={spotOf(t)}
+              />
+            );
+          })}
+        </div>
+      ) : (
+        <div className="panel" style={{ textAlign: "center", padding: 28 }}>
+          <div style={{ fontWeight: 700, fontSize: 16 }}>No active contracts yet</div>
+          <p className="muted" style={{ fontSize: 13, margin: "6px 0 0" }}>
+            The morning job creates the day&apos;s strike markets. Live MAG7 prices are below.
+          </p>
+        </div>
+      )}
+
+      {/* Live ticker strip */}
+      <div className="ticker-strip">
+        {MAG7.map((f) => {
+          const p = prices[f.ticker];
+          return (
+            <div className="ticker-cell" key={f.ticker}>
+              <span className="mono" style={{ fontWeight: 700, fontSize: 12 }}>{f.ticker}</span>
+              <span className="mono" style={{ fontSize: 12, color: "var(--text-dim)" }}>
+                {p ? `$${usd(p.price)}` : "—"}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Today's markets list */}
+      <section className="panel" style={{ padding: 18 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+          <div>
+            <h2 style={{ fontSize: 17 }}>Today&apos;s markets</h2>
+            <p className="muted" style={{ fontSize: 12, margin: "2px 0 0" }}>
+              Daily binary options · settle at the 4:00 PM ET close
+            </p>
+          </div>
+          <Link href="/markets" className="muted" style={{ fontSize: 13 }}>View all →</Link>
+        </div>
+        {active.length > 0 ? (
+          <div className="market-row-list">
+            {active.map((m) => (
+              <MarketRow
+                key={m.pubkey.toBase58()}
+                ticker={tickerOf(m)}
+                market={m}
+                yesMid={yesMidOf(m)}
+                spot={spotOf(tickerOf(m))}
               />
             ))}
           </div>
-        </div>
-        <p className="muted" style={{ fontSize: 12, marginTop: 10 }}>
-          Equity feeds publish during US market hours (9:30 AM–4:00 PM ET,
-          weekdays). Off-hours show the last regular-session value.
-        </p>
-      </section>
-
-      {/* ── How it works ─────────────────────────────────────── */}
-      <section style={{ marginBottom: 56 }}>
-        <h2 style={{ fontSize: 24, margin: "0 0 6px" }}>How it works</h2>
-        <p className="muted" style={{ fontSize: 14, margin: "0 0 24px" }}>
-          Three steps, fully on-chain, settled the same day.
-        </p>
-        <div
-          style={{
-            display: "grid",
-            gap: 16,
-            gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
-          }}
-        >
-          <Step
-            n={1}
-            glyph={
-              <div style={{ display: "flex", gap: 3 }}>
-                <span style={{ width: 12, height: 18, borderRadius: 3, background: "var(--yes)" }} />
-                <span style={{ width: 12, height: 18, borderRadius: 3, background: "var(--no)" }} />
-              </div>
-            }
-            title="Mint a $1 pair"
-            body={
-              <>
-                Deposit <span className="mono">$1 USDC</span> and mint one{" "}
-                <strong style={{ color: "var(--yes)" }}>Yes</strong> and one{" "}
-                <strong style={{ color: "var(--no)" }}>No</strong> token. Together
-                they&apos;re always worth $1 — keep both, or sell the side you
-                don&apos;t want.
-              </>
-            }
-          />
-          <Step
-            n={2}
-            glyph={
-              <div style={{ display: "grid", gap: 3, width: 18 }}>
-                <span style={{ height: 4, width: "100%", borderRadius: 2, background: "var(--accent-2)" }} />
-                <span style={{ height: 4, width: "65%", borderRadius: 2, background: "var(--accent-2)", opacity: 0.6 }} />
-                <span style={{ height: 4, width: "85%", borderRadius: 2, background: "var(--accent-2)", opacity: 0.8 }} />
-              </div>
-            }
-            title="Trade on the order book"
-            body={
-              <>
-                Buy or sell <strong style={{ color: "var(--yes)" }}>Yes</strong> /{" "}
-                <strong style={{ color: "var(--no)" }}>No</strong> on a fully
-                on-chain limit order book. A Yes price of{" "}
-                <span className="mono">$0.62</span> is the market&apos;s 62%
-                implied probability.
-              </>
-            }
-          />
-          <Step
-            n={3}
-            glyph={
-              <div
-                style={{
-                  width: 20,
-                  height: 20,
-                  borderRadius: 999,
-                  border: "2px solid var(--accent-2)",
-                  display: "grid",
-                  placeItems: "center",
-                }}
-              >
-                <span style={{ width: 8, height: 8, borderRadius: 999, background: "var(--yes)" }} />
-              </div>
-            }
-            title="Settle & redeem"
-            body={
-              <>
-                At <strong style={{ color: "var(--text)" }}>4:00 PM ET</strong> a
-                Pyth oracle settles the market. The winning token redeems for{" "}
-                <span className="mono" style={{ color: "var(--yes)" }}>$1</span>;
-                the losing side expires at <span className="mono">$0</span>.
-              </>
-            }
-          />
-        </div>
-      </section>
-
-      {/* ── Closing CTA ──────────────────────────────────────── */}
-      <section
-        className="panel"
-        style={{
-          display: "flex",
-          flexWrap: "wrap",
-          gap: 16,
-          alignItems: "center",
-          justifyContent: "space-between",
-          padding: "28px 32px",
-          background:
-            "radial-gradient(600px 300px at 90% 0%, rgba(109,106,254,0.18), transparent 60%), " +
-            "linear-gradient(180deg, var(--surface), #11141d)",
-        }}
-      >
-        <div style={{ display: "grid", gap: 6 }}>
-          <h2 style={{ fontSize: 22, margin: 0 }}>Ready to take a side?</h2>
-          <p className="dim" style={{ fontSize: 14, margin: 0, maxWidth: 460 }}>
-            Connect a non-custodial wallet and trade today&apos;s MAG7 markets.
-            Your keys, your funds, your position.
-          </p>
-        </div>
-        {walletPubkey ? (
-          <Link
-            href="/markets"
-            className="btn"
-            style={{ textDecoration: "none", fontSize: 15, padding: "12px 22px" }}
-          >
-            Explore markets →
-          </Link>
         ) : (
-          <WalletButton />
+          <p className="muted" style={{ fontSize: 13 }}>No active markets right now.</p>
         )}
       </section>
     </main>
