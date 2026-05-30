@@ -567,27 +567,7 @@ export default function Dashboard() {
 
       {configError && <p className="muted" style={{ color: "var(--no)", fontSize: 13 }}>{configError}</p>}
 
-      {/* Row 1 — stat cards */}
-      <div className="stat-card-grid">
-        {statCards.map((c) => (
-          <StatCard key={c.ticker} ticker={c.ticker} name={tickerName[c.ticker] ?? ""} market={c.market} yesMid={c.market ? yesMidOf(c.market) : null} spot={spotOf(c.ticker)} />
-        ))}
-      </div>
-
-      {/* Row 2 — ticker strip */}
-      <div className="ticker-strip">
-        {MAG7.map((f) => {
-          const p = prices[f.ticker];
-          return (
-            <div className="ticker-cell" key={f.ticker}>
-              <span className="mono" style={{ fontWeight: 700, fontSize: 12 }}>{f.ticker}</span>
-              <span className="mono" style={{ fontSize: 12, color: "var(--text-dim)" }}>{p ? `$${usd(p.price)}` : "—"}</span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Row 3 — today's markets + activity */}
+      {/* Row 1 — today's markets (the bets) + activity */}
       <div className="dash-2col">
         <section className="panel" style={{ padding: 18 }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 12, gap: 12, flexWrap: "wrap" }}>
@@ -612,6 +592,26 @@ export default function Dashboard() {
           )}
         </section>
         <ActivityPanel />
+      </div>
+
+      {/* Row 2 — stat cards */}
+      <div className="stat-card-grid">
+        {statCards.map((c) => (
+          <StatCard key={c.ticker} ticker={c.ticker} name={tickerName[c.ticker] ?? ""} market={c.market} yesMid={c.market ? yesMidOf(c.market) : null} spot={spotOf(c.ticker)} />
+        ))}
+      </div>
+
+      {/* Row 3 — ticker strip */}
+      <div className="ticker-strip">
+        {MAG7.map((f) => {
+          const p = prices[f.ticker];
+          return (
+            <div className="ticker-cell" key={f.ticker}>
+              <span className="mono" style={{ fontWeight: 700, fontSize: 12 }}>{f.ticker}</span>
+              <span className="mono" style={{ fontSize: 12, color: "var(--text-dim)" }}>{p ? `$${usd(p.price)}` : "—"}</span>
+            </div>
+          );
+        })}
       </div>
 
       {/* Row 4 — portfolio + insights */}
