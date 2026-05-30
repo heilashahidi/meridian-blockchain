@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 import { PublicKey } from "@solana/web3.js";
 
@@ -372,19 +372,40 @@ function PortfolioPanel({ active, books }: { active: MarketView[]; books: Record
 const etTime = () =>
   new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit", hour12: true }).format(new Date());
 
-/** Market insights from LIVE market state, with a chat box that answers from the
- *  same real data (a deterministic market lookup, not an LLM). */
-function InsightsPanel({ items, onAsk }: { items: { ticker: string; text: string }[]; onAsk: (q: string) => string }) {
+interface ChatMsg { id: number; ticker: string; text: string; time: string }
+
+/** Market insights from LIVE market state, with a chat box. Questions go to the
+ *  Claude-backed /api/insights route (grounded in the live data); when no API
+ *  key is configured or the call fails, onAsk returns a deterministic lookup. */
+function InsightsPanel({ items, onAsk }: { items: { ticker: string; text: string }[]; onAsk: (q: string) => Promise<string> }) {
   const [q, setQ] = useState("");
-  const [chat, setChat] = useState<{ ticker: string; text: string; time: string }[]>([]);
-  const submit = (e: FormEvent) => {
+  const [chat, setChat] = useState<ChatMsg[]>([]);
+  const [busy, setBusy] = useState(false);
+  const idRef = useRef(0);
+
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
     const query = q.trim();
-    if (!query) return;
-    setChat((c) => [{ ticker: "YOU", text: query, time: etTime() }, { ticker: "MERIDIAN", text: onAsk(query), time: etTime() }, ...c]);
+    if (!query || busy) return;
     setQ("");
+    setBusy(true);
+    const time = etTime();
+    const ansId = ++idRef.current;
+    setChat((c) => [
+      { id: ++idRef.current, ticker: "YOU", text: query, time },
+      { id: ansId, ticker: "MERIDIAN", text: "…", time },
+      ...c,
+    ]);
+    let answer = "";
+    try {
+      answer = await onAsk(query);
+    } finally {
+      setChat((c) => c.map((m) => (m.id === ansId ? { ...m, text: answer || "(no answer)" } : m)));
+      setBusy(false);
+    }
   };
-  const live = items.map((it) => ({ ...it, time: etTime() }));
+
+  const live = items.map((it, i) => ({ id: -1 - i, ...it, time: etTime() }));
   const all = [...chat, ...live];
   return (
     <aside className="panel dash-insights">
@@ -395,20 +416,20 @@ function InsightsPanel({ items, onAsk }: { items: { ticker: string; text: string
         {all.length === 0 ? (
           <p className="muted" style={{ fontSize: 13 }}>Insights appear here once markets are live.</p>
         ) : (
-          all.map((it, i) => (
-            <div className="dash-insight" key={i}>
+          all.map((it) => (
+            <div className="dash-insight" key={it.id} data-you={it.ticker === "YOU" ? "true" : undefined}>
               <div className="dash-insight-row">
                 <span className="dash-insight-tag">{it.ticker}</span>
                 <span className="muted dash-insight-time">{it.time}</span>
               </div>
-              <div style={{ fontSize: 13, color: "var(--text-dim)" }}>{it.text}</div>
+              <div style={{ fontSize: 13, color: it.ticker === "YOU" ? "var(--text)" : "var(--text-dim)" }}>{it.text}</div>
             </div>
           ))
         )}
       </div>
       <form className="dash-chat" onSubmit={submit}>
-        <input className="dash-chat-input" placeholder="Ask about any market…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Ask about a market" />
-        <button type="submit" className="dash-chat-send" aria-label="Send">
+        <input className="dash-chat-input" placeholder={busy ? "Thinking…" : "Ask about any market…"} value={q} onChange={(e) => setQ(e.target.value)} disabled={busy} aria-label="Ask about a market" />
+        <button type="submit" className="dash-chat-send" disabled={busy} aria-label="Send">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
             <path d="M22 2L11 13" /><path d="M22 2l-7 20-4-9-9-4 20-7z" />
           </svg>
@@ -487,8 +508,21 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSig, books, prices]);
 
-  // Chat: answer a question from the real market data (deterministic lookup).
-  const onAsk = (query: string): string => {
+  // A compact live-market snapshot the chat passes to the LLM as grounding.
+  const marketContext = (): string =>
+    active.length === 0
+      ? ""
+      : active
+          .map((m) => {
+            const t = tickerOf(m);
+            const s = spotOf(t);
+            const dist = distanceToStrike(s, Number(m.strikePrice) / 1_000_000);
+            return `${t} > $${strikeDollars(m.strikePrice)} | Yes ${pct(yesMidOf(m))} | spot ${s !== null ? `$${usd(s)}` : "n/a"}${dist ? ` | ${dist.aboveStrike ? "+" : "−"}$${usd(Math.abs(dist.delta))} vs strike` : ""}`;
+          })
+          .join("\n");
+
+  // Deterministic on-chain lookup — the fallback when the LLM is unavailable.
+  const lookupAnswer = (query: string): string => {
     const t = MAG7.find((f) => query.toUpperCase().includes(f.ticker))?.ticker;
     if (!t) return "Ask about a MAG7 ticker — e.g. “NVDA” or “META $700” — and I’ll read the live market.";
     const mkts = active.filter((m) => tickerOf(m) === t);
@@ -497,11 +531,28 @@ export default function Dashboard() {
       return `${t} has no active contract yet${s !== null ? ` — spot is $${usd(s)}` : ""}. The morning job creates the day’s strikes.`;
     }
     const m = mkts[0];
-    const ym = yesMidOf(m);
     const s = spotOf(t);
-    const strikeNum = Number(m.strikePrice) / 1_000_000;
-    const dist = distanceToStrike(s, strikeNum);
-    return `${t} > $${strikeDollars(m.strikePrice)}: Yes implied ${pct(ym)}${s !== null ? `, spot $${usd(s)}` : ""}${dist ? ` (${dist.aboveStrike ? "+" : "−"}$${usd(Math.abs(dist.delta))} vs strike)` : ""}. Settles at the 4:00 PM ET close.`;
+    const dist = distanceToStrike(s, Number(m.strikePrice) / 1_000_000);
+    return `${t} > $${strikeDollars(m.strikePrice)}: Yes implied ${pct(yesMidOf(m))}${s !== null ? `, spot $${usd(s)}` : ""}${dist ? ` (${dist.aboveStrike ? "+" : "−"}$${usd(Math.abs(dist.delta))} vs strike)` : ""}. Settles at the 4:00 PM ET close.`;
+  };
+
+  // Chat: ask Claude (server route, grounded in live data); fall back to the
+  // deterministic lookup if no API key is configured or the call fails.
+  const onAsk = async (query: string): Promise<string> => {
+    try {
+      const res = await fetch("/api/insights", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question: query, context: marketContext() }),
+      });
+      if (res.ok) {
+        const data = (await res.json()) as { answer?: string };
+        if (data.answer) return data.answer;
+      }
+    } catch {
+      /* fall through to the deterministic lookup */
+    }
+    return lookupAnswer(query);
   };
 
   return (

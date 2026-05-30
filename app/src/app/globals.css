@@ -1174,3 +1174,11 @@ select:focus,
 .wallet-adapter-dropdown-list * {
   font-family: var(--font-sans) !important;
 }
+
+.dash-insight[data-you="true"] {
+  background: var(--accent-dim);
+  border-color: rgba(109, 106, 254, 0.3);
+}
+.dash-insight[data-you="true"] .dash-insight-tag { color: var(--text-dim); }
+.dash-chat-send:disabled,
+.dash-chat-input:disabled { opacity: 0.55; cursor: default; }
