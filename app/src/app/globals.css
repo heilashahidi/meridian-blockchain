@@ -5,7 +5,7 @@
 :root {
   /* Surfaces — refined deep slate, not pure black */
   --bg: #0a0c11;
-  --bg-grad: radial-gradient(1200px 600px at 70% -10%, #161a2e 0%, #0a0c11 55%);
+  --bg-grad: radial-gradient(1100px 620px at 76% -12%, #15192c 0%, #0a0c11 56%);
   --surface: #161a24;
   --surface-2: #1c212d;
   --surface-3: #232838;
@@ -40,7 +40,12 @@
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 32px -12px rgba(0, 0, 0, 0.6);
   --ring: 0 0 0 3px rgba(109, 106, 254, 0.35);
   --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  --font-mono: var(--font-jetbrains-mono), ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* App-shell geometry (matches the Meridian dashboard design). */
+  --sidebar-w: 248px;
+  --pad: 22px;
+  --gap: 20px;
 }
 
 * {
@@ -303,5 +308,179 @@ select:focus,
   * {
     animation: none !important;
     transition: none !important;
+  }
+}
+
+/* ── App shell: left sidebar + top bar ────────────────────────── */
+.app-shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) 1fr;
+  min-height: 100vh;
+}
+.app-main {
+  min-width: 0; /* let content shrink instead of overflowing the grid track */
+  display: flex;
+  flex-direction: column;
+}
+
+/* Sidebar */
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: var(--pad) 14px;
+  border-right: 1px solid var(--border);
+  background: linear-gradient(180deg, #0c0f16, #0a0c11);
+}
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 8px 14px;
+  font-weight: 800;
+  font-size: 17px;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+.sidebar-brand:hover {
+  color: var(--text);
+}
+.sidebar-mark {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  color: var(--accent);
+  background: var(--accent-dim);
+  box-shadow: 0 0 18px rgba(109, 106, 254, 0.35);
+}
+.sidebar-section-label {
+  padding: 8px 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.sidebar-link {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-weight: 500;
+  transition: color 0.14s ease, background 0.14s ease;
+}
+.sidebar-link:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.sidebar-link[data-active="true"] {
+  color: var(--text);
+  background: var(--surface-2);
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+.sidebar-link[data-active="true"] svg {
+  color: var(--accent);
+}
+.sidebar-foot {
+  margin-top: auto;
+  padding-top: 12px;
+}
+.sidebar-buying {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  padding: 14px;
+}
+
+/* Top bar */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 13px var(--pad);
+  border-bottom: 1px solid var(--border);
+  background: rgba(12, 15, 22, 0.72);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.topbar-status {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.topbar-status-text {
+  color: var(--text-dim);
+  font-size: 13px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--yes);
+  box-shadow: 0 0 10px var(--yes);
+  flex: none;
+}
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Responsive: collapse the rail into a horizontal top strip. */
+@media (max-width: 880px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    position: sticky;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    overflow-x: auto;
+    padding: 10px 12px;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-brand {
+    padding: 4px 8px;
+  }
+  .sidebar-section-label,
+  .sidebar-foot {
+    display: none;
+  }
+  .sidebar-nav {
+    flex-direction: row;
+  }
+  .sidebar-link {
+    white-space: nowrap;
+  }
+  .sidebar-link[data-active="true"] {
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+  .topbar-status-text {
+    font-size: 12px;
   }
 }
