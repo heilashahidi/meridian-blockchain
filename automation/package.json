@@ -11,6 +11,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
     "start": "node --import tsx src/index.ts",
+    "schedule": "node --import tsx src/index.ts schedule",
+    "start:prod": "node dist/index.js schedule",
     "create-strikes": "node --import tsx src/index.ts create-strikes",
     "settle": "node --import tsx src/index.ts settle",
     "test": "vitest run"
