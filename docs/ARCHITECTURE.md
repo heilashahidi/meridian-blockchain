@@ -750,6 +750,37 @@ above are cross-referenced rather than re-argued in depth.
 - **Rationale.** Each layer catches a distinct failure class; bugs are caught at
   the cheapest layer that can reach them.
 
+### Infrastructure & operations
+
+#### D26. Dedicated Solana RPC (Helius) for deploy, frontend reads, and automation
+- **Context.** Three workloads hit an RPC and the public `api.devnet.solana.com`
+  serves none of them reliably: (1) **program deploy** — `meridian.so` is large
+  enough that `solana program deploy` fires hundreds of write transactions and the
+  public endpoint 429s mid-deploy; (2) **frontend market discovery** — `listMarkets`
+  (`app/src/lib/market.ts`) is a `getProgramAccounts` scan, which many providers
+  throttle or disable; (3) **the daily settlement burst** — the automation `settle`
+  job posts Pyth `PriceUpdateV2` accounts and settles N markets with retries against
+  a PRD liveness SLA ("settle within 10 minutes of market close").
+- **Decision.** Use a dedicated, keyed Solana RPC. **Helius** is the recommended
+  provider for both devnet (now) and the mainnet bonus path; wired purely via env
+  (`RPC_URL` for the app/automation, `DEVNET_RPC` for `scripts/deploy-devnet.sh`) —
+  no code change, consistent with the "env-configurable everywhere" stance (§4).
+- **Rationale.** Helius is Solana-native and serves the two things the public node
+  and EVM-first providers (e.g. Alchemy) choke on: full `getProgramAccounts` for the
+  markets grid, and Geyser/Yellowstone gRPC + websocket `accountSubscribe`, which is
+  the upgrade path to replace the frontend's 3 s `POLL_MS` polling
+  (`MeridianContext.tsx`) with real-time book updates — directly serving the PRD's
+  "real-time order book updates." Same provider devnet → mainnet means the deploy
+  setup carries forward. Its free tier covers the devnet demo.
+- **Trade-offs.** Introduces a third-party dependency on the read/deploy path (the
+  PRD asks to justify dependencies — justified here by deploy reliability and gPA
+  support, and it stays swappable via `RPC_URL`). A keyed endpoint URL is now a
+  secret to manage (kept in env, never committed).
+- **Alternatives.** QuickNode (solid, Yellowstone gRPC, but gPA limits on lower
+  tiers and pricier) as a drop-in second choice; Triton dedicated nodes (lowest
+  latency, built for trading) as the step up if Meridian became a real
+  high-throughput venue; public RPC rejected for production for the reasons above.
+
 ---
 
 ## 9. Known limitations (scope boundaries and the mainnet path)
