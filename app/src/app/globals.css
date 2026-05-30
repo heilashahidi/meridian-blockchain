@@ -484,3 +484,234 @@ select:focus,
     font-size: 12px;
   }
 }
+
+/* ── Sidebar: sections, active dot, buying-power card ─────────── */
+.sidebar-scroll {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+.sidebar-link {
+  position: relative;
+}
+.sidebar-link-btn {
+  border: none;
+  background: transparent;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  font: inherit;
+}
+.sidebar-link-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.sidebar-active-dot {
+  margin-left: auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--yes);
+  box-shadow: 0 0 8px var(--yes);
+}
+.sidebar-buying {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: linear-gradient(180deg, var(--surface-2), var(--surface));
+  padding: 14px;
+  box-shadow: var(--shadow);
+}
+.buying-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.buying-icon {
+  display: grid;
+  place-items: center;
+  color: var(--text-dim);
+}
+.buying-label {
+  font-size: 13px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.badge-devnet {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  color: var(--accent-2);
+  background: var(--accent-dim);
+  border: 1px solid rgba(109, 106, 254, 0.3);
+  padding: 2px 7px;
+  border-radius: 999px;
+}
+.buying-amount {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin-top: 6px;
+}
+.buying-sub {
+  font-size: 11px;
+  margin-top: 1px;
+}
+.buying-deposit {
+  display: block;
+  text-align: center;
+  width: 100%;
+  margin-top: 12px;
+  padding: 9px 0;
+  font-size: 13px;
+}
+.buying-deposit:hover {
+  color: #fff;
+}
+.buying-addr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 10px;
+}
+.addr-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--yes);
+  box-shadow: 0 0 6px var(--yes);
+}
+
+/* ── Top bar: search, market clock, date ─────────────────────── */
+.topbar {
+  gap: 14px;
+}
+.topbar-search {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1;
+  max-width: 460px;
+  padding: 9px 13px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.topbar-search:focus-within {
+  border-color: var(--border-strong);
+  box-shadow: var(--ring);
+}
+.topbar-search-input {
+  flex: 1;
+  min-width: 0;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+.topbar-search-input::placeholder {
+  color: var(--muted);
+}
+.topbar-kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 1px 6px;
+  background: var(--surface-2);
+}
+.topbar-clock {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+}
+.topbar-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+}
+.topbar-pill.is-open {
+  color: var(--yes);
+  background: var(--yes-dim);
+}
+.topbar-pill.is-closed {
+  color: var(--muted);
+  background: var(--surface-2);
+}
+.topbar-pill.is-closed .topbar-dot {
+  background: var(--muted);
+  box-shadow: none;
+}
+.topbar-clock-text {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+  font-size: 11px;
+}
+.topbar-countdown {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--warn);
+}
+.topbar-date {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.topbar-date-day {
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+.topbar-date-rest {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.2;
+}
+
+@media (max-width: 1100px) {
+  .topbar-search {
+    max-width: 280px;
+  }
+  .topbar-date {
+    display: none;
+  }
+}
+@media (max-width: 880px) {
+  .topbar-search,
+  .topbar-clock {
+    display: none;
+  }
+  .sidebar-scroll {
+    flex-direction: row;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .sidebar-scroll .sidebar-section-label {
+    display: none;
+  }
+  .sidebar-scroll .sidebar-nav {
+    flex-direction: row;
+  }
+}

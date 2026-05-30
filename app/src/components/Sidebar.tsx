@@ -1,12 +1,14 @@
 "use client";
 
-import { useConnection } from "@solana/wallet-adapter-react";
+import { useConnection, useWallet } from "@solana/wallet-adapter-react";
 import { getAssociatedTokenAddressSync, getAccount } from "@solana/spl-token";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 
 import { useMeridian } from "@/hooks/MeridianContext";
+
+const REPO = "https://github.com/heilashahidi/meridian-blockchain";
 
 interface NavLink {
   href: string;
@@ -41,8 +43,8 @@ const I = {
   ),
   portfolio: (
     <>
-      <path d="M21 12a9 9 0 1 1-9-9v9z" />
-      <path d="M12 3a9 9 0 0 1 9 9h-9z" />
+      <rect x="3" y="7" width="18" height="13" rx="2" />
+      <path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
     </>
   ),
   history: (
@@ -50,6 +52,38 @@ const I = {
       <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
       <path d="M3 4v4h4" />
       <path d="M12 8v4l3 2" />
+    </>
+  ),
+  support: (
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 .9-1 1.7" />
+      <line x1="12" y1="17" x2="12" y2="17" />
+    </>
+  ),
+  feedback: (
+    <>
+      <path d="M21 11.5a8.38 8.38 0 0 1-9 8.4 8.5 8.5 0 0 1-3.8-.9L3 20l1.3-3.8A8.38 8.38 0 0 1 12 3.1a8.5 8.5 0 0 1 9 8.4z" />
+    </>
+  ),
+  account: (
+    <>
+      <circle cx="12" cy="8" r="4" />
+      <path d="M5 21a7 7 0 0 1 14 0" />
+    </>
+  ),
+  logout: (
+    <>
+      <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+      <path d="M16 17l5-5-5-5" />
+      <path d="M21 12H9" />
+    </>
+  ),
+  wallet: (
+    <>
+      <rect x="3" y="6" width="18" height="13" rx="2.5" />
+      <path d="M3 10h18" />
+      <circle cx="16.5" cy="14" r="1.2" fill="currentColor" stroke="none" />
     </>
   ),
 };
@@ -62,6 +96,24 @@ const LINKS: NavLink[] = [
   { href: "/history", label: "History", icon: I.history, match: (p) => p.startsWith("/history") },
 ];
 
+function Icon({ children }: { children: ReactNode }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      width="17"
+      height="17"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      {children}
+    </svg>
+  );
+}
+
 const fmtUsd = (micro: bigint) =>
   (Number(micro) / 1_000_000).toLocaleString("en-US", {
     minimumFractionDigits: 2,
@@ -70,7 +122,7 @@ const fmtUsd = (micro: bigint) =>
 
 const shortAddr = (a: string) => `${a.slice(0, 4)}…${a.slice(-4)}`;
 
-/** Buying-power card at the foot of the rail: live wallet USDC + address. */
+/** Buying-power card at the foot of the rail: live wallet USDC + deposit + addr. */
 function BuyingPower() {
   const { connection } = useConnection();
   const { walletPubkey, config } = useMeridian();
@@ -101,19 +153,23 @@ function BuyingPower() {
 
   return (
     <div className="sidebar-buying">
-      <div className="stat-label">Buying power · Devnet</div>
-      <div className="mono" style={{ fontSize: 22, fontWeight: 800, marginTop: 2 }}>
-        {walletPubkey ? `$${usdc !== null ? fmtUsd(usdc) : "—"}` : "—"}
+      <div className="buying-head">
+        <span className="buying-icon" aria-hidden>
+          <Icon>{I.wallet}</Icon>
+        </span>
+        <span className="buying-label">Buying power</span>
+        <span className="badge-devnet">Devnet</span>
       </div>
-      <div className="muted" style={{ fontSize: 11, marginTop: 2 }}>
-        USDC · non-custodial
+      <div className="mono buying-amount">
+        {walletPubkey ? `$${usdc !== null ? fmtUsd(usdc) : "—"}` : "$0.00"}
       </div>
+      <div className="muted buying-sub">USDC · non-custodial</div>
+      <Link href="/markets" className="btn buying-deposit">
+        + Deposit USDC
+      </Link>
       {walletPubkey && (
-        <div
-          className="mono"
-          style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8 }}
-          title={walletPubkey.toBase58()}
-        >
+        <div className="buying-addr mono" title={walletPubkey.toBase58()}>
+          <span className="addr-dot" aria-hidden />
           {shortAddr(walletPubkey.toBase58())}
         </div>
       )}
@@ -123,10 +179,12 @@ function BuyingPower() {
 
 /**
  * Persistent left rail — the dashboard app-shell from the Meridian design.
- * Logo, primary nav, and the live buying-power card pinned to the bottom.
+ * Logo, primary nav (General), secondary links (Other / Preferences), and the
+ * live buying-power card pinned to the bottom.
  */
 export function Sidebar() {
   const pathname = usePathname() ?? "/";
+  const { disconnect, connected } = useWallet();
 
   return (
     <aside className="sidebar">
@@ -141,36 +199,56 @@ export function Sidebar() {
         Meridian
       </Link>
 
-      <div className="sidebar-section-label">General</div>
-      <nav className="sidebar-nav">
-        {LINKS.map((l) => {
-          const active = l.match(pathname);
-          return (
-            <Link
-              key={l.href}
-              href={l.href}
-              className="sidebar-link"
-              data-active={active ? "true" : undefined}
-              aria-current={active ? "page" : undefined}
-            >
-              <svg
-                viewBox="0 0 24 24"
-                width="17"
-                height="17"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.7"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                aria-hidden
+      <div className="sidebar-scroll">
+        <div className="sidebar-section-label">General</div>
+        <nav className="sidebar-nav">
+          {LINKS.map((l) => {
+            const active = l.match(pathname);
+            return (
+              <Link
+                key={l.href}
+                href={l.href}
+                className="sidebar-link"
+                data-active={active ? "true" : undefined}
+                aria-current={active ? "page" : undefined}
               >
-                {l.icon}
-              </svg>
-              {l.label}
-            </Link>
-          );
-        })}
-      </nav>
+                <Icon>{l.icon}</Icon>
+                {l.label}
+                {active && <span className="sidebar-active-dot" aria-hidden />}
+              </Link>
+            );
+          })}
+        </nav>
+
+        <div className="sidebar-section-label">Other</div>
+        <nav className="sidebar-nav">
+          <a className="sidebar-link" href={REPO} target="_blank" rel="noreferrer">
+            <Icon>{I.support}</Icon>
+            Support
+          </a>
+          <a className="sidebar-link" href={`${REPO}/issues`} target="_blank" rel="noreferrer">
+            <Icon>{I.feedback}</Icon>
+            Feedback
+          </a>
+        </nav>
+
+        <div className="sidebar-section-label">Preferences</div>
+        <nav className="sidebar-nav">
+          <Link href="/portfolio" className="sidebar-link">
+            <Icon>{I.account}</Icon>
+            Account
+          </Link>
+          <button
+            type="button"
+            className="sidebar-link sidebar-link-btn"
+            onClick={() => connected && disconnect().catch(() => {})}
+            disabled={!connected}
+          >
+            <Icon>{I.logout}</Icon>
+            Log out
+          </button>
+        </nav>
+      </div>
 
       <div className="sidebar-foot">
         <BuyingPower />
