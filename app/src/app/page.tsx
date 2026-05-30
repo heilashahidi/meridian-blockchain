@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
+import { useConnection } from "@solana/wallet-adapter-react";
 
 import { MAG7 } from "@/lib/feeds";
-import { fetchBook, type BookView, type MarketView } from "@/lib/market";
+import { fetchBalances, fetchBook, type BookView, type MarketView } from "@/lib/market";
 import {
   groupActiveByTicker,
   noFromYes,
@@ -13,10 +14,12 @@ import {
   yesMidFraction,
 } from "@/lib/marketsView";
 import { distanceToStrike } from "@/lib/marketStats";
+import { contractsFromBaseUnits } from "@/lib/pnl";
+import { fetchHistory, type HistoryEntry } from "@/lib/history";
 import { useMeridian } from "@/hooks/MeridianContext";
 import { usePrices } from "@/hooks/usePrices";
 import { WalletButton } from "@/components/WalletButton";
-import { StockTile, type MoneynessFilter } from "@/components/StockTile";
+import { type MoneynessFilter } from "@/components/StockTile";
 
 const BOOK_POLL_MS = 6000;
 const usd = (n: number) =>
@@ -134,75 +137,196 @@ function MarketRow({ ticker, market, yesMid, spot }: { ticker: string; market: M
   );
 }
 
-/** Trading-activity heatmap (time-of-day × Mon–Sun). Illustrative intensities —
- *  the app has no trade-history aggregation backend yet; this populates from
- *  on-chain history once that lands. Weekends are dim (market closed). */
+/** ET day-of-week (0=Mon..6=Sun) + time slot (0..3) for a unix instant. */
+function etBucket(unix: number): { day: number; slot: number } | null {
+  const f = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+    hour: "2-digit",
+    hour12: false,
+  }).formatToParts(new Date(unix * 1000));
+  const wk = f.find((p) => p.type === "weekday")?.value ?? "";
+  const order: Record<string, number> = { Mon: 0, Tue: 1, Wed: 2, Thu: 3, Fri: 4, Sat: 5, Sun: 6 };
+  const day = order[wk];
+  if (day === undefined) return null;
+  let h = Number(f.find((p) => p.type === "hour")?.value ?? "0");
+  if (h === 24) h = 0;
+  const slot = h < 11 ? 0 : h < 13 ? 1 : h < 15 ? 2 : 3; // 10AM / 12PM / 2PM / 4PM
+  return { day, slot };
+}
+
+/** Trading-activity heatmap — REAL, from the connected wallet's on-chain
+ *  transaction history bucketed by ET day × time-of-day over the last 7 days. */
 function ActivityPanel() {
+  const { walletPubkey } = useMeridian();
+  const { connection } = useConnection();
+  const [entries, setEntries] = useState<HistoryEntry[]>([]);
+
+  useEffect(() => {
+    if (!walletPubkey) { setEntries([]); return; }
+    let cancelled = false;
+    fetchHistory(connection, walletPubkey)
+      .then((e) => { if (!cancelled) setEntries(e); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [connection, walletPubkey]);
+
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const rows = ["10 AM", "12 PM", "2 PM", "4 PM"];
-  // Deterministic sample intensities (0–4) per [row][day]; weekends near 0.
-  const grid = [
-    [3, 4, 2, 1, 4, 0, 0],
-    [2, 1, 3, 4, 3, 0, 0],
-    [1, 3, 4, 2, 4, 1, 0],
-    [2, 2, 1, 3, 2, 0, 0],
-  ];
-  const tint = (n: number) =>
-    n === 0 ? "var(--surface-3)" : `rgba(43, 212, 125, ${0.18 + n * 0.18})`;
+  const weekAgo = Math.floor(Date.now() / 1000) - 7 * 86400;
+  const trades = entries.filter((e) => !e.failed && e.action === "trade" && e.blockTime);
+
+  // counts[slot][day]
+  const counts = rows.map(() => days.map(() => 0));
+  let today = 0;
+  const todayStart = (() => {
+    const f = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+    return f;
+  })();
+  for (const e of trades) {
+    const bt = e.blockTime as number;
+    if (bt < weekAgo) continue;
+    const b = etBucket(bt);
+    if (b) counts[b.slot][b.day]++;
+    const d = new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(bt * 1000));
+    if (d === todayStart) today++;
+  }
+  const maxC = Math.max(1, ...counts.flat());
+  const tint = (n: number) => (n === 0 ? "var(--surface-3)" : `rgba(43, 212, 125, ${0.2 + (n / maxC) * 0.6})`);
+  const week = trades.filter((e) => (e.blockTime as number) >= weekAgo).length;
+
   return (
     <aside className="panel dash-aside">
       <div className="dash-aside-head">
         <h3 style={{ fontSize: 15 }}>Trading activity</h3>
         <span className="market-strikes-badge">Last 7 days</span>
       </div>
-      <div className="heatmap">
-        <div className="heatmap-row">
-          <span className="heatmap-time" />
-          {days.map((d) => (<span key={d} className="muted heatmap-day">{d}</span>))}
-        </div>
-        {rows.map((r, ri) => (
-          <div className="heatmap-row" key={r}>
-            <span className="muted heatmap-time">{r}</span>
-            {days.map((d, di) => (
-              <span
-                key={d}
-                className="heatmap-cell"
-                style={{ background: tint(grid[ri][di]), borderColor: grid[ri][di] ? "transparent" : "var(--border)" }}
-              />
+      {!walletPubkey ? (
+        <p className="muted" style={{ fontSize: 13 }}>Connect a wallet to see your trading activity.</p>
+      ) : (
+        <>
+          <div className="heatmap">
+            <div className="heatmap-row">
+              <span className="heatmap-time" />
+              {days.map((d) => (<span key={d} className="muted heatmap-day">{d}</span>))}
+            </div>
+            {rows.map((r, ri) => (
+              <div className="heatmap-row" key={r}>
+                <span className="muted heatmap-time">{r}</span>
+                {days.map((d, di) => (
+                  <span key={d} className="heatmap-cell" title={`${counts[ri][di]} trade(s)`} style={{ background: tint(counts[ri][di]), borderColor: counts[ri][di] ? "transparent" : "var(--border)" }} />
+                ))}
+              </div>
             ))}
           </div>
-        ))}
-      </div>
-      <div className="dash-stats-row">
-        <div className="stat"><span className="stat-label">Today</span><span className="mono stat-value">14<span className="muted" style={{ fontSize: 11, fontWeight: 400 }}> trades</span></span></div>
-        <div className="stat"><span className="stat-label">This week</span><span className="mono stat-value">63<span className="muted" style={{ fontSize: 11, fontWeight: 400 }}> trades</span></span></div>
-        <div className="stat"><span className="stat-label">Volume</span><span className="mono stat-value">$8.4k</span></div>
-      </div>
+          <div className="dash-stats-row">
+            <div className="stat"><span className="stat-label">Today</span><span className="mono stat-value">{today}<span className="muted" style={{ fontSize: 11, fontWeight: 400 }}> trades</span></span></div>
+            <div className="stat"><span className="stat-label">This week</span><span className="mono stat-value">{week}<span className="muted" style={{ fontSize: 11, fontWeight: 400 }}> trades</span></span></div>
+            <div className="stat"><span className="stat-label">All-time</span><span className="mono stat-value">{trades.length}</span></div>
+          </div>
+        </>
+      )}
     </aside>
   );
 }
 
-/** Portfolio value panel with an area chart. Values are illustrative — the app
- *  doesn't yet track portfolio value over time; this renders the real series
- *  once that lands. The months axis mirrors the reference. */
-function PortfolioPanel() {
-  // Illustrative series → SVG points across a 600×180 box (peak near the right).
-  const pts = [8, 22, 18, 40, 34, 58, 52, 74, 96, 120, 110, 138, 128, 150];
-  const W = 600, H = 180, max = 160;
-  const line = pts.map((v, i) => `${(i / (pts.length - 1)) * W},${H - (v / max) * H}`);
-  const peakI = pts.indexOf(Math.max(...pts));
-  const peakX = (peakI / (pts.length - 1)) * W;
-  const peakY = H - (Math.max(...pts) / max) * H;
-  const months = ["Jan", "Feb", "Mar", "Apr", "May"];
+interface PvPoint { t: number; v: number }
+const RANGES: { key: string; ms: number }[] = [
+  { key: "1W", ms: 7 * 86400_000 },
+  { key: "1M", ms: 30 * 86400_000 },
+  { key: "YTD", ms: 365 * 86400_000 },
+  { key: "All", ms: Infinity },
+];
+
+/** Portfolio value panel — REAL. Computes total value = USDC + position
+ *  mark-to-market across active markets, records a timestamped series in
+ *  localStorage (per wallet), and plots the recorded trajectory. The series
+ *  builds as you revisit/trade; it's your actual value over time, not a mock. */
+function PortfolioPanel({ active, books }: { active: MarketView[]; books: Record<string, BookView | null> }) {
+  const { walletPubkey, config } = useMeridian();
+  const { connection } = useConnection();
+  const [value, setValue] = useState<number | null>(null);
+  const [positions, setPositions] = useState(0);
+  const [series, setSeries] = useState<PvPoint[]>([]);
+  const [range, setRange] = useState("1M");
+
+  const activeSig = active.map((m) => m.pubkey.toBase58()).sort().join(",");
+  const key = walletPubkey ? `meridian.pv.${walletPubkey.toBase58()}` : null;
+
+  useEffect(() => {
+    if (!walletPubkey || !config) { setValue(null); setPositions(0); setSeries([]); return; }
+    let cancelled = false;
+    const load = async () => {
+      let usdc = 0, posVal = 0, posCount = 0;
+      const per = await Promise.all(active.map(async (m) => {
+        try { return [m, await fetchBalances(connection, walletPubkey, config.usdcMint, m)] as const; }
+        catch { return [m, null] as const; }
+      }));
+      for (const [m, bals] of per) {
+        if (!bals) continue;
+        usdc = Number(bals.usdc) / 1_000_000; // same wallet USDC across markets
+        const yes = contractsFromBaseUnits(bals.yes);
+        const no = contractsFromBaseUnits(bals.no);
+        const ym = yesMidFraction(books[m.pubkey.toBase58()] ?? null);
+        if (ym !== null) { posVal += yes * ym + no * (1 - ym); }
+        if (yes > 0 || no > 0) posCount++;
+      }
+      const total = usdc + posVal;
+      if (cancelled) return;
+      setValue(total);
+      setPositions(posCount);
+      // append to the localStorage series (throttle to ~1/min)
+      if (key) {
+        let arr: PvPoint[] = [];
+        try { arr = JSON.parse(localStorage.getItem(key) ?? "[]"); } catch { arr = []; }
+        const now = Date.now();
+        if (arr.length === 0 || now - arr[arr.length - 1].t > 60_000) {
+          arr.push({ t: now, v: total });
+          arr = arr.slice(-300);
+          localStorage.setItem(key, JSON.stringify(arr));
+        } else {
+          arr[arr.length - 1] = { t: now, v: total };
+        }
+        setSeries(arr);
+      }
+    };
+    void load();
+    const id = setInterval(() => void load(), 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connection, walletPubkey, config, activeSig, books]);
+
+  const usd2 = (n: number) => `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  const rangeMs = RANGES.find((r) => r.key === range)?.ms ?? Infinity;
+  const cut = Date.now() - rangeMs;
+  const pts = series.filter((p) => p.t >= cut);
+  const todayPnl = (() => {
+    if (pts.length < 2) return null;
+    return pts[pts.length - 1].v - pts[0].v;
+  })();
+
+  // chart geometry
+  const W = 600, H = 180;
+  let path = "";
+  if (pts.length >= 2) {
+    const vs = pts.map((p) => p.v);
+    const min = Math.min(...vs), max = Math.max(...vs);
+    const span = max - min || 1;
+    const t0 = pts[0].t, tspan = pts[pts.length - 1].t - t0 || 1;
+    path = pts.map((p) => `${((p.t - t0) / tspan) * W},${H - ((p.v - min) / span) * (H - 20) - 10}`).join(" ");
+  } else if (value !== null) {
+    path = `0,${H / 2} ${W},${H / 2}`; // flat line until ≥2 points
+  }
+
   return (
     <section className="panel dash-portfolio">
       <div className="dash-portfolio-stats">
-        <div className="stat"><span className="stat-label">Portfolio value</span><span className="mono dash-big">$4,182.00</span></div>
-        <div className="stat"><span className="stat-label">Today&apos;s P&amp;L</span><span className="mono stat-value" style={{ color: "var(--yes)" }}>+$312.80 <span style={{ fontSize: 12 }}>(+8.1%)</span></span></div>
-        <div className="stat"><span className="stat-label">Open positions</span><span className="mono stat-value">5</span></div>
+        <div className="stat"><span className="stat-label">Portfolio value</span><span className="mono dash-big">{value !== null ? usd2(value) : "—"}</span></div>
+        <div className="stat"><span className="stat-label">Range P&amp;L</span><span className="mono stat-value" style={{ color: todayPnl === null ? "var(--text-dim)" : todayPnl >= 0 ? "var(--yes)" : "var(--no)" }}>{todayPnl === null ? "—" : `${todayPnl >= 0 ? "+" : "−"}${usd2(Math.abs(todayPnl)).slice(1)}`}</span></div>
+        <div className="stat"><span className="stat-label">Open positions</span><span className="mono stat-value">{walletPubkey ? positions : "—"}</span></div>
         <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-          {["1W", "1M", "YTD", "All"].map((t, i) => (
-            <span key={t} className="dash-range" data-active={i === 1 ? "true" : undefined}>{t}</span>
+          {RANGES.map((r) => (
+            <button key={r.key} type="button" className="dash-range" data-active={range === r.key ? "true" : undefined} onClick={() => setRange(r.key)}>{r.key}</button>
           ))}
         </div>
       </div>
@@ -214,41 +338,67 @@ function PortfolioPanel() {
               <stop offset="100%" stopColor="var(--accent)" stopOpacity="0" />
             </linearGradient>
           </defs>
-          {[45, 90, 135].map((y) => (
-            <line key={y} x1="0" y1={y} x2="600" y2={y} stroke="var(--border)" strokeDasharray="3 6" />
-          ))}
-          <polygon fill="url(#pv)" points={`0,${H} ${line.join(" ")} ${W},${H}`} />
-          <polyline fill="none" stroke="var(--accent)" strokeWidth="2.5" points={line.join(" ")} />
-          <line x1={peakX} y1={peakY} x2={peakX} y2={H} stroke="var(--accent)" strokeDasharray="3 4" opacity="0.5" />
-          <circle cx={peakX} cy={peakY} r="3.5" fill="var(--accent-2)" />
+          {[45, 90, 135].map((y) => (<line key={y} x1="0" y1={y} x2="600" y2={y} stroke="var(--border)" strokeDasharray="3 6" />))}
+          {path && (
+            <>
+              <polygon fill="url(#pv)" points={`0,${H} ${path} ${W},${H}`} />
+              <polyline fill="none" stroke="var(--accent)" strokeWidth="2.5" points={path} />
+            </>
+          )}
         </svg>
-        <div className="dash-chart-months">
-          {months.map((m) => (<span key={m} className="muted">{m}</span>))}
-        </div>
+        {(!walletPubkey || pts.length < 2) && (
+          <div className="dash-chart-note muted">{walletPubkey ? "Your value plots here as it's recorded over time (revisit to build the curve)." : "Connect a wallet to track your portfolio value over time."}</div>
+        )}
       </div>
     </section>
   );
 }
 
-/** Market insights generated from the LIVE market state (not mock). */
-function InsightsPanel({ items }: { items: { ticker: string; text: string }[] }) {
+const etTime = () =>
+  new Intl.DateTimeFormat("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit", hour12: true }).format(new Date());
+
+/** Market insights from LIVE market state, with a chat box that answers from the
+ *  same real data (a deterministic market lookup, not an LLM). */
+function InsightsPanel({ items, onAsk }: { items: { ticker: string; text: string }[]; onAsk: (q: string) => string }) {
+  const [q, setQ] = useState("");
+  const [chat, setChat] = useState<{ ticker: string; text: string; time: string }[]>([]);
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    const query = q.trim();
+    if (!query) return;
+    setChat((c) => [{ ticker: "YOU", text: query, time: etTime() }, { ticker: "MERIDIAN", text: onAsk(query), time: etTime() }, ...c]);
+    setQ("");
+  };
+  const live = items.map((it) => ({ ...it, time: etTime() }));
+  const all = [...chat, ...live];
   return (
     <aside className="panel dash-insights">
       <div className="dash-aside-head">
         <h3 style={{ fontSize: 15 }}>⚡ Market insights</h3>
       </div>
       <div className="dash-insights-list">
-        {items.length === 0 ? (
+        {all.length === 0 ? (
           <p className="muted" style={{ fontSize: 13 }}>Insights appear here once markets are live.</p>
         ) : (
-          items.map((it, i) => (
+          all.map((it, i) => (
             <div className="dash-insight" key={i}>
-              <div className="dash-insight-tag">{it.ticker}</div>
+              <div className="dash-insight-row">
+                <span className="dash-insight-tag">{it.ticker}</span>
+                <span className="muted dash-insight-time">{it.time}</span>
+              </div>
               <div style={{ fontSize: 13, color: "var(--text-dim)" }}>{it.text}</div>
             </div>
           ))
         )}
       </div>
+      <form className="dash-chat" onSubmit={submit}>
+        <input className="dash-chat-input" placeholder="Ask about any market…" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Ask about a market" />
+        <button type="submit" className="dash-chat-send" aria-label="Send">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+            <path d="M22 2L11 13" /><path d="M22 2l-7 20-4-9-9-4 20-7z" />
+          </svg>
+        </button>
+      </form>
     </aside>
   );
 }
@@ -322,6 +472,23 @@ export default function Dashboard() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSig, books, prices]);
 
+  // Chat: answer a question from the real market data (deterministic lookup).
+  const onAsk = (query: string): string => {
+    const t = MAG7.find((f) => query.toUpperCase().includes(f.ticker))?.ticker;
+    if (!t) return "Ask about a MAG7 ticker — e.g. “NVDA” or “META $700” — and I’ll read the live market.";
+    const mkts = active.filter((m) => tickerOf(m) === t);
+    if (mkts.length === 0) {
+      const s = spotOf(t);
+      return `${t} has no active contract yet${s !== null ? ` — spot is $${usd(s)}` : ""}. The morning job creates the day’s strikes.`;
+    }
+    const m = mkts[0];
+    const ym = yesMidOf(m);
+    const s = spotOf(t);
+    const strikeNum = Number(m.strikePrice) / 1_000_000;
+    const dist = distanceToStrike(s, strikeNum);
+    return `${t} > $${strikeDollars(m.strikePrice)}: Yes implied ${pct(ym)}${s !== null ? `, spot $${usd(s)}` : ""}${dist ? ` (${dist.aboveStrike ? "+" : "−"}$${usd(Math.abs(dist.delta))} vs strike)` : ""}. Settles at the 4:00 PM ET close.`;
+  };
+
   return (
     <main className="dashboard">
       <div className="dashboard-head">
@@ -383,8 +550,8 @@ export default function Dashboard() {
 
       {/* Row 4 — portfolio + insights */}
       <div className="dash-2col">
-        <PortfolioPanel />
-        <InsightsPanel items={insights} />
+        <PortfolioPanel active={active} books={books} />
+        <InsightsPanel items={insights} onAsk={onAsk} />
       </div>
     </main>
   );

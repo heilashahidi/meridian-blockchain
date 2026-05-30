@@ -2,8 +2,31 @@
 
 import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
+import { useWallet } from "@solana/wallet-adapter-react";
 
 import { WalletButton } from "@/components/WalletButton";
+
+/** When connected: a clickable avatar chip (initials + short address) that
+ *  disconnects on click. When not: the wallet-adapter connect button. */
+function WalletChip() {
+  const { publicKey, disconnect, connected } = useWallet();
+  if (!connected || !publicKey) return <WalletButton />;
+  const a = publicKey.toBase58();
+  return (
+    <button
+      type="button"
+      className="topbar-wallet"
+      onClick={() => disconnect().catch(() => {})}
+      title="Disconnect wallet"
+    >
+      <span className="topbar-avatar mono">{a.slice(0, 2).toUpperCase()}</span>
+      <span className="topbar-wallet-text">
+        <span className="mono" style={{ fontSize: 12, fontWeight: 600 }}>{a.slice(0, 4)}…{a.slice(-4)}</span>
+        <span className="muted" style={{ fontSize: 10 }}>Connected wallet</span>
+      </span>
+    </button>
+  );
+}
 
 /** ET wall-clock parts (DST-correct via Intl), recomputed each tick. */
 function etParts(d: Date) {
@@ -130,7 +153,14 @@ export function TopBar() {
       <div className="topbar-right">
         <MarketClock />
         <DateChip />
-        <WalletButton />
+        <button type="button" className="topbar-bell" title="Notifications" aria-label="Notifications">
+          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+            <path d="M13.7 21a2 2 0 0 1-3.4 0" />
+          </svg>
+          <span className="topbar-bell-dot" aria-hidden />
+        </button>
+        <WalletChip />
       </div>
     </header>
   );
