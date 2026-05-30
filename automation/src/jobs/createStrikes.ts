@@ -70,7 +70,7 @@ export interface MarketPlan {
 export interface TickerPlan {
   ticker: Ticker;
   referencePrice: number;
-  spacingDollars: number;
+  roundingDollars: number;
   markets: MarketPlan[];
 }
 
@@ -136,7 +136,10 @@ export async function planTicker(
 ): Promise<TickerPlan> {
   const tcfg = validateTicker(ticker); // throws on missing/bad feed id
   const referencePrice = await deps.fetchReferencePrice(ticker);
-  const ladder = computeStrikes(referencePrice, cfg.strikesPerSide);
+  const ladder = computeStrikes(referencePrice, {
+    percents: cfg.strikePercents,
+    roundingDollars: cfg.strikeRoundingDollars,
+  });
 
   const pythFeedId = Array.from(Buffer.from(tcfg.feedId, "hex"));
   if (pythFeedId.length !== 32) {
@@ -157,7 +160,7 @@ export async function planTicker(
   return {
     ticker,
     referencePrice,
-    spacingDollars: ladder.spacingDollars,
+    roundingDollars: ladder.roundingDollars,
     markets,
   };
 }
@@ -227,7 +230,7 @@ export async function ensureTicker(
   log.info("planned strikes", {
     ticker,
     referencePrice: plan.referencePrice,
-    spacingDollars: plan.spacingDollars,
+    roundingDollars: plan.roundingDollars,
     strikes: plan.markets.map((m) => m.strikeDollars),
     expiryUnix,
   });

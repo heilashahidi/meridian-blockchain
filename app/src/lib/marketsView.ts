@@ -71,6 +71,25 @@ export function tradeHref(marketPubkey: { toBase58(): string }): string {
   return `/trade/${marketPubkey.toBase58()}`;
 }
 
+/**
+ * The sibling strike markets for one ticker on one expiry (the day's strike
+ * ladder), sorted by strike ascending. Powers the Trade screen's strike list so
+ * a user can switch strikes for the selected stock without going back to Markets
+ * (PRD §300). Matching on `expiryUnix` keeps the list to a single trading day.
+ */
+export function strikesForTicker(
+  markets: MarketView[],
+  ticker: number[],
+  expiryUnix: bigint,
+): MarketView[] {
+  const want = tickerToString(ticker);
+  return markets
+    .filter(
+      (m) => tickerToString(m.ticker) === want && m.expiryUnix === expiryUnix,
+    )
+    .sort((a, b) => Number(a.strikePrice - b.strikePrice));
+}
+
 export interface StockGroup {
   ticker: string;
   /** Active (unsettled, unexpired) markets for this ticker, expiry-ascending. */

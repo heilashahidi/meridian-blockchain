@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   computeStrikes,
   loadConfig,
-  spacingForPrice,
   TICKERS,
   validateTicker,
   validateTickers,
@@ -46,35 +45,49 @@ describe("config: ticker validation", () => {
   });
 });
 
-describe("config: computeStrikes", () => {
-  it("produces a sane ladder centered on a rounded reference", () => {
-    const ladder = computeStrikes(212.37, 3);
-    // 212.37 with $5 spacing rounds to 210; 3 each side → 195..225.
-    expect(ladder.spacingDollars).toBe(5);
-    expect(ladder.strikesDollars).toEqual([195, 200, 205, 210, 215, 220, 225]);
-    expect(ladder.strikesMicro[0]).toBe(195_000_000n);
+describe("config: computeStrikes (PRD ±3/6/9% rounded to $10)", () => {
+  it("reproduces the PRD META example exactly (prev close $680)", () => {
+    const ladder = computeStrikes(680);
+    // PRD §"Strike Selection": ±3/6/9% rounded to nearest $10, plus the close.
+    expect(ladder.strikesDollars).toEqual([620, 640, 660, 680, 700, 720, 740]);
+    expect(ladder.roundingDollars).toBe(10);
+    expect(ladder.strikesMicro[0]).toBe(620_000_000n);
     // Strictly ascending.
     for (let i = 1; i < ladder.strikesMicro.length; i++) {
       expect(ladder.strikesMicro[i] > ladder.strikesMicro[i - 1]).toBe(true);
     }
   });
 
-  it("uses tighter spacing for low-priced names and wider for high", () => {
-    expect(spacingForPrice(20)).toBe(1);
-    expect(spacingForPrice(75)).toBe(2.5);
-    expect(spacingForPrice(180)).toBe(5);
-    expect(spacingForPrice(700)).toBe(10);
-    expect(spacingForPrice(1500)).toBe(25);
+  it("reproduces the PRD AAPL example exactly, with dedup (prev close $230)", () => {
+    const ladder = computeStrikes(230);
+    // −6%/−3% both round to 220; +3%/+6% both round to 240 → 5 unique strikes.
+    expect(ladder.strikesDollars).toEqual([210, 220, 230, 240, 250]);
+  });
+
+  it("honors custom percents and rounding increments", () => {
+    const ladder = computeStrikes(100, { percents: [5, 10], roundingDollars: 5 });
+    // ±5% → 95/105, ±10% → 90/110, center 100.
+    expect(ladder.strikesDollars).toEqual([90, 95, 100, 105, 110]);
+  });
+
+  it("can omit the at-the-money center strike", () => {
+    const ladder = computeStrikes(680, { includeCenter: false });
+    expect(ladder.strikesDollars).toEqual([620, 640, 660, 700, 720, 740]);
   });
 
   it("never emits a non-positive strike near zero", () => {
-    const ladder = computeStrikes(3, 5); // $1 spacing, center 3
+    const ladder = computeStrikes(3, { percents: [3, 6, 9], roundingDollars: 10 });
     expect(ladder.strikesDollars.every((s) => s > 0)).toBe(true);
   });
 
   it("rejects a non-positive reference price", () => {
     expect(() => computeStrikes(0)).toThrow(/positive finite/);
     expect(() => computeStrikes(-10)).toThrow(/positive finite/);
+  });
+
+  it("rejects a non-positive percent or rounding increment", () => {
+    expect(() => computeStrikes(100, { percents: [3, -6] })).toThrow(/positive finite/);
+    expect(() => computeStrikes(100, { roundingDollars: 0 })).toThrow(/positive finite/);
   });
 });
 

@@ -49,7 +49,6 @@ import { getProgram, type MeridianProgram, RPC_URL } from "../program";
 // ---------------------------------------------------------------------------
 
 const FEED_HEX = "01".repeat(32); // matches the forged-oracle feed id below
-const SETTLE_WINDOW_SECONDS = 900; // mirror settle_market.rs
 
 const kp = loadLocalKeypair();
 const isUp = (await reachable()) && kp !== null;
@@ -64,18 +63,31 @@ if (!isUp) {
   );
 }
 
-/** Create a fresh, already-expired market so settle_market can run promptly. */
-async function createExpiredMarket(
+/**
+ * Create a fresh, TRADEABLE market (expiry in the future) so the multi-user
+ * trade legs in scenarios 1–2 actually rest and cross. `place_limit_order`
+ * enforces `clock < market.expiry_unix` (else `MarketExpired`), so the expiry
+ * MUST be in the future for any order to land — an earlier version used a past
+ * expiry (to let settle run promptly) and as a result every trade reverted with
+ * `MarketExpired` before it could fill.
+ *
+ * The settle+redeem leg (scenario 3) needs the market to be PAST expiry AND a
+ * genesis-injected Pyth account, neither of which holds for a future-expiry
+ * market on a vanilla running validator, so it self-skips here (logged). That
+ * path is covered end-to-end by the LiteSVM `u7_settle_redeem`/`u8_lifecycle`
+ * suites and `scripts/settle-redeem-demo.sh` (which boots the validator with a
+ * `--account` oracle fixture).
+ */
+async function createTradeableMarket(
   program: MeridianProgram,
   admin: Keypair,
   usdcMint: PublicKey,
   strike: number,
 ): Promise<MarketView> {
   const ticker = "MU";
-  // expiry slightly in the past: create_strike_market does NOT clock-check
-  // expiry, and a past expiry lets `settle_market` run immediately with a
-  // forged update whose publish_time lands in [expiry, expiry+900s].
-  const expiry = Math.floor(Date.now() / 1000) - 5;
+  // Expiry one hour out: comfortably past the handful of trade txs in
+  // scenarios 1–2, so every limit order lands before the market expires.
+  const expiry = Math.floor(Date.now() / 1000) + 3600;
   const market = marketPda(ticker, strike, expiry);
   const p = marketPdas(market);
   const accounts = {
@@ -235,7 +247,7 @@ describe("multi-user trade + settle + redeem (live validator)", () => {
 
       // Strike $680; we'll settle at $700 → YesWins (Yes redeems 1:1).
       const strike = 680_000_000;
-      const market = await createExpiredMarket(
+      const market = await createTradeableMarket(
         programA,
         admin,
         cfg.usdcMint,
@@ -357,31 +369,31 @@ describe("multi-user trade + settle + redeem (live validator)", () => {
 
       // =====================================================================
       // SCENARIO 2: Buy No → Sell No round-trip for wallet B (U8's note).
-      //   A rests liquidity on BOTH sides so B's internal Yes legs can cross:
+      //   A rests liquidity for B's internal Yes legs to cross:
       //     - Buy No is an internal Yes ASK taker → needs a resting BID.
       //     - Sell No is an internal Yes BID taker → needs a resting ASK.
       //   B buys 50 No then sells 50 No; B's No returns to 0 and the Yes/USDC
-      //   movements reconcile within the slippage bounds.
+      //   movements reconcile.
       // =====================================================================
-      // Prices here are raw µUSDC-per-Yes integers (same tiny scale as
-      // Scenario 1 and place.live.test.ts), and the buy/sell-No slippage bounds
-      // are passed in that SAME scale so the internal Yes legs actually cross:
-      //   - Buy No's Yes leg is an ASK taker → crosses a resting BID when
-      //     bidPrice >= minYesSellPrice. A rests a bid @ 600; floor = 600.
-      //   - Sell No's Yes leg is a BID taker → crosses a resting ASK when
-      //     askPrice <= maxYesBuyPrice. A rests an ask @ 400; cap = 400.
-      // A needs more Yes inventory to back the resting ask; mint another pair.
-      await mintPair({ ...baseA, amount: 500n });
-      await placeLimitOrder({ ...baseA, side: SIDE_BID, price: 600, qty: 50 });
-      await placeLimitOrder({ ...baseA, side: SIDE_ASK, price: 400, qty: 50 });
-
+      // Prices are raw µUSDC-per-Yes integers (same tiny scale as Scenario 1),
+      // and the buy/sell-No slippage bounds are passed in that SAME scale so the
+      // internal Yes legs actually cross.
+      //
+      // IMPORTANT: the BID (@600) and ASK (@400) must NOT rest on the book at
+      // the same time — 400 <= 600 means they cross each other (a self-trade
+      // that consumes the bid before B can sell into it, surfacing as
+      // SlippageNotMet on B's Buy No). So we rest ONE side, let B consume it,
+      // then rest the other. A already holds Yes inventory from Scenario 1's
+      // mint (500 minted, 100 sold → 400 left), enough to back the @400 ask.
       const bNoBeforeRT = (
         await fetchBalances(connection, userB.publicKey, cfg.usdcMint, market)
       ).no;
-
-      // Buy No 50: mint a pair, then market-SELL the 50 Yes (Ask taker) at a
-      // floor of 600 → crosses A's resting bid @ 600. B nets a No position.
       const noQty = 50n;
+
+      // --- Buy No leg ---
+      //   A rests a BID @ 600. B's Buy No mints a pair and market-SELLs the 50
+      //   Yes (Ask taker) at a floor of 600 → crosses A's bid. B nets a No.
+      await placeLimitOrder({ ...baseA, side: SIDE_BID, price: 600, qty: 50 });
       await buyNo({ ...baseB, amount: noQty, minYesSellPrice: 600 });
       const afterBuyNo = await fetchBalances(
         connection,
@@ -391,8 +403,11 @@ describe("multi-user trade + settle + redeem (live validator)", () => {
       );
       expect(afterBuyNo.no).toBe(bNoBeforeRT + noQty); // B acquired the No
 
-      // Sell No 50: market-BUY 50 Yes (Bid taker) at a cap of 400 → crosses A's
-      // resting ask @ 400, then burn the pair. B's No returns to start.
+      // --- Sell No leg ---
+      //   Now the bid is consumed, A rests an ASK @ 400. B's Sell No market-BUYs
+      //   50 Yes (Bid taker) at a cap of 400 → crosses A's ask, then burns the
+      //   pair. B's No returns to start.
+      await placeLimitOrder({ ...baseA, side: SIDE_ASK, price: 400, qty: 50 });
       await sellNo({ ...baseB, amount: noQty, maxYesBuyPrice: 400 });
       const afterSellNo = await fetchBalances(
         connection,
@@ -404,12 +419,15 @@ describe("multi-user trade + settle + redeem (live validator)", () => {
       expect(afterSellNo.no).toBe(bNoBeforeRT);
 
       // =====================================================================
-      // SCENARIO 3: settle + redeem the winner 1:1.
+      // SCENARIO 3: settle + redeem the winner 1:1 (best-effort).
       //   Forge a Pyth update @ $700 (> $680 strike → YesWins) and settle.
-      //   Both A and B redeem their Yes 1:1 for USDC. If the validator wasn't
-      //   booted with a forged oracle account (so a runtime-created account
-      //   carries no usable price bytes), the settle is skipped with a logged
-      //   reason and the reconciliation assertions above still stand.
+      //   This leg only runs when the market is past expiry AND the validator
+      //   was booted with a genesis-injected oracle account. With the
+      //   future-expiry market above (required so scenarios 1–2 can trade),
+      //   settle is expected to no-op on a vanilla validator — it's skipped with
+      //   a logged reason and the reconciliation assertions above still stand.
+      //   The settle→redeem path is covered end-to-end by the LiteSVM
+      //   u7_settle_redeem/u8_lifecycle suites and scripts/settle-redeem-demo.sh.
       // =====================================================================
       const publishTime = Math.floor(Date.now() / 1000) - 1; // within window
       const oracle = await forgePriceUpdate(
@@ -431,14 +449,17 @@ describe("multi-user trade + settle + redeem (live validator)", () => {
         await programA.methods.settleMarket().accounts(settleAccounts).rpc();
         settled = true;
       } catch (e) {
-        // Most likely on a vanilla running validator: the runtime-forged oracle
-        // account carries zeroed data (System can't write a non-canonical
-        // account's bytes), so settle_market rejects it. The genesis-injection
-        // path (settle-redeem-demo.sh --account) is the supported settle route;
-        // here we log and skip the redeem leg without failing the recon test.
+        // Expected on a vanilla running validator, for either reason:
+        //   1. The market expiry is in the future (so scenarios 1–2 could
+        //      trade), so settle_market rejects with a not-yet-expired error.
+        //   2. Even past expiry, the runtime-forged oracle carries zeroed data
+        //      (System can't write a non-canonical account's bytes).
+        // The genesis-injection path (settle-redeem-demo.sh --account) is the
+        // supported in-cluster settle route; here we log and skip the redeem leg
+        // without failing the multi-user reconciliation assertions above.
         console.log(
-          "[multiuser.live] settle skipped (no injected oracle on this " +
-            `validator): ${(e as Error).message?.slice(0, 120)}`,
+          "[multiuser.live] settle skipped (future expiry / no injected oracle " +
+            `on this validator): ${(e as Error).message?.slice(0, 120)}`,
         );
       }
 

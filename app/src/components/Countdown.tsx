@@ -2,13 +2,15 @@
 
 import { useEffect, useState } from "react";
 
-import { countdownState } from "@/lib/countdown";
+import { countdownState, expiryEtLabel } from "@/lib/countdown";
 
 /**
- * Prominent settlement countdown to the market's 4PM ET expiry (`expiryUnix`,
- * unix seconds). Ticks once a second; shows a "Settling / Closed" state once
- * expired. The time math lives in the pure `countdownState` helper (unit-tested)
- * — this only supplies the live `now` and the urgency styling.
+ * Prominent settlement countdown to the market's expiry (`expiryUnix`, unix
+ * seconds). Ticks once a second; shows a "Settling / Closed" state once expired.
+ * The time math lives in the pure `countdownState` helper (unit-tested) — this
+ * only supplies the live `now` and the urgency styling. The footer label is
+ * derived from the actual expiry (`expiryEtLabel`) rather than hardcoded, so it
+ * can't lie if a market's close isn't exactly 4:00 PM ET.
  *
  * Urgency: normal (text) → under 30 min uses --warn → under 5 min adds a subtle
  * pulse → expired shows "Settling / Closed" in --no.
@@ -55,7 +57,7 @@ export function Countdown({ expiryUnix }: { expiryUnix: bigint }) {
         {state.closed ? "Settling / Closed" : state.label}
       </span>
       <span className="muted" style={{ fontSize: 11 }}>
-        0DTE · 4:00 PM ET
+        0DTE · {expiryEtLabel(expiry)}
       </span>
     </div>
   );

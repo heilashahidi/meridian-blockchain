@@ -24,7 +24,7 @@ function testConfig(overrides: Partial<AutomationConfig> = {}): AutomationConfig
   return {
     ...loadConfig({}),
     tickers: ["AAPL", "NVDA"],
-    strikesPerSide: 2,
+    strikePercents: [3, 6],
     expiryHoursFromNow: 24,
     ...overrides,
   };
@@ -46,12 +46,12 @@ const fastOpts = { baseBackoffMs: 1, sleep: async () => {} } as const;
 
 describe("createStrikes: planning", () => {
   it("produces the expected strike ladder for a sample close", async () => {
-    const cfg = testConfig({ tickers: ["AAPL"], strikesPerSide: 2 });
+    const cfg = testConfig({ tickers: ["AAPL"], strikePercents: [3, 6] });
     const deps = happyDeps({ AAPL: 187 });
     const plan = await planTicker("AAPL", cfg, deps, 1_900_000_000);
 
-    // 187 with $5 spacing (100–250 bucket) → center 185, ±2 → 175,180,185,190,195
-    const expected = computeStrikes(187, 2);
+    // PRD ±3/6% of $187 rounded to $10 (plus the rounded close) → dedupes to 180/190/200.
+    const expected = computeStrikes(187, { percents: [3, 6] });
     expect(plan.markets.map((m) => m.strikeDollars)).toEqual(
       expected.strikesDollars,
     );
@@ -68,11 +68,11 @@ describe("createStrikes: planning", () => {
   });
 
   it("creates one market per ladder strike when none exist", async () => {
-    const cfg = testConfig({ tickers: ["AAPL"], strikesPerSide: 2 });
+    const cfg = testConfig({ tickers: ["AAPL"], strikePercents: [3, 6] });
     const deps = happyDeps({ AAPL: 187 });
     const report = await createStrikes(cfg, deps, fastOpts);
 
-    const ladderLen = computeStrikes(187, 2).strikesDollars.length;
+    const ladderLen = computeStrikes(187, { percents: [3, 6] }).strikesDollars.length;
     expect(report.totalCreated).toBe(ladderLen);
     expect(report.totalSkipped).toBe(0);
     expect(report.totalFailed).toBe(0);
@@ -84,13 +84,13 @@ describe("createStrikes: planning", () => {
 
 describe("createStrikes: idempotency", () => {
   it("skips markets that already exist (no AccountAlreadyInitialized)", async () => {
-    const cfg = testConfig({ tickers: ["AAPL"], strikesPerSide: 2 });
+    const cfg = testConfig({ tickers: ["AAPL"], strikePercents: [3, 6] });
     const deps = happyDeps({ AAPL: 187 });
     // Everything already exists → all skipped, nothing created.
     deps.accountExists = vi.fn(async () => true);
 
     const report = await createStrikes(cfg, deps, fastOpts);
-    const ladderLen = computeStrikes(187, 2).strikesDollars.length;
+    const ladderLen = computeStrikes(187, { percents: [3, 6] }).strikesDollars.length;
 
     expect(report.totalSkipped).toBe(ladderLen);
     expect(report.totalCreated).toBe(0);
@@ -99,9 +99,9 @@ describe("createStrikes: idempotency", () => {
   });
 
   it("creates only the missing strikes (partial pre-existing set)", async () => {
-    const cfg = testConfig({ tickers: ["AAPL"], strikesPerSide: 2 });
+    const cfg = testConfig({ tickers: ["AAPL"], strikePercents: [3, 6] });
     const deps = happyDeps({ AAPL: 187 });
-    const ladder = computeStrikes(187, 2);
+    const ladder = computeStrikes(187, { percents: [3, 6] });
 
     // Make existence depend on the strike value: the lowest two micro-strikes
     // "exist" already. The job derives PDA from (ticker, strikeMicro, expiry);
@@ -142,7 +142,7 @@ describe("createStrikes: idempotency", () => {
 
 describe("createStrikes: partial-failure isolation", () => {
   it("one ticker's create failing does not abort the others", async () => {
-    const cfg = testConfig({ tickers: ["AAPL", "NVDA"], strikesPerSide: 1 });
+    const cfg = testConfig({ tickers: ["AAPL", "NVDA"], strikePercents: [3] });
     const deps = happyDeps({ AAPL: 187, NVDA: 120 });
     deps.createMarket = vi.fn(async (p: MarketPlan) => {
       if (p.ticker === "AAPL") throw new Error("simulated RPC failure");
@@ -163,7 +163,7 @@ describe("createStrikes: partial-failure isolation", () => {
   });
 
   it("a ticker whose price read throws is isolated and marked errored", async () => {
-    const cfg = testConfig({ tickers: ["AAPL", "NVDA"], strikesPerSide: 1 });
+    const cfg = testConfig({ tickers: ["AAPL", "NVDA"], strikePercents: [3] });
     const deps = happyDeps({ NVDA: 120 });
     deps.fetchReferencePrice = vi.fn(async (t: Ticker) => {
       if (t === "AAPL") throw new Error("Hermes unreachable");
@@ -240,7 +240,7 @@ describe("createStrikes: retry/backoff", () => {
 
 describe("createStrikes: total-outage exit code", () => {
   it("throws when every strike create fails and nothing was created or skipped", async () => {
-    const cfg = testConfig({ tickers: ["AAPL", "NVDA"], strikesPerSide: 1 });
+    const cfg = testConfig({ tickers: ["AAPL", "NVDA"], strikePercents: [3] });
     const deps = happyDeps({ AAPL: 187, NVDA: 120 });
     // Tickers plan fine (price reads succeed) but every CREATE fails.
     deps.createMarket = vi.fn(async () => {
@@ -260,7 +260,7 @@ describe("createStrikes: total-outage exit code", () => {
   });
 
   it("does NOT throw on a partial failure (some created, some failed)", async () => {
-    const cfg = testConfig({ tickers: ["AAPL", "NVDA"], strikesPerSide: 1 });
+    const cfg = testConfig({ tickers: ["AAPL", "NVDA"], strikePercents: [3] });
     const deps = happyDeps({ AAPL: 187, NVDA: 120 });
     deps.createMarket = vi.fn(async (p: MarketPlan) => {
       if (p.ticker === "AAPL") throw new Error("simulated RPC failure");
@@ -274,7 +274,7 @@ describe("createStrikes: total-outage exit code", () => {
   });
 
   it("does NOT throw when everything was skipped (all pre-existing)", async () => {
-    const cfg = testConfig({ tickers: ["AAPL"], strikesPerSide: 2 });
+    const cfg = testConfig({ tickers: ["AAPL"], strikePercents: [3, 6] });
     const deps = happyDeps({ AAPL: 187 });
     deps.accountExists = vi.fn(async () => true);
 
@@ -290,7 +290,7 @@ describe("createStrikes: total-outage exit code", () => {
 
 describe("createStrikes: dry-run", () => {
   it("plans + counts intended creates but makes no on-chain writes", async () => {
-    const cfg = testConfig({ tickers: ["AAPL"], strikesPerSide: 1 });
+    const cfg = testConfig({ tickers: ["AAPL"], strikePercents: [3] });
     const deps = happyDeps({ AAPL: 187 });
     const report = await createStrikes(cfg, deps, { ...fastOpts, dryRun: true });
 

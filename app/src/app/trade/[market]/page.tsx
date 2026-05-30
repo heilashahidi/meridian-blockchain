@@ -7,8 +7,10 @@ import { BothSidesBook } from "@/components/BothSidesBook";
 import { Countdown } from "@/components/Countdown";
 import { PositionGuard } from "@/components/PositionGuard";
 import { RedeemPanel } from "@/components/RedeemPanel";
+import { StrikeList } from "@/components/StrikeList";
 import { TradePanel } from "@/components/TradePanel";
 import { tickerToString } from "@/lib/format";
+import { expiryEtLabel } from "@/lib/countdown";
 import { useMeridian } from "@/hooks/MeridianContext";
 import { distanceToStrike } from "@/lib/marketStats";
 import { yesMidFraction, strikeDollars } from "@/lib/marketsView";
@@ -26,7 +28,8 @@ export default function TradeMarketPage({
 }: {
   params: { market: string };
 }) {
-  const { selectMarket, market, book, balances, configError } = useMeridian();
+  const { selectMarket, market, markets, book, balances, configError } =
+    useMeridian();
   const prices = usePrices();
 
   // Parse the route PDA once; an invalid base58 yields null (bad link).
@@ -99,12 +102,16 @@ export default function TradeMarketPage({
           </h1>
           {ticker && (
             <div className="muted" style={{ fontSize: 13 }}>
-              0DTE · settles 4:00 PM ET · price is the market’s implied probability
+              0DTE · settles {m ? expiryEtLabel(Number(m.expiryUnix)) : "4:00 PM ET"}{" "}
+              · price is the market’s implied probability
             </div>
           )}
         </div>
         {m && <Countdown expiryUnix={m.expiryUnix} />}
       </header>
+
+      {/* Strike list for the selected stock (PRD §300) — switch strikes here. */}
+      {m && <div style={{ marginBottom: 16 }}><StrikeList markets={markets} current={m} /></div>}
 
       {/* Market summary — spot, distance-to-strike, implied-probability bar. */}
       {m && (
