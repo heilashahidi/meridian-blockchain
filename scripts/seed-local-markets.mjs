@@ -49,6 +49,7 @@ const SEED = [
   { ticker: "AMZN", strike: 270, prob: 0.65 },
   { ticker: "NVDA", strike: 210, prob: 0.52 },
   { ticker: "TSLA", strike: 435, prob: 0.41 },
+  { ticker: "META", strike: 620, prob: 0.58 },
 ];
 
 const idl = JSON.parse(fs.readFileSync(IDL_PATH, "utf8"));
@@ -144,7 +145,11 @@ async function main() {
   const userUsdc = (await getOrCreateAssociatedTokenAccount(connection, payer, usdcMint, payer.publicKey)).address;
   await mintTo(connection, payer, usdcMint, userUsdc, payer, 2_000_000_000n); // $2,000
 
-  const expiryUnix = Math.floor(Date.now() / 1000) + 24 * 3600;
+  // Deterministic expiry = the next UTC midnight. Stable for the whole UTC day,
+  // so re-running the seed reuses the SAME market PDA (create skips) instead of
+  // creating a duplicate market per ticker each run.
+  const nowSec = Math.floor(Date.now() / 1000);
+  const expiryUnix = (Math.floor(nowSec / 86400) + 1) * 86400;
   for (const s of SEED) {
     try {
       await seedOne(cfg, usdcMint, userUsdc, s, expiryUnix);
