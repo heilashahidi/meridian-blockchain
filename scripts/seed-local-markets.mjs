@@ -67,6 +67,38 @@ const SEED = [
   { ticker: "META", feedId: "78a3e3b8e676a8f73c439f5d749737034b139bbbe899ba5775216fba596607fe", fallback: 680 },
 ];
 
+// Unix seconds for the upcoming 4:00 PM ET (today if still ahead, else the next
+// day) — the PRD's settlement time. Uses the America/New_York tz offset so it's
+// correct under EST and EDT, and is deterministic within an ET day (idempotent
+// re-seeds reuse the same market PDAs).
+function next4pmEtUnix() {
+  const TZ = "America/New_York";
+  const partsOf = (d) =>
+    Object.fromEntries(
+      new Intl.DateTimeFormat("en-US", {
+        timeZone: TZ, year: "numeric", month: "2-digit", day: "2-digit",
+        hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+      }).formatToParts(d).map((p) => [p.type, p.value]),
+    );
+  // The unix seconds at which the ET wall clock reads y-mo-d 16:00:00.
+  const etWallToUnix = (y, mo, d) => {
+    const guessMs = Date.UTC(y, mo - 1, d, 16, 0, 0); // pretend ET wall = UTC
+    const p = partsOf(new Date(guessMs));
+    const asIfUtcMs = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second);
+    const offsetMs = asIfUtcMs - guessMs; // how far ET is ahead of UTC
+    return Math.floor((guessMs - offsetMs) / 1000);
+  };
+  const now = new Date();
+  const nowSec = Math.floor(now.getTime() / 1000);
+  const p = partsOf(now);
+  let t = etWallToUnix(+p.year, +p.month, +p.day);
+  if (t <= nowSec) {
+    const tom = partsOf(new Date(now.getTime() + 86_400_000));
+    t = etWallToUnix(+tom.year, +tom.month, +tom.day);
+  }
+  return t;
+}
+
 // Read the latest price for each feed from Pyth Hermes in one batch. Returns a
 // Map<feedId(no 0x), { price, ageHours }>. Throws only on total failure; the
 // caller falls back per-ticker for any feed Hermes omits.
@@ -238,11 +270,11 @@ async function main() {
   const fundUsdc = BigInt(jobs.length) * 50n * 1_000_000n; // jobs × $50, in µUSDC
   await mintTo(connection, payer, usdcMint, userUsdc, payer, fundUsdc);
 
-  // Deterministic expiry = the next UTC midnight. Stable for the whole UTC day,
-  // so re-running the seed reuses the SAME market PDA (create skips) instead of
-  // creating a duplicate market per ticker each run.
-  const nowSec = Math.floor(Date.now() / 1000);
-  const expiryUnix = (Math.floor(nowSec / 86400) + 1) * 86400;
+  // Expiry = the next 4:00 PM ET close (the PRD settlement time). Deterministic
+  // within an ET trading window, so re-running the seed reuses the SAME market
+  // PDA (create skips) instead of duplicating markets. Computed via the ET tz
+  // offset so it's correct under both EST and EDT.
+  const expiryUnix = next4pmEtUnix();
   for (const job of jobs) {
     try {
       await seedOne(cfg, usdcMint, userUsdc, job, expiryUnix);
