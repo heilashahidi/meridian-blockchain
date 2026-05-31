@@ -15,13 +15,25 @@ Three layers, one repo:
 - **`automation/`** — a TypeScript service with two cron jobs: a morning
   `create-strikes` job and an after-close `settle` job (with an admin-override
   fallback).
-- **`app/`** — a Next.js frontend: 5 pages (Landing, Markets, Trade, Portfolio,
-  History) with live prices, both-perspective order book, the four Buy/Sell
-  Yes/No trade paths, position constraints, settlement countdown, and P&L.
+- **`app/`** — a Next.js frontend: a **Dashboard** (browse every market via a
+  two-pane company browser, with live prices, activity, portfolio preview, and
+  an insights chat), plus **Trade**, **Portfolio**, and **History** pages — the
+  both-perspective order book, the four Buy/Sell Yes/No trade paths, position
+  constraints, a settlement countdown, and P&L.
+
+  > **Page structure vs the PRD.** The PRD lists five pages (Landing, Markets,
+  > Trade, Portfolio, History). We deliberately fold *Landing* and *Markets*
+  > into the **Dashboard**: it's the landing surface *and* the browse-and-pick
+  > surface (a company-grouped market browser with live prices and contract
+  > counts), so separate routes would have been redundant over the same data.
+  > All required functionality is present; clicking a strike opens the
+  > per-market Trade screen. `Trade`, `Portfolio`, and `History` are their own
+  > pages as specified.
 
 For the full design, trade-offs, and known limitations see
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). To deploy and run the lifecycle
 on devnet step by step, see [`docs/DEVNET-RUNBOOK.md`](docs/DEVNET-RUNBOOK.md).
+For how AI tools were used to build this, see [`docs/AI-USAGE.md`](docs/AI-USAGE.md).
 
 ---
 
