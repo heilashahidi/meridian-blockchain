@@ -251,18 +251,20 @@ export async function fetchHistory(
   }
 
   const pid = PROGRAM_ID.toBase58();
-  const txs = await Promise.all(
-    sigs.map(async (s) => {
-      try {
-        const tx = await connection.getParsedTransaction(s.signature, {
-          maxSupportedTransactionVersion: 0,
-        });
-        return { s, tx };
-      } catch {
-        return { s, tx: null };
-      }
-    }),
-  );
+  // ONE batched JSON-RPC request for every tx, not N separate getParsedTransaction
+  // calls. On a rate-limited RPC the per-signature fan-out was the dashboard
+  // heatmap's main cost (N calls × retries); getParsedTransactions sends them as
+  // a single batch round-trip.
+  let parsed: Awaited<ReturnType<typeof connection.getParsedTransactions>>;
+  try {
+    parsed = await connection.getParsedTransactions(
+      sigs.map((s) => s.signature),
+      { maxSupportedTransactionVersion: 0 },
+    );
+  } catch {
+    return [];
+  }
+  const txs = sigs.map((s, i) => ({ s, tx: parsed[i] ?? null }));
 
   const entries: HistoryEntry[] = [];
   for (const { s, tx } of txs) {
