@@ -1,0 +1,11 @@
+diff --git a/node_modules/@pythnetwork/pyth-solana-receiver/dist/esm/vaa.mjs b/node_modules/@pythnetwork/pyth-solana-receiver/dist/esm/vaa.mjs
+index 451be86..0059f77 100644
+--- a/node_modules/@pythnetwork/pyth-solana-receiver/dist/esm/vaa.mjs
++++ b/node_modules/@pythnetwork/pyth-solana-receiver/dist/esm/vaa.mjs
+@@ -1,5 +1,5 @@
+ // eslint-disable-next-line unicorn/prefer-node-protocol
+-import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes";
++import { bs58 } from "@coral-xyz/anchor/dist/cjs/utils/bytes/index.js";
+ import { sha256 } from "@noble/hashes/sha256";
+ import { Keypair, PublicKey } from "@solana/web3.js";
+ import { Buffer as IsomorphicBuffer } from "buffer";

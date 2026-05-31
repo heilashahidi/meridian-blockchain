@@ -6,9 +6,11 @@
 # ── build (compile TS → dist, then drop devDeps) ────────────────────────────
 FROM node:24-alpine AS build
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm ci
+# Copy everything first so the patches/ dir is present when `npm ci` runs the
+# postinstall (patch-package fixes @pythnetwork/solana-utils' broken ESM import
+# of jito-ts — otherwise create-strikes/settle crash at runtime under Node ESM).
 COPY . .
+RUN npm ci
 RUN npm run build && npm prune --omit=dev
 
 # ── run ─────────────────────────────────────────────────────────────────────
