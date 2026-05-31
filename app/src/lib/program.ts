@@ -15,9 +15,10 @@ import type { Meridian } from "./idl/meridian";
 // unreachable + CORS-blocked from a hosted origin). Local dev always sets this
 // var to the local validator via local-dev.sh, so this default only applies to
 // deploys. Set NEXT_PUBLIC_RPC_URL to a dedicated RPC (e.g. Helius) at build
-// time for better rate limits.
+// time for better rate limits. Use `||`, not `??`, so an empty-string var (a
+// Railway var set with no value) also falls back instead of yielding "".
 export const RPC_URL =
-  process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
+  process.env.NEXT_PUBLIC_RPC_URL || "https://api.devnet.solana.com";
 
 export const PROGRAM_ID = new PublicKey(
   process.env.NEXT_PUBLIC_PROGRAM_ID ??
