@@ -7,7 +7,7 @@ import { useConnection } from "@solana/wallet-adapter-react";
 import { WalletButton } from "@/components/WalletButton";
 import { PositionRow } from "@/components/PositionRow";
 import { redeem } from "@/lib/actions";
-import { fetchBalances, fetchBook, type BookView } from "@/lib/market";
+import { fetchBalancesMany, fetchBooks, type BookView } from "@/lib/market";
 import { useMeridian } from "@/hooks/MeridianContext";
 import { DEMO_WALLET } from "@/lib/demoWallet";
 import { noFromYes, yesMidFraction } from "@/lib/marketsView";
@@ -85,19 +85,18 @@ export default function PortfolioPage() {
       }
       if (isCurrent()) setLoading(true);
       try {
-        // Enumerate Yes/No balances + book for every market in parallel.
-        const perMarket = await Promise.all(
-          markets.map(async (m) => {
-            const [balances, book] = await Promise.all([
-              fetchBalances(connection, eff, config.usdcMint, m),
-              fetchBook(program, m.pubkey).catch(() => null),
-            ]);
-            return { m, balances, book };
-          }),
-        );
+        // Two batched reads for the whole board: all Yes/No balances in one
+        // getMultipleAccountsInfo, all books in another — instead of 4 calls per
+        // market (the old per-market storm that rate-limited the page).
+        const [balancesByMarket, booksByMarket] = await Promise.all([
+          fetchBalancesMany(connection, eff, config.usdcMint, markets),
+          fetchBooks(program, markets.map((m) => m.pubkey)),
+        ]);
 
         const rows: EnrichedHolding[] = [];
-        for (const { m, balances, book } of perMarket) {
+        for (const m of markets) {
+          const balances = balancesByMarket[m.pubkey.toBase58()] ?? { usdc: 0n, yes: 0n, no: 0n };
+          const book = booksByMarket[m.pubkey.toBase58()] ?? null;
           const sides: { side: PositionSide; amount: bigint }[] = [
             { side: "yes", amount: balances.yes },
             { side: "no", amount: balances.no },
