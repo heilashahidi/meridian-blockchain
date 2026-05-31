@@ -185,7 +185,7 @@ Edit `app/.env.local`:
 ```
 NEXT_PUBLIC_RPC_URL=https://api.devnet.solana.com
 NEXT_PUBLIC_PROGRAM_ID=6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX
-NEXT_PUBLIC_USDC_MINT=<your-devnet-usdc-mint>
+# The USDC mint is read from the on-chain Config account, not an env var.
 # NEXT_PUBLIC_HERMES_URL=https://hermes.pyth.network   # optional override
 ```
 

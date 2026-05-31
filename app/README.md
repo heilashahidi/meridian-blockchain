@@ -54,7 +54,7 @@ perspective). See `../docs/ARCHITECTURE.md` §5–6 for the full rationale.
 ```bash
 cd app
 npm install
-cp .env.local.example .env.local   # adjust RPC / program id / USDC mint
+cp .env.local.example .env.local   # adjust RPC / program id
 npm run dev
 ```
 
