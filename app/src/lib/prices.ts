@@ -6,9 +6,11 @@ import { MAG7, TICKER_BY_FEED_ID } from "./feeds";
 // but the call still succeeds — the UI surfaces staleness via `publishTime`, it
 // never throws. The `usePrices` polling hook lives in `@/hooks/usePrices`.
 
-/** Public Hermes endpoint; override with NEXT_PUBLIC_HERMES_URL. */
+/** Public Hermes endpoint; override with NEXT_PUBLIC_HERMES_URL. Use `||`, not
+ * `??`: an empty-string var (Railway lets you set a var with no value) must
+ * still fall back, else the URL resolves relative to the app origin → 404. */
 export const HERMES_URL =
-  process.env.NEXT_PUBLIC_HERMES_URL ?? "https://hermes.pyth.network";
+  process.env.NEXT_PUBLIC_HERMES_URL || "https://hermes.pyth.network";
 
 export interface PriceData {
   /** Spot price in USD (already scaled by the feed exponent). */
