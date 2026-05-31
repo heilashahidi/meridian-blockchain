@@ -1,0 +1,1 @@
+# Keeps app/public/ in git so the Dockerfile COPY (Next static assets dir) has a valid source.
