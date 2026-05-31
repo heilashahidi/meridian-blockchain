@@ -6,7 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { useConnection } from "@solana/wallet-adapter-react";
 
 import { MAG7 } from "@/lib/feeds";
-import { fetchBalances, fetchBook, type BookView, type MarketView } from "@/lib/market";
+import { fetchBalancesMany, fetchBooks, type BookView, type MarketView } from "@/lib/market";
 import {
   groupActiveByTicker,
   noFromYes,
@@ -233,11 +233,12 @@ function PortfolioPanel({ active, books }: { active: MarketView[]; books: Record
     let cancelled = false;
     const load = async () => {
       let usdc = 0, posVal = 0, posCount = 0;
-      const per = await Promise.all(active.map(async (m) => {
-        try { return [m, await fetchBalances(connection, eff, config.usdcMint, m)] as const; }
-        catch { return [m, null] as const; }
-      }));
-      for (const [m, bals] of per) {
+      // ONE batched read for every market's Yes/No balance (+ shared USDC).
+      let byMarket: Record<string, { usdc: bigint; yes: bigint; no: bigint }>;
+      try { byMarket = await fetchBalancesMany(connection, eff, config.usdcMint, active); }
+      catch { return; }
+      for (const m of active) {
+        const bals = byMarket[m.pubkey.toBase58()];
         if (!bals) continue;
         usdc = Number(bals.usdc) / 1_000_000; // same wallet USDC across markets
         const yes = contractsFromBaseUnits(bals.yes);
@@ -440,19 +441,17 @@ function DashboardInner() {
     if (active.length === 0) { setBooks({}); return; }
     let cancelled = false;
     const load = async () => {
-      const entries = await Promise.all(active.map(async (m) => {
-        try { return [m.pubkey.toBase58(), await fetchBook(program, m.pubkey)] as const; }
-        catch { return [m.pubkey.toBase58(), null] as const; }
-      }));
+      // ONE batched getMultipleAccountsInfo for every book, not N getAccountInfo.
+      let fetched: Record<string, BookView | null>;
+      try { fetched = await fetchBooks(program, active.map((m) => m.pubkey)); }
+      catch { return; } // total failure → keep the last-good map untouched
       if (cancelled) return;
-      // Merge, don't replace: a failed fetch (e.g. an RPC 429 during the
-      // 39-market burst) returns null, and overwriting a previously-good book
-      // with null would flicker that card to a blank implied %. Keep the last
-      // known-good book on failure; only store null for a market we've never
-      // successfully loaded.
+      // Merge, don't replace: a null (missing/undecodable book) must not
+      // overwrite a previously-good book, or that card flickers to a blank
+      // implied %. Only store null for a market we've never loaded.
       setBooks((prev) => {
         const next = { ...prev };
-        for (const [k, v] of entries) {
+        for (const [k, v] of Object.entries(fetched)) {
           if (v !== null) next[k] = v;
           else if (!(k in next)) next[k] = null;
         }
