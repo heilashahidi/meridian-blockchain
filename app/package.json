@@ -29,5 +29,10 @@
     "@types/react-dom": "^18.3.0",
     "typescript": "^5.5.3",
     "vitest": "^2.0.5"
+  },
+  "comment:overrides": "The wallet-adapter dependency tree pulls @types/react@19 nested, which collides with this app's React 18 JSX types (ConnectionProvider becomes 'not a valid JSX element type'). Pin the types to 18.x everywhere so the build is consistent and the lockfile resolves deterministically.",
+  "overrides": {
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0"
   }
 }

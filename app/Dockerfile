@@ -4,13 +4,13 @@
 # build args (Railway exposes service variables to the Docker build).
 
 # ── deps ────────────────────────────────────────────────────────────────────
-FROM node:20-alpine AS deps
+FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm ci
 
 # ── build ───────────────────────────────────────────────────────────────────
-FROM node:20-alpine AS build
+FROM node:24-alpine AS build
 WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
@@ -29,7 +29,7 @@ ENV NEXT_PUBLIC_RPC_URL=$NEXT_PUBLIC_RPC_URL \
 RUN npm run build
 
 # ── run ─────────────────────────────────────────────────────────────────────
-FROM node:20-alpine AS run
+FROM node:24-alpine AS run
 WORKDIR /app
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 PORT=3000 HOSTNAME=0.0.0.0
 # `output: "standalone"` produces a minimal server in .next/standalone.
