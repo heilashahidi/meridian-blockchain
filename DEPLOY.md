@@ -57,9 +57,12 @@ Docker build as args):
 |----------|-------|
 | `NEXT_PUBLIC_RPC_URL` | your devnet RPC URL |
 | `NEXT_PUBLIC_PROGRAM_ID` | `6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX` |
-| `NEXT_PUBLIC_USDC_MINT` | `EzYKgPixrCfArjHvarmKorv97cgmmFKUYYHpTbbX4J3Z` |
-| `NEXT_PUBLIC_DEMO_WALLET` | *(optional)* a read-only pubkey to preview activity when logged out |
+| `NEXT_PUBLIC_DEMO_WALLET` | *(optional)* a read-only pubkey to preview the dashboard / portfolio / history when logged out |
 | `NEXT_PUBLIC_HERMES_URL` | *(optional)* defaults to `https://hermes.pyth.network` |
+
+> The USDC mint is **not** an env var: the app reads it from the on-chain
+> `Config` account (`fetchConfig` → `c.usdcMint`), the single source of truth, so
+> a build-time value would only drift from on-chain.
 
 **Runtime variables** (read server-side at request time — the insights chat):
 
