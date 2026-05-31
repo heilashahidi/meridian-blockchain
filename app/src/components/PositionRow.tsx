@@ -30,6 +30,7 @@ export function PositionRow({
   entryIsEstimate,
   onRedeem,
   redeeming,
+  redeemDisabled = false,
 }: {
   holding: Holding;
   livePrice: number | null;
@@ -37,6 +38,9 @@ export function PositionRow({
   entryIsEstimate: boolean;
   onRedeem: (h: Holding) => void;
   redeeming: boolean;
+  /** Read-only preview (demo wallet): show the Redeem affordance disabled —
+   *  a public-key-only wallet can't sign the redeem transaction. */
+  redeemDisabled?: boolean;
 }) {
   const { market, side, amount } = holding;
   const qty = contractsFromBaseUnits(amount);
@@ -106,11 +110,12 @@ export function PositionRow({
                   borderRadius: "var(--radius-sm)",
                   padding: "8px 16px",
                   fontWeight: 600,
-                  cursor: redeeming ? "not-allowed" : "pointer",
-                  opacity: redeeming ? 0.6 : 1,
+                  cursor: redeeming || redeemDisabled ? "not-allowed" : "pointer",
+                  opacity: redeeming || redeemDisabled ? 0.6 : 1,
                 }}
-                disabled={redeeming}
+                disabled={redeeming || redeemDisabled}
                 onClick={() => onRedeem(holding)}
+                title={redeemDisabled ? "Connect your wallet to redeem" : undefined}
               >
                 {redeeming ? "Redeeming…" : "Redeem"}
               </button>

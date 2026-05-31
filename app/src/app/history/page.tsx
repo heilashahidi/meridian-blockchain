@@ -12,6 +12,7 @@ import {
   type HistoryEntry,
 } from "@/lib/history";
 import { useMeridian } from "@/hooks/MeridianContext";
+import { DEMO_WALLET } from "@/lib/demoWallet";
 
 function fmtTime(blockTime: number | null): string {
   if (!blockTime) return "—";
@@ -68,21 +69,26 @@ export default function HistoryPage() {
   const { walletPubkey } = useMeridian();
   const { connection } = useConnection();
 
+  // No wallet connected → preview the demo wallet's on-chain history (read-only)
+  // so the page matches the dashboard instead of dead-ending on a connect prompt.
+  const eff = walletPubkey ?? DEMO_WALLET;
+  const preview = !walletPubkey && !!DEMO_WALLET;
+
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
-    if (!walletPubkey) {
+    if (!eff) {
       setEntries([]);
       return;
     }
     setLoading(true);
     try {
-      setEntries(await fetchHistory(connection, walletPubkey));
+      setEntries(await fetchHistory(connection, eff));
     } finally {
       setLoading(false);
     }
-  }, [connection, walletPubkey]);
+  }, [connection, eff]);
 
   useEffect(() => {
     void load();
@@ -91,14 +97,18 @@ export default function HistoryPage() {
   return (
     <main style={{ maxWidth: 1040, margin: "0 auto", padding: "32px 16px" }}>
       <header style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 28, margin: "0 0 8px" }}>History</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 8px" }}>
+          <h1 style={{ fontSize: 28, margin: 0 }}>History</h1>
+          {preview && <span className="badge-devnet">Demo</span>}
+        </div>
         <p className="muted" style={{ margin: 0, maxWidth: 680 }}>
-          Your recent Meridian transactions — mints, trades, cancels, and
-          redeems — classified from on-chain instruction data.
+          {preview
+            ? "Previewing a demo wallet's recent Meridian transactions. Connect your wallet to see your own."
+            : "Your recent Meridian transactions — mints, trades, cancels, and redeems — classified from on-chain instruction data."}
         </p>
       </header>
 
-      {!walletPubkey ? (
+      {!eff ? (
         <ConnectPrompt />
       ) : entries.length === 0 ? (
         loading ? (
