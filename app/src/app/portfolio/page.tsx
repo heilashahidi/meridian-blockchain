@@ -9,6 +9,7 @@ import { PositionRow } from "@/components/PositionRow";
 import { redeem } from "@/lib/actions";
 import { fetchBalances, fetchBook, type BookView } from "@/lib/market";
 import { useMeridian } from "@/hooks/MeridianContext";
+import { DEMO_WALLET } from "@/lib/demoWallet";
 import { noFromYes, yesMidFraction } from "@/lib/marketsView";
 import {
   MINT_PAIR_LEG_BASIS,
@@ -48,6 +49,12 @@ export default function PortfolioPage() {
   const { connection } = useConnection();
   const tx = useTx();
 
+  // When no wallet is connected, preview the demo wallet's positions (read-only)
+  // so the page matches the dashboard instead of dead-ending on a connect
+  // prompt. Redeeming needs a signature, so it stays disabled in preview.
+  const eff = walletPubkey ?? DEMO_WALLET;
+  const preview = !walletPubkey && !!DEMO_WALLET;
+
   const [enriched, setEnriched] = useState<EnrichedHolding[]>([]);
   const [loading, setLoading] = useState(false);
   const [redeemingKey, setRedeemingKey] = useState<string | null>(null);
@@ -69,7 +76,7 @@ export default function PortfolioPage() {
   // guard every state write with it.
   const load = useCallback(
     async (isCurrent: () => boolean) => {
-      if (!walletPubkey || !config) {
+      if (!eff || !config) {
         if (isCurrent()) {
           setEnriched([]);
           setLoading(false);
@@ -82,7 +89,7 @@ export default function PortfolioPage() {
         const perMarket = await Promise.all(
           markets.map(async (m) => {
             const [balances, book] = await Promise.all([
-              fetchBalances(connection, walletPubkey, config.usdcMint, m),
+              fetchBalances(connection, eff, config.usdcMint, m),
               fetchBook(program, m.pubkey).catch(() => null),
             ]);
             return { m, balances, book };
@@ -120,7 +127,7 @@ export default function PortfolioPage() {
         if (isCurrent()) setLoading(false);
       }
     },
-    [program, connection, walletPubkey, config, markets],
+    [program, connection, eff, config, markets],
   );
 
   useEffect(() => {
@@ -138,7 +145,7 @@ export default function PortfolioPage() {
       clearInterval(id);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [walletPubkey, config, marketKeys]);
+  }, [eff, config, marketKeys]);
 
   // Track unmount for the onRedeem refresh path (which lives outside the polling
   // effect). Set false on cleanup so a refresh that resolves after unmount is
@@ -199,15 +206,18 @@ export default function PortfolioPage() {
   return (
     <main style={{ maxWidth: 1040, margin: "0 auto", padding: "32px 16px" }}>
       <header style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 28, margin: "0 0 8px" }}>Portfolio</h1>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "0 0 8px" }}>
+          <h1 style={{ fontSize: 28, margin: 0 }}>Portfolio</h1>
+          {preview && <span className="badge-devnet">Demo</span>}
+        </div>
         <p className="muted" style={{ margin: 0, maxWidth: 680 }}>
-          Your Yes/No positions across all markets. Value is marked to the book
-          mid (settled markets to $1.00 / $0.00); entry basis is estimated from
-          the live mid where no per-fill ledger exists.
+          {preview
+            ? "Previewing a demo wallet's positions. Connect your wallet to see your own and redeem."
+            : "Your Yes/No positions across all markets. Value is marked to the book mid (settled markets to $1.00 / $0.00); entry basis is estimated from the live mid where no per-fill ledger exists."}
         </p>
       </header>
 
-      {!walletPubkey ? (
+      {!eff ? (
         <ConnectPrompt />
       ) : enriched.length === 0 ? (
         loading ? (
@@ -263,6 +273,7 @@ export default function PortfolioPage() {
                   entryIsEstimate={e.entryIsEstimate}
                   onRedeem={onRedeem}
                   redeeming={redeemingKey === key}
+                  redeemDisabled={preview}
                 />
               );
             })}

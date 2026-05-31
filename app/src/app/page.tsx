@@ -4,7 +4,6 @@ import Link from "next/link";
 import { Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { useConnection } from "@solana/wallet-adapter-react";
-import { PublicKey } from "@solana/web3.js";
 
 import { MAG7 } from "@/lib/feeds";
 import { fetchBalances, fetchBook, type BookView, type MarketView } from "@/lib/market";
@@ -22,20 +21,12 @@ import { useMeridian } from "@/hooks/MeridianContext";
 import { usePrices } from "@/hooks/usePrices";
 import { WalletButton } from "@/components/WalletButton";
 import { StockTile, passesFilter, type MoneynessFilter } from "@/components/StockTile";
+import { DEMO_WALLET } from "@/lib/demoWallet";
 
 const BOOK_POLL_MS = 6000;
 const usd = (n: number) =>
   n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const pct = (yes: number | null) => (yes === null ? "—" : `${Math.round(yes * 100)}%`);
-
-// Optional read-only preview wallet (a real on-chain account): when no wallet is
-// connected, the activity + portfolio panels show THIS account's live data so a
-// fresh/logged-out dashboard isn't empty. Read-only (public key only, no signing).
-const DEMO_WALLET: PublicKey | null = (() => {
-  const s = process.env.NEXT_PUBLIC_DEMO_WALLET;
-  if (!s) return null;
-  try { return new PublicKey(s); } catch { return null; }
-})();
 
 const FILTERS: { key: MoneynessFilter; label: string }[] = [
   { key: "all", label: "All" },
