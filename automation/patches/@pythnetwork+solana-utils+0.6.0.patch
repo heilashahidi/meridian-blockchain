@@ -1,0 +1,12 @@
+diff --git a/node_modules/@pythnetwork/solana-utils/dist/esm/jito.mjs b/node_modules/@pythnetwork/solana-utils/dist/esm/jito.mjs
+index 8369537..ccc96a0 100644
+--- a/node_modules/@pythnetwork/solana-utils/dist/esm/jito.mjs
++++ b/node_modules/@pythnetwork/solana-utils/dist/esm/jito.mjs
+@@ -1,6 +1,6 @@
+ /* eslint-disable @typescript-eslint/no-non-null-asserted-optional-chain */ /* eslint-disable @typescript-eslint/no-non-null-assertion */ /* eslint-disable @typescript-eslint/prefer-nullish-coalescing */ import { PublicKey, SystemProgram } from "@solana/web3.js";
+ import bs58 from "bs58";
+-import { Bundle } from "jito-ts/dist/sdk/block-engine/types";
++import { Bundle } from "jito-ts/dist/sdk/block-engine/types.js";
+ import { dummyLogger } from "ts-log";
+ export const TIP_ACCOUNTS = [
+     "HFqU5x63VTqvQss8hp11i4wVV8bD44PvwucfZ2bU7gRe",

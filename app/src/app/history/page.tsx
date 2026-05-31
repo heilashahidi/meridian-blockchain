@@ -13,11 +13,26 @@ import {
 } from "@/lib/history";
 import { useMeridian } from "@/hooks/MeridianContext";
 
-const SOLSCAN_BASE = "https://solscan.io/tx";
-
 function fmtTime(blockTime: number | null): string {
   if (!blockTime) return "—";
   return new Date(blockTime * 1000).toLocaleString();
+}
+
+/**
+ * Cluster-aware Solana Explorer link for a transaction. Solscan (the old link)
+ * is mainnet-only — its links 404 on devnet and can't see a local validator at
+ * all. Solana Explorer supports devnet, testnet, and a custom RPC (resolved
+ * client-side in the browser, so a localhost validator works). We derive the
+ * cluster from the connection's actual RPC endpoint.
+ */
+function explorerTxUrl(signature: string, rpcEndpoint: string): string {
+  const ep = rpcEndpoint.toLowerCase();
+  const base = `https://explorer.solana.com/tx/${signature}`;
+  if (ep.includes("devnet")) return `${base}?cluster=devnet`;
+  if (ep.includes("testnet")) return `${base}?cluster=testnet`;
+  if (ep.includes("127.0.0.1") || ep.includes("localhost"))
+    return `${base}?cluster=custom&customUrl=${encodeURIComponent(rpcEndpoint)}`;
+  return base; // mainnet-beta (default)
 }
 
 /** Accent color per action so the log is scannable at a glance. */
@@ -146,7 +161,7 @@ export default function HistoryPage() {
                     }}
                   >
                     <a
-                      href={`${SOLSCAN_BASE}/${e.signature}`}
+                      href={explorerTxUrl(e.signature, connection.rpcEndpoint)}
                       target="_blank"
                       rel="noreferrer"
                       style={{ color: "var(--accent)" }}

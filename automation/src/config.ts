@@ -1,7 +1,8 @@
 // config.ts — single source of truth for the automation service.
 //
-// Holds the MAG7 ticker set with their Pyth equity feed IDs, strike-spacing
-// rules, RPC URL, Hermes endpoint, and the admin keypair path — all env-driven
+// Holds the MAG7 ticker set with their Pyth equity feed IDs, the PRD strike
+// algorithm (±%-from-prev-close, rounded to nearest $10), RPC URL, Hermes
+// endpoint, and the admin keypair path — all env-driven
 // with sane defaults. Also exposes the config validators and the
 // `computeStrikes` ladder helper the create-strikes job (U4) builds on.
 
@@ -101,24 +102,21 @@ export const DEFAULT_TICKERS: Ticker[] = ["AAPL", "NVDA", "TSLA"];
 
 // ─── strike-spacing rules ──────────────────────────────────────────────────
 
-export interface StrikeSpacing {
-  /** If price < `maxPrice`, use `spacingDollars`. Buckets are tried in order. */
-  maxPrice: number;
-  spacingDollars: number;
-}
-
 /**
- * Strike spacing buckets, roughly tracking how listed options space strikes by
- * underlying price. Env-overridable count of strikes each side via
- * `STRIKES_PER_SIDE`.
+ * PRD strike algorithm (PRD §"Strike Selection"): each morning, generate
+ * strikes at fixed PERCENTAGE offsets above and below the previous close,
+ * rounded to the nearest $10. The default offsets are ±3%, ±6%, ±9% — six
+ * strikes plus the rounded previous close itself (the at-the-money center),
+ * deduplicated. Both configurable via env (`STRIKE_PERCENTS`, `STRIKE_ROUNDING`).
+ *
+ * Worked PRD examples this reproduces exactly:
+ *   META prev close $680 → 620, 640, 660, 680, 700, 720, 740
+ *   AAPL prev close $230 → 210, 220, 230, 240, 250 (−6%/−3% and +3%/+6% dedupe)
  */
-export const STRIKE_SPACING: StrikeSpacing[] = [
-  { maxPrice: 50, spacingDollars: 1 },
-  { maxPrice: 100, spacingDollars: 2.5 },
-  { maxPrice: 250, spacingDollars: 5 },
-  { maxPrice: 1000, spacingDollars: 10 },
-  { maxPrice: Infinity, spacingDollars: 25 },
-];
+export const DEFAULT_STRIKE_PERCENTS: number[] = [3, 6, 9];
+
+/** Strikes are rounded to the nearest multiple of this many dollars ($10). */
+export const DEFAULT_STRIKE_ROUNDING_DOLLARS = 10;
 
 /** USDC has 6 decimals; the program stores strike prices in microdollars. */
 export const USDC_DECIMALS = 6;
@@ -133,7 +131,10 @@ export interface AutomationConfig {
   pythReceiver: string;
   adminKeypairPath: string;
   tickers: Ticker[];
-  strikesPerSide: number;
+  /** Percentage offsets from the reference price for the strike ladder (±each). */
+  strikePercents: number[];
+  /** Round each strike to the nearest multiple of this many dollars. */
+  strikeRoundingDollars: number;
   /** Hours-from-now the create-strikes job sets as market expiry. */
   expiryHoursFromNow: number;
 }
@@ -156,6 +157,27 @@ function parseTickers(raw: string | undefined): Ticker[] {
   return parsed.length > 0 ? parsed : DEFAULT_TICKERS;
 }
 
+/**
+ * Parse `STRIKE_PERCENTS` (comma-separated positive numbers, e.g. "3,6,9").
+ * Falls back to the PRD default ±3/6/9%. Throws on a non-positive or NaN entry
+ * so a misconfigured env fails loud rather than silently dropping strikes.
+ */
+function parseStrikePercents(raw: string | undefined): number[] {
+  if (!raw) return [...DEFAULT_STRIKE_PERCENTS];
+  const parsed = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => {
+      const n = Number(s);
+      if (!Number.isFinite(n) || n <= 0) {
+        throw new Error(`STRIKE_PERCENTS entry "${s}" must be a positive number`);
+      }
+      return n;
+    });
+  return parsed.length > 0 ? parsed : [...DEFAULT_STRIKE_PERCENTS];
+}
+
 /** Load config from the environment with sane defaults. */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AutomationConfig {
   return {
@@ -167,7 +189,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AutomationConf
       homedir(),
     ),
     tickers: parseTickers(env.TICKERS),
-    strikesPerSide: env.STRIKES_PER_SIDE ? Number(env.STRIKES_PER_SIDE) : 3,
+    strikePercents: parseStrikePercents(env.STRIKE_PERCENTS),
+    strikeRoundingDollars: env.STRIKE_ROUNDING
+      ? Number(env.STRIKE_ROUNDING)
+      : DEFAULT_STRIKE_ROUNDING_DOLLARS,
     expiryHoursFromNow: env.EXPIRY_HOURS_FROM_NOW
       ? Number(env.EXPIRY_HOURS_FROM_NOW)
       : 24,
@@ -209,54 +234,78 @@ export function validateTickers(tickers: Ticker[]): TickerConfig[] {
 
 // ─── strike ladder ─────────────────────────────────────────────────────────
 
-/** Pick the spacing for a reference price from the bucket table. */
-export function spacingForPrice(referencePrice: number): number {
-  for (const b of STRIKE_SPACING) {
-    if (referencePrice < b.maxPrice) return b.spacingDollars;
-  }
-  return STRIKE_SPACING[STRIKE_SPACING.length - 1].spacingDollars;
+export interface ComputeStrikesOptions {
+  /** Percentage offsets (±each) from the reference. Default ±3/6/9%. */
+  percents?: number[];
+  /** Round each strike to the nearest multiple of this many dollars. Default $10. */
+  roundingDollars?: number;
+  /** Include the rounded reference (at-the-money) as a center strike. Default true. */
+  includeCenter?: boolean;
 }
 
 export interface StrikeLadder {
-  /** Spacing used, in dollars. */
-  spacingDollars: number;
+  /** Rounding increment used, in dollars (the PRD's "nearest $10"). */
+  roundingDollars: number;
+  /** Percentage offsets used to build the ladder (±each). */
+  percentsUsed: number[];
   /** Strikes in microdollars (what `create_strike_market` expects), ascending. */
   strikesMicro: bigint[];
   /** Same strikes as whole/decimal dollars, for logging. */
   strikesDollars: number[];
 }
 
+/** Round `value` to the nearest multiple of `increment` (PRD: nearest $10). */
+function roundToNearest(value: number, increment: number): number {
+  return Math.round(value / increment) * increment;
+}
+
 /**
- * Produce a sane strike ladder around a reference price: round the reference to
- * the nearest spacing increment, then lay `strikesPerSide` strikes above and
- * below (the rounded reference itself is included as the center), all strictly
- * positive. Returns microdollar strikes for the program plus dollar values for
- * logging.
+ * PRD strike algorithm (PRD §"Strike Selection"). Given the previous close
+ * (reference price), generate strikes at ±`percents`% offsets, each rounded to
+ * the nearest `roundingDollars`, plus the rounded reference as the center, then
+ * deduplicate and sort ascending. Returns microdollar strikes for the program
+ * plus dollar values for logging.
+ *
+ * Reproduces the PRD worked examples exactly:
+ *   computeStrikes(680) → [620, 640, 660, 680, 700, 720, 740]
+ *   computeStrikes(230) → [210, 220, 230, 240, 250]   (collisions dedupe)
  */
 export function computeStrikes(
   referencePrice: number,
-  strikesPerSide = 3,
+  opts: ComputeStrikesOptions = {},
 ): StrikeLadder {
   if (!(referencePrice > 0) || !Number.isFinite(referencePrice)) {
     throw new Error(`reference price must be a positive finite number, got ${referencePrice}`);
   }
-  if (!Number.isInteger(strikesPerSide) || strikesPerSide < 0) {
-    throw new Error(`strikesPerSide must be a non-negative integer, got ${strikesPerSide}`);
+  const percents = opts.percents ?? [...DEFAULT_STRIKE_PERCENTS];
+  const rounding = opts.roundingDollars ?? DEFAULT_STRIKE_ROUNDING_DOLLARS;
+  const includeCenter = opts.includeCenter ?? true;
+  if (!(rounding > 0) || !Number.isFinite(rounding)) {
+    throw new Error(`roundingDollars must be a positive finite number, got ${rounding}`);
   }
-
-  const spacing = spacingForPrice(referencePrice);
-  const center = Math.round(referencePrice / spacing) * spacing;
+  for (const p of percents) {
+    if (!(p > 0) || !Number.isFinite(p)) {
+      throw new Error(`strike percent must be a positive finite number, got ${p}`);
+    }
+  }
 
   const dollars: number[] = [];
-  for (let i = -strikesPerSide; i <= strikesPerSide; i++) {
-    const strike = center + i * spacing;
-    if (strike > 0) dollars.push(Number(strike.toFixed(6)));
+  if (includeCenter) {
+    const center = roundToNearest(referencePrice, rounding);
+    if (center > 0) dollars.push(center);
   }
-  // Dedupe (rounding near zero) and sort ascending.
+  for (const pct of percents) {
+    const above = roundToNearest(referencePrice * (1 + pct / 100), rounding);
+    const below = roundToNearest(referencePrice * (1 - pct / 100), rounding);
+    if (above > 0) dollars.push(above);
+    if (below > 0) dollars.push(below);
+  }
+  // Dedupe (collisions from rounding, per the PRD AAPL example) and sort.
   const unique = [...new Set(dollars)].sort((a, b) => a - b);
 
   return {
-    spacingDollars: spacing,
+    roundingDollars: rounding,
+    percentsUsed: [...percents],
     strikesDollars: unique,
     strikesMicro: unique.map((d) => BigInt(Math.round(d * MICRO))),
   };

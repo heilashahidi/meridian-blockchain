@@ -31,6 +31,23 @@ export function formatRemaining(remainingSeconds: number): string {
 }
 
 /**
+ * Format a market's expiry instant as its ET wall-clock label, e.g.
+ * "4:00 PM ET". `expiryUnix` is an absolute instant, so we render it in
+ * `America/New_York` via Intl — DST-correct, and HONEST: if a market's expiry
+ * isn't actually 4:00 PM ET the label reflects the real time instead of a
+ * hardcoded "4:00 PM ET" that could silently lie.
+ */
+export function expiryEtLabel(expiryUnix: number): string {
+  const t = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(new Date(expiryUnix * 1000));
+  return `${t} ET`;
+}
+
+/**
  * Pure countdown state from a `now` and an `expiry` (both unix seconds). At or
  * past expiry the market is closed (remaining 0, label "Closed").
  */

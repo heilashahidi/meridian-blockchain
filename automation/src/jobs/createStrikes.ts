@@ -41,6 +41,7 @@ import {
   type Ticker,
 } from "../config.js";
 import { alert, log } from "../log.js";
+import { settlementExpiryUnix } from "../tradingCalendar.js";
 
 // NOTE: `../pyth.js` (and its `@pythnetwork/pyth-solana-receiver` →
 // `@pythnetwork/solana-utils` → `jito-ts` chain) is imported LAZILY inside
@@ -70,7 +71,7 @@ export interface MarketPlan {
 export interface TickerPlan {
   ticker: Ticker;
   referencePrice: number;
-  spacingDollars: number;
+  roundingDollars: number;
   markets: MarketPlan[];
 }
 
@@ -136,7 +137,10 @@ export async function planTicker(
 ): Promise<TickerPlan> {
   const tcfg = validateTicker(ticker); // throws on missing/bad feed id
   const referencePrice = await deps.fetchReferencePrice(ticker);
-  const ladder = computeStrikes(referencePrice, cfg.strikesPerSide);
+  const ladder = computeStrikes(referencePrice, {
+    percents: cfg.strikePercents,
+    roundingDollars: cfg.strikeRoundingDollars,
+  });
 
   const pythFeedId = Array.from(Buffer.from(tcfg.feedId, "hex"));
   if (pythFeedId.length !== 32) {
@@ -157,7 +161,7 @@ export async function planTicker(
   return {
     ticker,
     referencePrice,
-    spacingDollars: ladder.spacingDollars,
+    roundingDollars: ladder.roundingDollars,
     markets,
   };
 }
@@ -227,7 +231,7 @@ export async function ensureTicker(
   log.info("planned strikes", {
     ticker,
     referencePrice: plan.referencePrice,
-    spacingDollars: plan.spacingDollars,
+    roundingDollars: plan.roundingDollars,
     strikes: plan.markets.map((m) => m.strikeDollars),
     expiryUnix,
   });
@@ -307,8 +311,10 @@ export async function createStrikes(
     sleep: options.sleep ?? defaultSleep,
   };
 
-  const expiryUnix =
-    Math.floor(Date.now() / 1000) + Math.round(cfg.expiryHoursFromNow * 3600);
+  // Markets expire at the PRD's 16:00 ET close. Deterministic within the ET day
+  // so re-runs (cron retries, double-fires) are idempotent — they skip the
+  // already-created markets instead of minting a duplicate set off Date.now().
+  const expiryUnix = settlementExpiryUnix();
 
   const results: TickerResult[] = [];
   for (const ticker of cfg.tickers) {

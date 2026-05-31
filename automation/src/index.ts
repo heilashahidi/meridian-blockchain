@@ -14,6 +14,12 @@ import { loadConfig } from "./config.js";
 import { log } from "./log.js";
 import { runCreateStrikesJob } from "./jobs/createStrikes.js";
 import { runSettleJob } from "./jobs/settle.js";
+import {
+  DEFAULT_SCHEDULE,
+  runScheduler,
+  type HourMinute,
+  type ScheduleConfig,
+} from "./scheduler.js";
 
 const USAGE = `meridian-automation — daily jobs for the Meridian on-chain CLOB
 
@@ -24,6 +30,8 @@ Commands:
   create-strikes    Create the day's MAG7 strike markets (morning job).
   settle            Settle open/expired markets via the Pyth oracle, with
                     admin-override fallback (after-close job).
+  schedule          Run as a daemon: fire create-strikes (~08:00 ET) and settle
+                    (~16:05 ET) automatically on US trading days. Ctrl-C to stop.
 
 Options:
   -h, --help        Show this help and exit.
@@ -36,18 +44,81 @@ Environment:
   PYTH_RECEIVER         Pyth receiver program (default rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ)
   ADMIN_KEYPAIR         Path to admin keypair JSON (default ~/.config/solana/id.json)
   TICKERS               Comma-separated subset, e.g. AAPL,NVDA,TSLA (default demo subset)
-  STRIKES_PER_SIDE      Strikes each side of the reference price (default 3)
+  STRIKE_PERCENTS       Comma-separated % offsets from prev close (default 3,6,9 per PRD)
+  STRIKE_ROUNDING       Round each strike to nearest $N (default 10 per PRD)
   EXPIRY_HOURS_FROM_NOW Market expiry horizon in hours (default 24)
   LOG_LEVEL             debug|info|warn|error (default info)
   ALERT_WEBHOOK         Optional webhook URL for alert() escalations
   OVERRIDE_PRICES       (settle) Comma-separated TICKER=price for the admin
                         override fallback, e.g. AAPL=187.5,NVDA=120
+  SCHEDULE_MORNING_ET   (schedule) ET time for create-strikes, HH:MM (default 08:00)
+  SCHEDULE_SETTLE_ET    (schedule) ET time for settle, HH:MM (default 16:05)
+  SCHEDULE_TICK_MS      (schedule) Poll interval in ms (default 60000)
 `;
 
-type Command = "create-strikes" | "settle";
+type Command = "create-strikes" | "settle" | "schedule";
 
 export function printHelp(): void {
   process.stdout.write(USAGE);
+}
+
+/** Parse an `HH:MM` env value into [hour, minute], falling back to `fallback`. */
+export function parseHourMinute(
+  raw: string | undefined,
+  fallback: HourMinute,
+): HourMinute {
+  if (!raw) return fallback;
+  const m = /^(\d{1,2}):(\d{2})$/.exec(raw.trim());
+  if (!m) throw new Error(`expected HH:MM, got "${raw}"`);
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+    throw new Error(`time out of range: "${raw}"`);
+  }
+  return [hour, minute];
+}
+
+/** Build the schedule from env (SCHEDULE_MORNING_ET / SCHEDULE_SETTLE_ET). */
+function scheduleFromEnv(env: NodeJS.ProcessEnv): ScheduleConfig {
+  return {
+    morningHm: parseHourMinute(env.SCHEDULE_MORNING_ET, DEFAULT_SCHEDULE.morningHm),
+    settleHm: parseHourMinute(env.SCHEDULE_SETTLE_ET, DEFAULT_SCHEDULE.settleHm),
+    fireWindowMinutes: DEFAULT_SCHEDULE.fireWindowMinutes,
+  };
+}
+
+/** Run the scheduler daemon until SIGINT/SIGTERM. */
+async function runScheduleDaemon(cfg: ReturnType<typeof loadConfig>): Promise<void> {
+  let running = true;
+  const stop = (signal: string): void => {
+    if (!running) return;
+    running = false;
+    log.info("scheduler: shutdown signal received, stopping after current tick", {
+      signal,
+    });
+  };
+  process.on("SIGINT", () => stop("SIGINT"));
+  process.on("SIGTERM", () => stop("SIGTERM"));
+
+  await runScheduler(
+    {
+      now: () => new Date(),
+      runMorning: async () => {
+        await runCreateStrikesJob(cfg, { dryRun: false });
+      },
+      runSettle: async () => {
+        await runSettleJob(cfg);
+      },
+      sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      running: () => running,
+    },
+    {
+      schedule: scheduleFromEnv(process.env),
+      tickMs: process.env.SCHEDULE_TICK_MS
+        ? Number(process.env.SCHEDULE_TICK_MS)
+        : undefined,
+    },
+  );
 }
 
 /** Parse argv into a command (or null) + a help flag. Exported for tests. */
@@ -68,7 +139,7 @@ export function parseArgs(argv: string[]): {
       help = true;
     } else if (a === "--dry-run") {
       dryRun = true;
-    } else if (a === "create-strikes" || a === "settle") {
+    } else if (a === "create-strikes" || a === "settle" || a === "schedule") {
       command = a;
     } else if (!a.startsWith("-") && command === null) {
       unknown = a;
@@ -103,6 +174,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
   try {
     if (command === "create-strikes") await runCreateStrikesJob(cfg, { dryRun });
     else if (command === "settle") await runSettleJob(cfg);
+    else if (command === "schedule") await runScheduleDaemon(cfg);
     log.info("job complete", { command });
     return 0;
   } catch (e) {

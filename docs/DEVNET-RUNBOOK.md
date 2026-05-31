@@ -73,9 +73,25 @@ This runs `scripts/deploy-devnet.sh`, which:
 1. Preflights the deploy wallet's devnet balance. **If under ~8 SOL it exits
    non-zero without touching the cluster** (no partial deploy) and prints the
    address to fund and the exact shortfall. Go back to step 1.
-2. Runs `anchor deploy --provider.cluster devnet` (idempotent — re-running
+2. Runs `anchor deploy --provider.cluster "$DEVNET_RPC"` (idempotent — re-running
    upgrades in place at the same program id).
 3. Polls `solana program show` until the program is confirmed invokable.
+
+> **Use a dedicated RPC, not the public endpoint.** A program `meridian.so`'s
+> size uploads in hundreds of transactions, and `api.devnet.solana.com` 429s
+> mid-deploy. Point `DEVNET_RPC` at a keyed RPC (e.g. Helius — see
+> [ARCHITECTURE.md D26](ARCHITECTURE.md)):
+> ```bash
+> make devnet-deploy DEVNET_RPC="https://devnet.helius-rpc.com/?api-key=YOUR_KEY"
+> ```
+> The same `DEVNET_RPC` drives both the balance preflight and the deploy.
+> `make demo DEMO_RPC="…"` takes the endpoint the same way.
+
+> **On-chain IDL is optional.** With Anchor 1.0 the deploy may print
+> "Failed to initialize IDL" *after* the program itself deploys successfully —
+> that step writes a convenience on-chain IDL account. The app and scripts use a
+> vendored IDL, so the program is fully invokable regardless; confirm with
+> `solana program show <program-id> --url "$DEVNET_RPC"`.
 
 On success it prints the program id
 (`6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX`) and a "deployed and invokable"
@@ -137,10 +153,17 @@ HERMES_URL=https://hermes.pyth.network \
 PYTH_RECEIVER=rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ \
 ADMIN_KEYPAIR=~/.config/solana/id.json \
 TICKERS=AAPL,NVDA,TSLA \
-STRIKES_PER_SIDE=3 \
+STRIKE_PERCENTS=3,6,9 \
+STRIKE_ROUNDING=10 \
 EXPIRY_HOURS_FROM_NOW=24 \
   npm run create-strikes
 ```
+
+The strike ladder follows the PRD: strikes at ±`STRIKE_PERCENTS`% from the
+previous close, each rounded to the nearest `$STRIKE_ROUNDING`, deduplicated.
+To run both daily jobs automatically on US trading days (08:00 / 16:05 ET),
+use the scheduler daemon instead of cron: `npm run start schedule` (see
+[`automation/README.md`](../automation/README.md)).
 
 The admin keypair must equal the on-chain `Config.admin` (the wallet that
 bootstrapped Config), or `create_strike_market` reverts with `Unauthorized`. See

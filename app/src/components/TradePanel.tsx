@@ -4,11 +4,11 @@ import { useMemo, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 
 import { buyNo, placeLimitOrder, placeMarketOrder, sellNo } from "@/lib/actions";
+import { Payoff } from "@/components/Payoff";
 import { useMeridian } from "@/hooks/MeridianContext";
 import { planFills, SIDE_BID } from "@/lib/matching";
 import { payoffSummary } from "@/lib/marketStats";
 import { tickerToString } from "@/lib/format";
-import { strikeDollars } from "@/lib/marketsView";
 import {
   ONE_USDC,
   positionGuardDecision,
@@ -149,16 +149,11 @@ export function TradePanel() {
 
   // Live payoff / return summary from the entered price + shares (display only).
   const ticker = market ? tickerToString(market.ticker) : "";
-  const strike = market ? strikeDollars(market.strikePrice) : "";
+  const strikeNum = market ? Number(market.strikePrice) / 1_000_000 : 0;
   const payoff =
     inputValid && priceMicro !== null
       ? payoffSummary({ action, priceDollars: Number(price), shares: qtyN })
       : null;
-  // Win condition wording: Yes wins above strike, No wins at or below.
-  const winText =
-    side === "no"
-      ? `${ticker} closes at or below $${strike}`
-      : `${ticker} closes above $${strike}`;
 
   return (
     <div className="panel" style={{ display: "grid", gap: 14 }}>
@@ -228,16 +223,16 @@ export function TradePanel() {
         >
           {payoff.kind === "buy" ? (
             <>
-              <div style={{ fontSize: 14 }}>
-                Pay <span className="mono" style={{ fontWeight: 700 }}>${usd(payoff.cost)}</span>{" "}
-                → Win{" "}
-                <span className="mono" style={{ fontWeight: 700 }}>
-                  ${usd(payoff.payout)}
-                </span>{" "}
-                if {winText}
-              </div>
+              {/* Canonical PRD payoff sentence (per $1 contract). */}
+              <Payoff
+                pay={Number(price)}
+                ticker={ticker}
+                strike={strikeNum}
+                side={sideLabel}
+              />
               <div className="mono" style={{ fontSize: 13, color: "var(--text-dim)" }}>
-                +{payoff.returnPct.toFixed(1)}% return · Max loss ${usd(payoff.maxLoss)}
+                {qtyN} shares: pay ${usd(payoff.cost)} → win ${usd(payoff.payout)} ·
+                +{payoff.returnPct.toFixed(1)}% · Max loss ${usd(payoff.maxLoss)}
               </div>
             </>
           ) : (

@@ -52,7 +52,7 @@ describe("createStrikes: live cluster (creates then no-ops)", () => {
       }
 
       // Use a small, fast subset for the live run.
-      const liveCfg = { ...cfg, tickers: ["AAPL"] as const, strikesPerSide: 1 };
+      const liveCfg = { ...cfg, tickers: ["AAPL"] as const, strikePercents: [3] };
       const deps = makeLiveDeps(liveCfg);
 
       const first = await createStrikes(liveCfg, deps, {

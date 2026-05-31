@@ -71,6 +71,25 @@ export function tradeHref(marketPubkey: { toBase58(): string }): string {
   return `/trade/${marketPubkey.toBase58()}`;
 }
 
+/**
+ * The sibling strike markets for one ticker on one expiry (the day's strike
+ * ladder), sorted by strike ascending. Powers the Trade screen's strike list so
+ * a user can switch strikes for the selected stock without going back to Markets
+ * (PRD §300). Matching on `expiryUnix` keeps the list to a single trading day.
+ */
+export function strikesForTicker(
+  markets: MarketView[],
+  ticker: number[],
+  expiryUnix: bigint,
+): MarketView[] {
+  const want = tickerToString(ticker);
+  return markets
+    .filter(
+      (m) => tickerToString(m.ticker) === want && m.expiryUnix === expiryUnix,
+    )
+    .sort((a, b) => Number(a.strikePrice - b.strikePrice));
+}
+
 export interface StockGroup {
   ticker: string;
   /** Active (unsettled, unexpired) markets for this ticker, expiry-ascending. */
@@ -81,7 +100,10 @@ export interface StockGroup {
  * Group the on-chain market list by ticker into one entry per MAG7 stock, in
  * MAG7 display order. Every stock appears (even with no markets) so the grid is
  * stable; only active markets are bucketed. Markets whose ticker is not a MAG7
- * stock are ignored.
+ * stock are ignored. Within a ticker, markets are deduplicated by strike —
+ * keeping the one with the latest expiry — so two same-day contracts for the
+ * same "TICKER > $STRIKE" question never render as duplicates. Strikes are
+ * returned ascending.
  */
 export function groupActiveByTicker(
   markets: MarketView[],
@@ -99,9 +121,16 @@ export function groupActiveByTicker(
   }
 
   return MAG7.map((f) => {
-    const active = (buckets.get(f.ticker) ?? [])
-      .slice()
-      .sort((a, b) => Number(a.expiryUnix - b.expiryUnix));
+    // Dedupe by strike, keeping the latest-expiry market for each strike.
+    const byStrike = new Map<string, MarketView>();
+    for (const m of buckets.get(f.ticker) ?? []) {
+      const k = m.strikePrice.toString();
+      const cur = byStrike.get(k);
+      if (!cur || m.expiryUnix > cur.expiryUnix) byStrike.set(k, m);
+    }
+    const active = [...byStrike.values()].sort(
+      (a, b) => Number(a.strikePrice - b.strikePrice),
+    );
     return { ticker: f.ticker, active };
   });
 }

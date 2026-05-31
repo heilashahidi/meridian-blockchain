@@ -89,8 +89,12 @@ if awk "BEGIN{exit !(${BALANCE_SOL:-0} < ${MIN_SOL})}"; then
 fi
 
 # ─── 2) deploy (idempotent upgrade-in-place) ────────────────────────────────
-bar "anchor deploy --provider.cluster devnet"
-( cd "$REPO_ROOT" && anchor deploy --provider.cluster devnet )
+# Deploy to the SAME endpoint the preflight checked ($DEVNET_RPC), not a bare
+# `devnet` moniker. Anchor accepts a full URL as the cluster, so a dedicated RPC
+# (e.g. Helius) drives the deploy too — the public devnet endpoint 429s mid-deploy
+# on a program meridian.so's size (see ARCHITECTURE.md D26).
+bar "anchor deploy --provider.cluster $DEVNET_RPC"
+( cd "$REPO_ROOT" && anchor deploy --provider.cluster "$DEVNET_RPC" )
 
 # ─── 3) confirm invokable ───────────────────────────────────────────────────
 bar "confirm program is invokable"

@@ -1,9 +1,25 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Inter, Space_Grotesk, Space_Mono } from "next/font/google";
 
-import { Nav } from "@/components/Nav";
+import { Sidebar } from "@/components/Sidebar";
+import { TopBar } from "@/components/TopBar";
 import { Providers } from "./providers";
 import "./globals.css";
+
+// Space Grotesk drives the UI chrome (techy, geometric); Space Mono renders all
+// numbers (terminal-style, pairs with Grotesk); Inter is the body fallback.
+const spaceGrotesk = Space_Grotesk({
+  subsets: ["latin"],
+  variable: "--font-space",
+  display: "swap",
+});
+
+const spaceMono = Space_Mono({
+  subsets: ["latin"],
+  weight: ["400", "700"],
+  variable: "--font-space-mono",
+  display: "swap",
+});
 
 const inter = Inter({
   subsets: ["latin"],
@@ -24,11 +40,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={inter.variable}>
+    <html lang="en" className={`${spaceGrotesk.variable} ${inter.variable} ${spaceMono.variable}`}>
       <body>
         <Providers>
-          <Nav />
-          {children}
+          <div className="app-shell">
+            <Sidebar />
+            <div className="app-main">
+              <TopBar />
+              {children}
+            </div>
+          </div>
         </Providers>
       </body>
     </html>

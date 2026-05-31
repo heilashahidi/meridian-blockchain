@@ -9,6 +9,7 @@ import {
   isActiveMarket,
   noFromYes,
   strikeDollars,
+  strikesForTicker,
   tradeHref,
   yesMidFraction,
 } from "@/lib/marketsView";
@@ -37,6 +38,34 @@ function mkMarket(
 }
 
 const NOW = 1_700_000_000; // a fixed "now" well before the default expiry
+
+describe("strikesForTicker", () => {
+  const DAY = 2_000_000_000n;
+  const markets: MarketView[] = [
+    mkMarket({ ticker: "AAPL", strikePrice: 240_000_000n, expiryUnix: DAY }),
+    mkMarket({ ticker: "AAPL", strikePrice: 210_000_000n, expiryUnix: DAY }),
+    mkMarket({ ticker: "AAPL", strikePrice: 230_000_000n, expiryUnix: DAY }),
+    mkMarket({ ticker: "NVDA", strikePrice: 120_000_000n, expiryUnix: DAY }),
+    // Same ticker, different trading day — excluded.
+    mkMarket({ ticker: "AAPL", strikePrice: 220_000_000n, expiryUnix: DAY + 86_400n }),
+  ];
+
+  it("returns same-ticker, same-day strikes sorted ascending", () => {
+    const aaplBytes = tickerBytes("AAPL");
+    const ladder = strikesForTicker(markets, aaplBytes, DAY);
+    expect(ladder.map((m) => m.strikePrice)).toEqual([
+      210_000_000n,
+      230_000_000n,
+      240_000_000n,
+    ]);
+  });
+
+  it("excludes other tickers and other expiries", () => {
+    const ladder = strikesForTicker(markets, tickerBytes("AAPL"), DAY);
+    expect(ladder.every((m) => m.expiryUnix === DAY)).toBe(true);
+    expect(ladder).toHaveLength(3); // not the NVDA market, not the next-day AAPL
+  });
+});
 
 describe("isActiveMarket", () => {
   it("is active when unsettled and not yet expired", () => {
@@ -107,19 +136,34 @@ describe("groupActiveByTicker", () => {
     expect(groups.reduce((n, g) => n + g.active.length, 0)).toBe(0);
   });
 
-  it("sorts each stock's active strikes by expiry ascending", () => {
+  it("sorts each stock's active strikes ascending by strike", () => {
     const groups = groupActiveByTicker(
       [
-        mkMarket({ ticker: "AAPL", expiryUnix: 2_100_000_000n }),
-        mkMarket({ ticker: "AAPL", expiryUnix: 2_000_000_000n }),
+        mkMarket({ ticker: "AAPL", strikePrice: 240_000_000n }),
+        mkMarket({ ticker: "AAPL", strikePrice: 210_000_000n }),
+        mkMarket({ ticker: "AAPL", strikePrice: 230_000_000n }),
       ],
       NOW,
     );
     const aapl = groups.find((g) => g.ticker === "AAPL")!;
-    expect(aapl.active.map((m) => m.expiryUnix)).toEqual([
-      2_000_000_000n,
-      2_100_000_000n,
+    expect(aapl.active.map((m) => m.strikePrice)).toEqual([
+      210_000_000n,
+      230_000_000n,
+      240_000_000n,
     ]);
+  });
+
+  it("dedupes same-strike markets, keeping the latest expiry", () => {
+    const groups = groupActiveByTicker(
+      [
+        mkMarket({ ticker: "AAPL", strikePrice: 200_000_000n, expiryUnix: 2_000_000_000n }),
+        mkMarket({ ticker: "AAPL", strikePrice: 200_000_000n, expiryUnix: 2_100_000_000n }),
+      ],
+      NOW,
+    );
+    const aapl = groups.find((g) => g.ticker === "AAPL")!;
+    expect(aapl.active).toHaveLength(1);
+    expect(aapl.active[0].expiryUnix).toBe(2_100_000_000n);
   });
 });
 
