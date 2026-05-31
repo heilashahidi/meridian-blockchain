@@ -1152,12 +1152,16 @@ select:focus,
   align-items: center;
   gap: 9px;
   padding: 5px 12px 5px 5px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 999px;
-  background: var(--surface);
+  background: var(--surface-2);
+  /* A <button> defaults to the UA's (dark) text color; without this the address
+     rendered dark-on-dark and was unreadable. */
+  color: var(--text);
   cursor: pointer;
 }
-.topbar-wallet:hover { border-color: var(--border-strong); }
+.topbar-wallet:hover { border-color: var(--accent); background: var(--surface); }
+.topbar-wallet .muted { color: var(--text-dim); }
 .topbar-avatar {
   display: grid;
   place-items: center;
