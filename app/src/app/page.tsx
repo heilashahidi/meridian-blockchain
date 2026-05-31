@@ -444,7 +444,20 @@ function DashboardInner() {
         try { return [m.pubkey.toBase58(), await fetchBook(program, m.pubkey)] as const; }
         catch { return [m.pubkey.toBase58(), null] as const; }
       }));
-      if (!cancelled) setBooks(Object.fromEntries(entries));
+      if (cancelled) return;
+      // Merge, don't replace: a failed fetch (e.g. an RPC 429 during the
+      // 39-market burst) returns null, and overwriting a previously-good book
+      // with null would flicker that card to a blank implied %. Keep the last
+      // known-good book on failure; only store null for a market we've never
+      // successfully loaded.
+      setBooks((prev) => {
+        const next = { ...prev };
+        for (const [k, v] of entries) {
+          if (v !== null) next[k] = v;
+          else if (!(k in next)) next[k] = null;
+        }
+        return next;
+      });
     };
     void load();
     const id = setInterval(() => void load(), BOOK_POLL_MS);
