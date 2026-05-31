@@ -1,10 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 
 import { WalletButton } from "@/components/WalletButton";
+import { useMeridian } from "@/hooks/MeridianContext";
 
 /** When connected: a clickable avatar chip (initials + short address) that
  *  disconnects on click. When not: the wallet-adapter connect button. */
@@ -125,6 +127,75 @@ function DateChip() {
  * per-market settlement countdown still lives on the Trade screen; this is the
  * global status strip.
  */
+/** Notifications bell: a dropdown of live, derived alerts from on-chain market
+ *  state (settled markets to redeem, active markets + settlement timing). The
+ *  unread dot is tied to a real signal — settled markets the user can redeem. */
+function NotificationsBell() {
+  const { markets } = useMeridian();
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  const now = Math.floor(Date.now() / 1000);
+  const active = markets.filter((m) => !m.settled && Number(m.expiryUnix) > now);
+  const settled = markets.filter((m) => m.settled);
+
+  const notes: { text: string; href?: string }[] = [];
+  if (settled.length > 0)
+    notes.push({ text: `${settled.length} market${settled.length === 1 ? "" : "s"} settled — redeem winning tokens for USDC.`, href: "/portfolio" });
+  if (active.length > 0)
+    notes.push({ text: `${active.length} active market${active.length === 1 ? "" : "s"} today · settle at the 4:00 PM ET close.` });
+  if (markets.length === 0)
+    notes.push({ text: "No markets yet — the morning job creates the day's strikes (~8:00 AM ET)." });
+  const hasDot = settled.length > 0;
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  return (
+    <div className="topbar-bell-wrap" ref={ref}>
+      <button
+        type="button"
+        className="topbar-bell"
+        title="Notifications"
+        aria-label="Notifications"
+        aria-expanded={open}
+        data-active={open ? "true" : undefined}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+          <path d="M13.7 21a2 2 0 0 1-3.4 0" />
+        </svg>
+        {hasDot && <span className="topbar-bell-dot" aria-hidden />}
+      </button>
+      {open && (
+        <div className="topbar-notif" role="menu">
+          <div className="topbar-notif-head">Notifications</div>
+          {notes.length === 0 ? (
+            <div className="topbar-notif-empty">You&apos;re all caught up.</div>
+          ) : (
+            notes.map((n, i) =>
+              n.href ? (
+                <Link key={i} href={n.href} className="topbar-notif-item" onClick={() => setOpen(false)}>
+                  {n.text}
+                </Link>
+              ) : (
+                <div key={i} className="topbar-notif-item">{n.text}</div>
+              ),
+            )
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function TopBar() {
   const router = useRouter();
   const [q, setQ] = useState("");
@@ -154,13 +225,7 @@ export function TopBar() {
       <div className="topbar-right">
         <MarketClock />
         <DateChip />
-        <button type="button" className="topbar-bell" title="Notifications" aria-label="Notifications">
-          <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
-            <path d="M13.7 21a2 2 0 0 1-3.4 0" />
-          </svg>
-          <span className="topbar-bell-dot" aria-hidden />
-        </button>
+        <NotificationsBell />
         <WalletChip />
       </div>
     </header>
