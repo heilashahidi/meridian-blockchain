@@ -10,8 +10,14 @@ import {
 import { meridianIdl } from "./idlPatch";
 import type { Meridian } from "./idl/meridian";
 
+// Default to public devnet, NOT localhost: a deployed build with no
+// NEXT_PUBLIC_RPC_URL baked in must still reach a real cluster (localhost is
+// unreachable + CORS-blocked from a hosted origin). Local dev always sets this
+// var to the local validator via local-dev.sh, so this default only applies to
+// deploys. Set NEXT_PUBLIC_RPC_URL to a dedicated RPC (e.g. Helius) at build
+// time for better rate limits.
 export const RPC_URL =
-  process.env.NEXT_PUBLIC_RPC_URL ?? "http://127.0.0.1:8899";
+  process.env.NEXT_PUBLIC_RPC_URL ?? "https://api.devnet.solana.com";
 
 export const PROGRAM_ID = new PublicKey(
   process.env.NEXT_PUBLIC_PROGRAM_ID ??
