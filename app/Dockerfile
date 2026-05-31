@@ -7,7 +7,12 @@
 FROM node:24-alpine AS deps
 WORKDIR /app
 COPY package.json package-lock.json* ./
-RUN npm ci
+# --ignore-scripts: skip native postinstall builds (e.g. `usb`, a Ledger
+# hardware-wallet transport pulled in transitively). node-gyp needs Python +
+# build tools that aren't in the alpine image, and the web build/SSR server
+# never use those native modules (browser-only wallet feature). Packages with
+# native accelerators fall back to pure JS.
+RUN npm ci --ignore-scripts
 
 # ── build ───────────────────────────────────────────────────────────────────
 FROM node:24-alpine AS build
