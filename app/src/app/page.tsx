@@ -24,6 +24,7 @@ import { StockTile, passesFilter, type MoneynessFilter } from "@/components/Stoc
 import { DEMO_WALLET } from "@/lib/demoWallet";
 
 const BOOK_POLL_MS = 6000;
+const ACTIVITY_POLL_MS = 10_000;
 const usd = (n: number) =>
   n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const pct = (yes: number | null) => (yes === null ? "—" : `${Math.round(yes * 100)}%`);
@@ -138,10 +139,16 @@ function ActivityPanel() {
   useEffect(() => {
     if (!eff) { setEntries([]); return; }
     let cancelled = false;
-    fetchHistory(connection, eff)
-      .then((e) => { if (!cancelled) setEntries(e); })
-      .catch(() => {});
-    return () => { cancelled = true; };
+    // Poll so a freshly-placed trade shows in the heatmap within seconds without
+    // a manual reload. fetchHistory is batched (2 RPC calls), so this is cheap.
+    const load = () => {
+      fetchHistory(connection, eff)
+        .then((e) => { if (!cancelled) setEntries(e); })
+        .catch(() => {});
+    };
+    load();
+    const id = setInterval(load, ACTIVITY_POLL_MS);
+    return () => { cancelled = true; clearInterval(id); };
   }, [connection, eff]);
 
   const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
