@@ -20,14 +20,15 @@ WORKDIR /app
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 # NEXT_PUBLIC_* must be set at build time (inlined into the client bundle).
+# The USDC mint is intentionally NOT here: the app reads it from the on-chain
+# Config account (fetchConfig → c.usdcMint), the single source of truth, so a
+# build-time value would only drift from on-chain. Don't re-add it.
 ARG NEXT_PUBLIC_RPC_URL
 ARG NEXT_PUBLIC_PROGRAM_ID
-ARG NEXT_PUBLIC_USDC_MINT
 ARG NEXT_PUBLIC_DEMO_WALLET
 ARG NEXT_PUBLIC_HERMES_URL
 ENV NEXT_PUBLIC_RPC_URL=$NEXT_PUBLIC_RPC_URL \
     NEXT_PUBLIC_PROGRAM_ID=$NEXT_PUBLIC_PROGRAM_ID \
-    NEXT_PUBLIC_USDC_MINT=$NEXT_PUBLIC_USDC_MINT \
     NEXT_PUBLIC_DEMO_WALLET=$NEXT_PUBLIC_DEMO_WALLET \
     NEXT_PUBLIC_HERMES_URL=$NEXT_PUBLIC_HERMES_URL \
     NEXT_TELEMETRY_DISABLED=1

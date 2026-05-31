@@ -69,8 +69,12 @@ values (see the runbook §5).
 |---|---|---|
 | `NEXT_PUBLIC_RPC_URL` | `http://127.0.0.1:8899` | Cluster RPC (local validator; set to `https://api.devnet.solana.com` for devnet) |
 | `NEXT_PUBLIC_PROGRAM_ID` | `6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX` | Meridian program id (same on localnet + devnet) |
-| `NEXT_PUBLIC_USDC_MINT` | _(local mint)_ | USDC mint. Local: the throwaway mint `scripts/local-dev.sh` prints. Devnet: a mint you control (or canonical devnet USDC). |
 | `NEXT_PUBLIC_HERMES_URL` | `https://hermes.pyth.network` | Pyth Hermes endpoint for live prices (moving to an API-key model mid-2026; treat as configurable). |
+| `NEXT_PUBLIC_DEMO_WALLET` | _(unset)_ | Optional read-only account pubkey. When set and no wallet is connected, the dashboard/portfolio/history preview this account's live on-chain data instead of an empty/connect state. |
+
+> The USDC mint is **not** an env var: the app reads it from the on-chain Config
+> account (`fetchConfig` → `c.usdcMint`), the single source of truth. A build-time
+> value would only drift from on-chain, so it was removed.
 
 ### Importing the dev wallet for local testing
 
