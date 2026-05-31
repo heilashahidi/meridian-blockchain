@@ -16,6 +16,7 @@ import {
   type AutomationConfig,
   type Ticker,
 } from "../src/config.js";
+import { settlementExpiryUnix } from "../src/tradingCalendar.js";
 
 // ─── helpers ──────────────────────────────────────────────────────────────
 
@@ -111,17 +112,13 @@ describe("createStrikes: idempotency", () => {
     const existingMicros = new Set(
       ladder.strikesMicro.slice(0, 2).map((m) => m.toString()),
     );
-    // The run uses expiry = now + 24h (rounded to whole seconds). Pre-compute
-    // the set of existing PDAs across a small +/- window to be robust to the
-    // exact second the job samples Date.now().
-    const nowSec = Math.floor(Date.now() / 1000);
+    // The run stamps a deterministic expiry (next 16:00 ET close), so the PDAs
+    // are exact — no Date.now() window needed.
+    const expiry = settlementExpiryUnix();
     const existingPdas = new Set<string>();
-    for (let dt = -2; dt <= 2; dt++) {
-      const expiry = nowSec + 24 * 3600 + dt;
-      for (const m of ladder.strikesMicro) {
-        if (existingMicros.has(m.toString())) {
-          existingPdas.add(marketPda("AAPL", m, expiry).toBase58());
-        }
+    for (const m of ladder.strikesMicro) {
+      if (existingMicros.has(m.toString())) {
+        existingPdas.add(marketPda("AAPL", m, expiry).toBase58());
       }
     }
     deps.accountExists = vi.fn(async (addr: PublicKey) =>

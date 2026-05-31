@@ -73,6 +73,34 @@ export function etPartsOf(date: Date): EtParts {
 }
 
 /**
+ * Unix seconds for the upcoming 16:00 ET — the PRD daily settlement/close.
+ * Today if 16:00 ET is still ahead, otherwise the next calendar day. This is the
+ * expiry create-strikes stamps on the day's markets: it's DETERMINISTIC within
+ * an ET day, so re-running create-strikes in the same window is idempotent (same
+ * expiry → same market PDAs → skipped, never duplicated) rather than minting a
+ * fresh set keyed off `Date.now()`. DST-correct: the UTC offset is measured via
+ * ICU (no manual ±4/±5 math).
+ */
+export function settlementExpiryUnix(now: Date = new Date()): number {
+  // Unix seconds at which the ET wall clock reads y-mo-d 16:00:00.
+  const etWallToUnix = (y: number, mo: number, d: number): number => {
+    const guessMs = Date.UTC(y, mo - 1, d, 16, 0, 0); // pretend ET wall == UTC
+    const p = etPartsOf(new Date(guessMs));
+    const asIfUtcMs = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, 0);
+    const offsetMs = asIfUtcMs - guessMs; // how far ET is ahead of UTC
+    return Math.floor((guessMs - offsetMs) / 1000);
+  };
+  const nowSec = Math.floor(now.getTime() / 1000);
+  const et = etPartsOf(now);
+  let t = etWallToUnix(et.year, et.month, et.day);
+  if (t <= nowSec) {
+    const tom = etPartsOf(new Date(now.getTime() + 86_400_000));
+    t = etWallToUnix(tom.year, tom.month, tom.day);
+  }
+  return t;
+}
+
+/**
  * NYSE holiday closures, by OBSERVED date (when a fixed-date holiday falls on a
  * weekend the market observes the nearest weekday). Hand-maintained; extend this
  * table before operating past `MAX_COVERED_YEAR`. Half-days (e.g. the day after

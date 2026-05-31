@@ -41,6 +41,7 @@ import {
   type Ticker,
 } from "../config.js";
 import { alert, log } from "../log.js";
+import { settlementExpiryUnix } from "../tradingCalendar.js";
 
 // NOTE: `../pyth.js` (and its `@pythnetwork/pyth-solana-receiver` →
 // `@pythnetwork/solana-utils` → `jito-ts` chain) is imported LAZILY inside
@@ -310,8 +311,10 @@ export async function createStrikes(
     sleep: options.sleep ?? defaultSleep,
   };
 
-  const expiryUnix =
-    Math.floor(Date.now() / 1000) + Math.round(cfg.expiryHoursFromNow * 3600);
+  // Markets expire at the PRD's 16:00 ET close. Deterministic within the ET day
+  // so re-runs (cron retries, double-fires) are idempotent — they skip the
+  // already-created markets instead of minting a duplicate set off Date.now().
+  const expiryUnix = settlementExpiryUnix();
 
   const results: TickerResult[] = [];
   for (const ticker of cfg.tickers) {
