@@ -463,9 +463,13 @@ function DashboardInner() {
   // 4 with MAG7 stocks that have no market yet (spot-only).
   const statCards = useMemo(() => {
     const flip = (m: MarketView) => Math.abs((yesMidOf(m) ?? 0.5) - 0.5);
-    // Pick each ticker's single nearest-coin-flip market.
+    // Pick each ticker's single nearest-coin-flip market. Only markets with a
+    // derivable book mid are eligible: an unpriced market (no bid or no ask)
+    // has yesMid === null, and treating null as 0.5 would make it look like a
+    // *perfect* coin-flip and sort it to the very front — surfacing blank cards.
     const bestPerTicker = new Map<string, MarketView>();
     for (const m of active) {
+      if (yesMidOf(m) === null) continue; // skip unpriced — never feature a blank
       const t = tickerOf(m);
       const cur = bestPerTicker.get(t);
       if (!cur || flip(m) < flip(cur)) bestPerTicker.set(t, m);
