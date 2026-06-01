@@ -13,6 +13,7 @@
 import { loadConfig } from "./config.js";
 import { log } from "./log.js";
 import { runCreateStrikesJob } from "./jobs/createStrikes.js";
+import { runSeedLiquidityJob } from "./jobs/seedLiquidity.js";
 import { runSettleJob } from "./jobs/settle.js";
 import {
   DEFAULT_SCHEDULE,
@@ -28,10 +29,14 @@ Usage:
 
 Commands:
   create-strikes    Create the day's MAG7 strike markets (morning job).
+  seed-liquidity    Rest a small bid+ask on each fresh market so the board shows
+                    implied odds (demo companion to create-strikes; idempotent).
   settle            Settle open/expired markets via the Pyth oracle, with
                     admin-override fallback (after-close job).
   schedule          Run as a daemon: fire create-strikes (~08:00 ET) and settle
-                    (~16:05 ET) automatically on US trading days. Ctrl-C to stop.
+                    (~16:05 ET) automatically on US trading days. With
+                    SEED_LIQUIDITY=true, seed-liquidity runs after the morning
+                    job. Ctrl-C to stop.
 
 Options:
   -h, --help        Show this help and exit.
@@ -44,6 +49,8 @@ Environment:
   PYTH_RECEIVER         Pyth receiver program (default rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ)
   ADMIN_KEYPAIR         Path to admin keypair JSON (default ~/.config/solana/id.json)
   TICKERS               Comma-separated subset, e.g. AAPL,NVDA,TSLA (default demo subset)
+  SEED_LIQUIDITY        "true" → after create-strikes, rest a bid+ask on each
+                        fresh market so the board shows odds (default off)
   STRIKE_PERCENTS       Comma-separated % offsets from prev close (default 3,6,9 per PRD)
   STRIKE_ROUNDING       Round each strike to nearest $N (default 10 per PRD)
   EXPIRY_HOURS_FROM_NOW Market expiry horizon in hours (default 24)
@@ -56,7 +63,7 @@ Environment:
   SCHEDULE_TICK_MS      (schedule) Poll interval in ms (default 60000)
 `;
 
-type Command = "create-strikes" | "settle" | "schedule";
+type Command = "create-strikes" | "seed-liquidity" | "settle" | "schedule";
 
 export function printHelp(): void {
   process.stdout.write(USAGE);
@@ -105,6 +112,9 @@ async function runScheduleDaemon(cfg: ReturnType<typeof loadConfig>): Promise<vo
       now: () => new Date(),
       runMorning: async () => {
         await runCreateStrikesJob(cfg, { dryRun: false });
+        // Demo opt-in: rest a bid+ask on each fresh market so the board shows
+        // implied odds immediately (production leaves SEED_LIQUIDITY unset).
+        if (cfg.seedLiquidity) await runSeedLiquidityJob(cfg);
       },
       runSettle: async () => {
         await runSettleJob(cfg);
@@ -139,7 +149,12 @@ export function parseArgs(argv: string[]): {
       help = true;
     } else if (a === "--dry-run") {
       dryRun = true;
-    } else if (a === "create-strikes" || a === "settle" || a === "schedule") {
+    } else if (
+      a === "create-strikes" ||
+      a === "seed-liquidity" ||
+      a === "settle" ||
+      a === "schedule"
+    ) {
       command = a;
     } else if (!a.startsWith("-") && command === null) {
       unknown = a;
@@ -173,6 +188,7 @@ export async function main(argv: string[] = process.argv): Promise<number> {
 
   try {
     if (command === "create-strikes") await runCreateStrikesJob(cfg, { dryRun });
+    else if (command === "seed-liquidity") await runSeedLiquidityJob(cfg);
     else if (command === "settle") await runSettleJob(cfg);
     else if (command === "schedule") await runScheduleDaemon(cfg);
     log.info("job complete", { command });
