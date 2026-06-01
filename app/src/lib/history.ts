@@ -251,19 +251,31 @@ export async function fetchHistory(
   }
 
   const pid = PROGRAM_ID.toBase58();
-  // ONE batched JSON-RPC request for every tx, not N separate getParsedTransaction
-  // calls. On a rate-limited RPC the per-signature fan-out was the dashboard
-  // heatmap's main cost (N calls × retries); getParsedTransactions sends them as
-  // a single batch round-trip.
-  let parsed: Awaited<ReturnType<typeof connection.getParsedTransactions>>;
-  try {
-    parsed = await connection.getParsedTransactions(
-      sigs.map((s) => s.signature),
-      { maxSupportedTransactionVersion: 0 },
-    );
-  } catch {
-    return [];
-  }
+  // Fetch each tx individually but with bounded concurrency. Two RPC limits to
+  // thread: a *batched* getParsedTransactions trips Helius' payload cap (413
+  // Payload Too Large) and empties history, while 30 fully-parallel calls trip
+  // the rate limiter (429 storm + retry backoff). A small concurrency window
+  // (~6) avoids both — ~5 quick waves, no batch, no storm. A failed tx → null.
+  const CONCURRENCY = 6;
+  const sigStrs = sigs.map((s) => s.signature);
+  type ParsedTx = Awaited<ReturnType<typeof connection.getParsedTransaction>>;
+  const parsed: ParsedTx[] = new Array<ParsedTx>(sigStrs.length).fill(null);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < sigStrs.length) {
+      const i = next++;
+      try {
+        parsed[i] = await connection.getParsedTransaction(sigStrs[i], {
+          maxSupportedTransactionVersion: 0,
+        });
+      } catch {
+        parsed[i] = null;
+      }
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(CONCURRENCY, sigStrs.length) }, worker),
+  );
   const txs = sigs.map((s, i) => ({ s, tx: parsed[i] ?? null }));
 
   const entries: HistoryEntry[] = [];
