@@ -104,6 +104,36 @@ shares **10** → **Buy Yes** → approve in Phantom.
 
 ---
 
+## Worked example trades (ready to run)
+
+A concrete 7-approval sequence on the live board, hitting all four paths and
+leaving a rich Portfolio + History. Each row is a different market (so the
+position guard never blocks you). **Shares = 10**, **0.95 to buy / 0.05 to
+sell**. Odds below are a recent snapshot — glance at the live % on each card
+when you record (it moves while the stock market is open); the strikes are
+fixed.
+
+| # | Market (recent odds / spot) | Action | What you'll say | Fills around |
+|---|---|---|---|---|
+| 1 | **AAPL above $300** (57%, Apple $306) | **Buy Yes** | "Apple's at $306, just above the $300 strike — a near coin-flip into the close. I'll take Yes." | ~$0.57 → pay ~$5.70, win $10 |
+| 2 | **GOOGL above $360** (64%, Alphabet $376) | **Buy Yes** | "Alphabet's comfortably above $360 — I'm confident it holds. Yes." | ~$0.64 |
+| 3 | **MSFT above $500** (No ~78%, MSFT $460) | **Buy No** | "Microsoft's at $460 — no way it jumps to $500 by 4 PM. I'll buy No." | ~$0.78 No |
+| 4 | **NVDA above $220** (56%, NVIDIA $224) | **Buy Yes → Sell Yes** | "NVIDIA's right at its strike — I'll take Yes… then lock it in and sell it back." | round-trip |
+| 5 | **TSLA above $450** (No ~77%, Tesla $416) | **Buy No → Sell No** | "Tesla won't reach $450 today — buy No… and close it out." | round-trip |
+
+**Leaves:** 3 open positions (AAPL Yes, GOOGL Yes, MSFT No) for live Portfolio
+P&L, plus 2 realized round-trips for a varied History log.
+
+**What each path shows:**
+- **Buy Yes (AAPL/GOOGL):** defined risk — the payoff panel shows max win and
+  max loss *before* you commit.
+- **Buy No (MSFT):** the other side of the book — one atomic tx mints a pair and
+  sells the Yes leg; to the user it's one click.
+- **Sell Yes / Sell No (NVDA/TSLA):** closing a position by crossing a resting
+  order on a real on-chain book — not a pool.
+
+---
+
 ## Show the receipts (the on-chain proof)
 
 - **Activity heatmap (Dashboard):** "There are my four trades showing up live —
