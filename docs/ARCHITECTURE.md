@@ -837,6 +837,7 @@ Automation (automation/src/)
   client.ts               Anchor client + the in-memory Book IDL patch + PDA helpers
   pyth.ts                 shared Hermes fetch + receiver post (also mirrored by the script)
   jobs/createStrikes.ts   morning job (idempotent, retry/backoff, per-ticker isolation)
+  jobs/seedLiquidity.ts   demo opt-in (SEED_LIQUIDITY): rest a bid+ask per fresh market
   jobs/settle.ts          after-close job (oracle retry → admin-override fallback)
 
 Frontend (app/src/)

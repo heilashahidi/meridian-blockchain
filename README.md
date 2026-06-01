@@ -1,5 +1,7 @@
 # Meridian
 
+**Live demo: https://meridian-blockchain.up.railway.app** (Solana devnet)
+
 A non-custodial **MAG7 binary-options dApp on Solana devnet**. Trade daily
 "will [STOCK] close above [STRIKE]?" contracts: one Yes + one No token always
 cost exactly $1 (the mint-pair invariant), so a Yes token pays $1 if the stock
