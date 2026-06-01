@@ -137,6 +137,10 @@ export interface AutomationConfig {
   strikeRoundingDollars: number;
   /** Hours-from-now the create-strikes job sets as market expiry. */
   expiryHoursFromNow: number;
+  /** Demo opt-in (SEED_LIQUIDITY=true): after create-strikes, rest a small
+   *  bid+ask on each fresh market so the board shows implied odds immediately.
+   *  Off by default — production stays PRD-pure (traders make the market). */
+  seedLiquidity: boolean;
 }
 
 const DEFAULT_RECEIVER = "rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ";
@@ -196,6 +200,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AutomationConf
     expiryHoursFromNow: env.EXPIRY_HOURS_FROM_NOW
       ? Number(env.EXPIRY_HOURS_FROM_NOW)
       : 24,
+    seedLiquidity: env.SEED_LIQUIDITY === "true",
   };
 }
 
