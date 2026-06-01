@@ -274,7 +274,9 @@ async function main() {
   // within an ET trading window, so re-running the seed reuses the SAME market
   // PDA (create skips) instead of duplicating markets. Computed via the ET tz
   // offset so it's correct under both EST and EDT.
-  const expiryUnix = next4pmEtUnix();
+  // Default to the next 4PM ET close; --expiry <unix> overrides it for a
+  // longer-dated demo board (so it doesn't expire at the daily close).
+  const expiryUnix = args.expiry ? Number(args.expiry) : next4pmEtUnix();
   for (const job of jobs) {
     try {
       await seedOne(cfg, usdcMint, userUsdc, job, expiryUnix);
