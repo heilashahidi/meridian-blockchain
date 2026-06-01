@@ -8,12 +8,19 @@ built-in scheduler that fires them automatically on US trading days:
   (±3/6/9% from the previous close, rounded to the nearest $10, deduplicated),
   and `create_strike_market` for each. Idempotent (skips existing markets), with
   per-strike retry/backoff and per-ticker failure isolation.
+- **`seed-liquidity`** (demo companion, opt-in) — rest a small non-crossing
+  bid+ask on each fresh market for the day so the board shows implied odds
+  immediately, instead of waiting for real traders. Idempotent (skips any market
+  that already has a two-sided book). **Off by default**; production stays
+  PRD-pure. Enable with `SEED_LIQUIDITY=true`, in which case the scheduler runs
+  it right after `create-strikes` each morning.
 - **`settle`** (after close, ~16:05 ET) — settle every open/expired market via
   the Pyth pull oracle, with retry (every 30s for up to 15 min) and an
   admin-override fallback.
 - **`schedule`** (daemon) — a dependency-free poll loop that fires
-  `create-strikes` at ~08:00 ET and `settle` at ~16:05 ET, **only on US trading
-  days** (weekends and NYSE holidays are skipped via `src/tradingCalendar.ts`).
+  `create-strikes` (+ `seed-liquidity` when `SEED_LIQUIDITY=true`) at ~08:00 ET
+  and `settle` at ~16:05 ET, **only on US trading days** (weekends and NYSE
+  holidays are skipped via `src/tradingCalendar.ts`).
   ET wall times are DST-correct (ICU, not manual offset math); each job fires at
   most once per day; a job failure is logged + escalated but never crashes the
   daemon. Ctrl-C (SIGINT/SIGTERM) stops it after the current tick.
@@ -35,9 +42,11 @@ src/
   jobs/
     createStrikes.ts  morning create-strikes job: plan → diff → create,
                       idempotent + retry/backoff + per-ticker isolation
+    seedLiquidity.ts  demo job: rest a bid+ask on each fresh market (idempotent;
+                      gated by SEED_LIQUIDITY)
     settle.ts         after-close settle job: Pyth settle + retry + admin override
-  index.ts         CLI entry: `create-strikes [--dry-run]` | `settle` |
-                   `schedule` | --help
+  index.ts         CLI entry: `create-strikes [--dry-run]` | `seed-liquidity` |
+                   `settle` | `schedule` | --help
   liveTestEnv.ts   guards for the guarded live integration test
   idl/             vendored copy of the Meridian IDL (json + types)
 test/              vitest suites (config, client, cli, scheduler, settle,
@@ -73,6 +82,7 @@ All env-driven with sane defaults (devnet + the canonical Pyth receiver):
 | `PYTH_RECEIVER` | `rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ` | Pyth receiver program (matches on-chain `Config.pyth_receiver`) |
 | `ADMIN_KEYPAIR` | `~/.config/solana/id.json` | Admin keypair (must equal on-chain `Config.admin`) |
 | `TICKERS` | `AAPL,NVDA,TSLA` (demo subset) | Comma-separated subset of the MAG7 |
+| `SEED_LIQUIDITY` | `false` | `true` → run `seed-liquidity` after `create-strikes` so the board shows odds (demo) |
 | `STRIKE_PERCENTS` | `3,6,9` | Comma-separated % offsets from prev close (PRD ±3/6/9%) |
 | `STRIKE_ROUNDING` | `10` | Round each strike to the nearest $N (PRD nearest $10) |
 | `EXPIRY_HOURS_FROM_NOW` | `24` | Market expiry horizon |

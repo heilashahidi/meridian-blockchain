@@ -5,6 +5,13 @@ clicks and what to say at each step. Settlement is at the **4:00 PM ET** close;
 one **Yes** + one **No** always costs **$1**, so the price of Yes is the
 market's implied probability.
 
+> **The board is real and self-maintaining.** Each trading morning the on-chain
+> automation worker creates that day's strike markets from live MAG7 prices and
+> seeds them with liquidity (create-strikes + seed-liquidity at ~08:00 ET), then
+> settles them against the Pyth oracle at the 4:00 PM ET close. So the markets
+> you see were generated automatically today — strikes shift day to day with the
+> stocks, so pick by the on-screen filters rather than memorizing strikes.
+
 ---
 
 ## Before you start (off-camera)
@@ -14,12 +21,16 @@ market's implied probability.
 2. Open the app → **Select Wallet → Phantom** → approve. The **Buying power**
    pill should show your test USDC balance.
 3. Pick **two** markets up front so the four paths flow without fighting the
-   position guard (you can't hold Yes *and* No on the same market at once):
-   - **Market A** for the Yes round-trip — e.g. **NVDA above $210** (~coin-flip)
-   - **Market B** for the No round-trip — e.g. **AAPL above $300**
+   position guard (you can't hold Yes *and* No on the same market at once). Use
+   the filter chips above the board:
+   - **Market A** for the Yes round-trip — click **"Near strike"** and pick a
+     market near **50%** implied (a clean coin-flip).
+   - **Market B** for the No round-trip — a different ticker, any liquid strike
+     (e.g. one showing **"In the money"** so No is the interesting side).
 4. Every trade: **shares = 10**, **price 0.95 to buy / 0.05 to sell**.
 
-> The deepest books are AAPL, MSFT, GOOGL — prefer those if a market feels thin.
+> Strikes change daily (the board regenerates each morning). The deepest books
+> are AAPL, MSFT, GOOGL — prefer those if a market feels thin.
 
 ---
 
@@ -50,15 +61,15 @@ Say once, up front, about the prices you'll type:
 
 ## The four trades
 
-### 1 — Buy Yes  ·  *Market A (e.g. NVDA above $210)*
+### 1 — Buy Yes  ·  *Market A (your near-coin-flip pick)*
 
 **Do:** open the market card → Trade panel → **Buy Yes** → price **0.95**,
 shares **10** → **Buy Yes** → approve in Phantom.
 
 **Say:**
-> "I think NVDA closes above $210 today, so I buy Yes. The panel shows my payoff
-> before I commit — max gain and max loss are both known upfront, that's the
-> defined-risk part. One signature… and it's on-chain."
+> "I think this stock closes above the strike today, so I buy Yes. The panel
+> shows my payoff before I commit — max gain and max loss are both known upfront,
+> that's the defined-risk part. One signature… and it's on-chain."
 
 ### 2 — Sell Yes  ·  *same market (close the position)*
 
@@ -69,15 +80,15 @@ shares **10** → **Buy Yes** → approve in Phantom.
 > order book on-chain, so I'm crossing a resting bid, not a pool. Position
 > closed."
 
-### 3 — Buy No  ·  *Market B (e.g. AAPL above $300)*
+### 3 — Buy No  ·  *Market B (your second market)*
 
 **Do:** open the second market → **Buy No** → price **0.95**, shares **10** →
 **Buy No** → approve.
 
 **Say:**
-> "Same engine, other side. I think AAPL *won't* close above $300, so I buy No.
-> Under the hood this mints a Yes/No pair and sells the Yes leg in one atomic
-> transaction — but to me it's one click, one approval."
+> "Same engine, other side. I think this one *won't* close above its strike, so
+> I buy No. Under the hood this mints a Yes/No pair and sells the Yes leg in one
+> atomic transaction — but to me it's one click, one approval."
 
 ### 4 — Sell No  ·  *same market (close)*
 

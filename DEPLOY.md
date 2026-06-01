@@ -87,6 +87,7 @@ No public domain needed (it's a worker). It runs `node dist/index.js schedule`
 | `PYTH_RECEIVER` | `rec5EKMGg6MxZYaMdyBfgwp4d5rB9T1VQH5pJv5LtFJ` |
 | `HERMES_URL` | *(optional)* defaults to `https://hermes.pyth.network` |
 | `TICKERS` | *(optional)* e.g. `AAPL,MSFT,GOOGL,AMZN,NVDA,META,TSLA` (default: `AAPL,NVDA,TSLA`) |
+| `SEED_LIQUIDITY` | *(optional)* `true` → rest a bid+ask on each fresh market each morning so the board shows odds (demo; default off) |
 | `STRIKE_PERCENTS` | *(optional)* default `3,6,9` |
 | `ADMIN_KEYPAIR_JSON` | **secret** — the admin keypair as a JSON byte array (see below) |
 
