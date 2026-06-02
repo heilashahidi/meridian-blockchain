@@ -141,10 +141,15 @@ export function TradePanel() {
       const label = ACTIONS.find((x) => x.key === action)!.label;
       return `${label} ${qtyN} @ $${price} submitted`;
     });
-    // Clear the shares field on success so the form visibly resets — a populated
-    // box + active button after submit read as "nothing happened". Price stays
-    // (it's a market-level value users often reuse for the next order).
-    if (ok) setQty("");
+    // Clear both inputs on success so the whole form visibly resets — a
+    // populated box + active button after submit read as "nothing happened".
+    // Clearing only shares left the just-submitted price behind, which still
+    // read as half-done; reset both for an unambiguous "order placed, start
+    // fresh".
+    if (ok) {
+      setQty("");
+      setPrice("");
+    }
   }
 
   const side: "yes" | "no" = isNoAction(action) ? "no" : "yes";
