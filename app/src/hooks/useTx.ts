@@ -9,8 +9,10 @@ export interface TxRunner {
   busy: boolean;
   error: string | null;
   status: string | null;
-  /** Run a tx-producing fn; on success show its message + refresh context. */
-  run: (fn: () => Promise<string>) => Promise<void>;
+  /** Run a tx-producing fn; on success show its message + refresh context.
+   *  Resolves `true` when the tx succeeded, `false` if it threw — lets callers
+   *  reset their form only on success. */
+  run: (fn: () => Promise<string>) => Promise<boolean>;
 }
 
 /** Shared submit/status plumbing for the trade panels. */
@@ -29,8 +31,10 @@ export function useTx(): TxRunner {
         const msg = await fn();
         setStatus(msg);
         await refresh();
+        return true;
       } catch (e) {
         setError(formatError(e));
+        return false;
       } finally {
         setBusy(false);
       }
