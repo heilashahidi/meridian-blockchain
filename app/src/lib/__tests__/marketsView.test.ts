@@ -153,7 +153,7 @@ describe("groupActiveByTicker", () => {
     ]);
   });
 
-  it("dedupes same-strike markets, keeping the latest expiry", () => {
+  it("dedupes same-strike markets, keeping the nearest (earliest) future expiry", () => {
     const groups = groupActiveByTicker(
       [
         mkMarket({ ticker: "AAPL", strikePrice: 200_000_000n, expiryUnix: 2_000_000_000n }),
@@ -163,7 +163,7 @@ describe("groupActiveByTicker", () => {
     );
     const aapl = groups.find((g) => g.ticker === "AAPL")!;
     expect(aapl.active).toHaveLength(1);
-    expect(aapl.active[0].expiryUnix).toBe(2_100_000_000n);
+    expect(aapl.active[0].expiryUnix).toBe(2_000_000_000n);
   });
 });
 
