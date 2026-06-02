@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useWallet } from "@solana/wallet-adapter-react";
 
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { WalletButton } from "@/components/WalletButton";
 import { useMeridian } from "@/hooks/MeridianContext";
 
@@ -225,6 +226,7 @@ export function TopBar() {
       <div className="topbar-right">
         <MarketClock />
         <DateChip />
+        <ThemeToggle />
         <NotificationsBell />
         <WalletChip />
       </div>
