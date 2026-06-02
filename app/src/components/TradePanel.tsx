@@ -99,7 +99,7 @@ export function TradePanel() {
       // paths are inherently market (atomic) on-chain.
       orderType: "limit",
     });
-    await run(async () => {
+    const ok = await run(async () => {
       const common = {
         program,
         connection,
@@ -141,6 +141,10 @@ export function TradePanel() {
       const label = ACTIONS.find((x) => x.key === action)!.label;
       return `${label} ${qtyN} @ $${price} submitted`;
     });
+    // Clear the shares field on success so the form visibly resets — a populated
+    // box + active button after submit read as "nothing happened". Price stays
+    // (it's a market-level value users often reuse for the next order).
+    if (ok) setQty("");
   }
 
   const side: "yes" | "no" = isNoAction(action) ? "no" : "yes";
