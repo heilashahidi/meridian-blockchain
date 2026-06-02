@@ -40,7 +40,23 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en" className={`${spaceGrotesk.variable} ${inter.variable} ${spaceMono.variable}`}>
+    <html
+      lang="en"
+      // The boot script sets data-theme before hydration; without this React
+      // warns the attribute wasn't in the server HTML.
+      suppressHydrationWarning
+      className={`${spaceGrotesk.variable} ${inter.variable} ${spaceMono.variable}`}
+    >
+      <head>
+        {/* Apply the saved (or system) theme before first paint so there's no
+            dark→light flash on reload. Runs before React hydrates; ThemeToggle
+            reads back whatever this sets. */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('theme');if(!t){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){}})();`,
+          }}
+        />
+      </head>
       <body>
         <Providers>
           <div className="app-shell">

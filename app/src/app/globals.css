@@ -3,6 +3,8 @@
    Coinbase/Phantom polish). */
 
 :root {
+  color-scheme: dark;
+
   /* Surfaces — refined deep slate, not pure black */
   --bg: #0a0c11;
   --bg-grad: radial-gradient(1100px 620px at 76% -12%, #15192c 0%, #0a0c11 56%);
@@ -11,6 +13,13 @@
   --surface-3: #232838;
   --border: #262c3a;
   --border-strong: #343b4e;
+
+  /* Themeable raw surfaces (were hardcoded inline; promoted so light mode can
+     override them). */
+  --panel-grad-end: #14171f;
+  --input-bg: #0e131c;
+  --sidebar-grad: linear-gradient(180deg, #0c0f16, #0a0c11);
+  --topbar-bg: rgba(12, 15, 22, 0.72);
 
   /* Text */
   --text: #eef1f6;
@@ -47,6 +56,44 @@
   --sidebar-w: 248px;
   --pad: 22px;
   --gap: 20px;
+}
+
+/* ── Light theme ──────────────────────────────────────────────
+   Same design system, inverted surfaces. Only the color tokens flip —
+   geometry, fonts, and radii are shared. Outcome/brand colors are darkened
+   just enough to keep AA contrast on white surfaces. */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f5f7fb;
+  --bg-grad: radial-gradient(1100px 620px at 76% -12%, #eef0fb 0%, #f5f7fb 56%);
+  --surface: #ffffff;
+  --surface-2: #f3f5fa;
+  --surface-3: #e9edf5;
+  --border: #e3e7f0;
+  --border-strong: #cdd4e2;
+
+  --panel-grad-end: #fbfcfe;
+  --input-bg: #ffffff;
+  --sidebar-grad: linear-gradient(180deg, #ffffff, #f5f7fb);
+  --topbar-bg: rgba(255, 255, 255, 0.78);
+
+  --text: #11151f;
+  --text-dim: #4b5468;
+  --muted: #79829a;
+
+  --accent: #5b58f0;
+  --accent-2: #6f5ef0;
+  --accent-dim: rgba(91, 88, 240, 0.12);
+
+  --yes: #0f9d58;
+  --yes-dim: rgba(15, 157, 88, 0.13);
+  --no: #e0415e;
+  --no-dim: rgba(224, 65, 94, 0.12);
+  --warn: #b4730a;
+
+  --shadow: 0 1px 2px rgba(16, 24, 40, 0.06), 0 12px 30px -14px rgba(16, 24, 40, 0.2);
+  --ring: 0 0 0 3px rgba(91, 88, 240, 0.28);
 }
 
 * {
@@ -90,7 +137,7 @@ h3 {
 
 /* ── Surfaces ─────────────────────────────────────────────── */
 .panel {
-  background: linear-gradient(180deg, var(--surface), var(--surface) 60%, #14171f);
+  background: linear-gradient(180deg, var(--surface), var(--surface) 60%, var(--panel-grad-end));
   border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 18px;
@@ -181,7 +228,7 @@ h3 {
 input,
 select,
 .input {
-  background: #0e131c;
+  background: var(--input-bg);
   border: 1px solid var(--border);
   color: var(--text);
   border-radius: var(--radius-sm);
@@ -335,7 +382,7 @@ select:focus,
   gap: 6px;
   padding: var(--pad) 14px;
   border-right: 1px solid var(--border);
-  background: linear-gradient(180deg, #0c0f16, #0a0c11);
+  background: var(--sidebar-grad);
 }
 .sidebar-brand {
   display: flex;
@@ -418,7 +465,7 @@ select:focus,
   gap: 16px;
   padding: 13px var(--pad);
   border-bottom: 1px solid var(--border);
-  background: rgba(12, 15, 22, 0.72);
+  background: var(--topbar-bg);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
 }
