@@ -271,6 +271,17 @@ async function main() {
     console.log("  ✓ Config already initialized — skipping");
   } else {
     console.log("  → Submitting initialize_config…");
+    // C1: initialize_config is bound to the program's upgrade authority, so the
+    // deployer (this keypair — which must BE the upgrade authority) passes the
+    // program + its ProgramData account (the canonical PDA under the BPF
+    // Upgradeable Loader).
+    const BPF_LOADER_UPGRADEABLE = new PublicKey(
+      "BPFLoaderUpgradeab1e11111111111111111111111",
+    );
+    const programData = PublicKey.findProgramAddressSync(
+      [PROGRAM_ID.toBuffer()],
+      BPF_LOADER_UPGRADEABLE,
+    )[0];
     const sig = await program.methods
       .initializeConfig(FEE_AUTHORITY, PYTH_RECEIVER)
       .accounts({
@@ -278,6 +289,8 @@ async function main() {
         config: configAddr,
         usdcMint: USDC_MINT,
         systemProgram: SystemProgram.programId,
+        program: PROGRAM_ID,
+        programData,
       })
       .rpc();
     kv("Signature", sig);
