@@ -162,6 +162,16 @@ pub fn create_strike_market_handler(
     // markets during a global pause is almost certainly a misconfig.
     require!(!ctx.accounts.config.paused, MeridianError::ProgramPaused);
 
+    // A market must expire in the future. Without this a (compromised or
+    // fat-fingered) admin could mint an already-expired market that is
+    // immediately settleable and never tradeable — `place_order_inner` gates
+    // trading on `now < expiry`, so a past expiry yields a dead-on-arrival
+    // book. Defensive: market creation is admin-only, but cheap to enforce.
+    require!(
+        args.expiry_unix > Clock::get()?.unix_timestamp,
+        MeridianError::MarketExpired
+    );
+
     let market = &mut ctx.accounts.market;
     market.bump = ctx.bumps.market;
     market.mint_authority_bump = ctx.bumps.mint_authority;

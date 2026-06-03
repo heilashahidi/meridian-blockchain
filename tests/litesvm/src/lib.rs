@@ -311,12 +311,56 @@ fn read_meridian_so() -> Vec<u8> {
     // `target/deploy/meridian.so` at the workspace root.
     let mut path = workspace_root();
     path.push("target/deploy/meridian.so");
-    std::fs::read(&path).unwrap_or_else(|e| {
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
         panic!(
             "failed to read {} ({e}). Run `anchor build` before `cargo test -p meridian-litesvm-tests`.",
             path.display()
         )
-    })
+    });
+    assert_so_fresh(&path);
+    bytes
+}
+
+/// Fail LOUDLY if `meridian.so` predates the program source. The harness loads a
+/// PREBUILT binary, so without this guard a program edit not followed by
+/// `anchor build` is silently tested against the OLD `.so` — a false pass.
+/// (This guard exists because exactly that happened.)
+fn assert_so_fresh(so_path: &std::path::Path) {
+    if std::env::var_os("MERIDIAN_SKIP_SO_FRESHNESS").is_some() {
+        return; // escape hatch for environments that build out-of-tree
+    }
+    let so_mtime = std::fs::metadata(so_path)
+        .and_then(|m| m.modified())
+        .expect("stat meridian.so");
+    let src = workspace_root().join("programs/meridian/src");
+    if let Some(newest) = newest_rs_mtime(&src) {
+        assert!(
+            so_mtime >= newest,
+            "STALE BINARY: target/deploy/meridian.so is older than the program source.\n\
+             Run `anchor build` before `cargo test -p meridian-litesvm-tests` — otherwise the \
+             suite runs against an outdated program and may FALSELY pass.\n\
+             (Set MERIDIAN_SKIP_SO_FRESHNESS=1 to bypass if you build out-of-tree.)"
+        );
+    }
+}
+
+/// Newest modified-time among all `.rs` files under `dir`, recursively.
+fn newest_rs_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
+    let mut newest: Option<std::time::SystemTime> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = entry.path();
+        let t = if p.is_dir() {
+            newest_rs_mtime(&p)
+        } else if p.extension().is_some_and(|e| e == "rs") {
+            entry.metadata().and_then(|m| m.modified()).ok()
+        } else {
+            None
+        };
+        if let Some(t) = t {
+            newest = Some(newest.map_or(t, |n| n.max(t)));
+        }
+    }
+    newest
 }
 
 fn workspace_root() -> PathBuf {
