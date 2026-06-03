@@ -1033,6 +1033,23 @@ impl FuzzTest {
                 AccountMeta::new(config, false),                       // config
                 AccountMeta::new_readonly(self.usdc_mint, false),      // usdc_mint
                 AccountMeta::new_readonly(solana_sdk::system_program::ID, false),
+                // C1: initialize_config is now bound to the program's upgrade
+                // authority via these two accounts. The authoritative validation
+                // of this constraint lives in the LiteSVM suite
+                // (`u3_smoke::init_rejects_non_upgrade_authority`), where the
+                // harness sets the ProgramData upgrade authority to `admin`.
+                // TODO(C1): for this fuzzer's bootstrap init to pass, the trident
+                // harness must likewise set the ProgramData `upgrade_authority`
+                // to `admin_pk` (needs trident-svm ProgramData support).
+                AccountMeta::new_readonly(meridian_program_id(), false), // program
+                AccountMeta::new_readonly(
+                    Pubkey::find_program_address(
+                        &[meridian_program_id().as_ref()],
+                        &solana_sdk::bpf_loader_upgradeable::ID,
+                    )
+                    .0,
+                    false,
+                ), // program_data
             ],
             data,
         }
