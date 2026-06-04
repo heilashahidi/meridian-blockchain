@@ -14,7 +14,7 @@ import { noFromYes, yesAskFraction } from "@/lib/marketsView";
 import {
   MINT_PAIR_LEG_BASIS,
   computePnl,
-  contractsFromBaseUnits,
+  sharesFromBaseUnits,
   currentContractPrice,
   fmtDollars,
   fmtSignedDollars,
@@ -202,7 +202,7 @@ export default function PortfolioPage() {
     let value = 0;
     let pnl = 0;
     for (const e of enriched) {
-      const qty = contractsFromBaseUnits(e.holding.amount);
+      const qty = sharesFromBaseUnits(e.holding.amount);
       const current = currentContractPrice(
         e.holding.side,
         e.holding.market,

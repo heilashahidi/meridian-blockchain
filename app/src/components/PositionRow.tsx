@@ -5,7 +5,7 @@ import { strikeDollars } from "@/lib/marketsView";
 import {
   canRedeem,
   computePnl,
-  contractsFromBaseUnits,
+  sharesFromBaseUnits,
   currentContractPrice,
   fmtDollars,
   fmtPct,
@@ -43,7 +43,7 @@ export function PositionRow({
   redeemDisabled?: boolean;
 }) {
   const { market, side, amount } = holding;
-  const qty = contractsFromBaseUnits(amount);
+  const qty = sharesFromBaseUnits(amount);
   const ticker = tickerToString(market.ticker);
   const current = currentContractPrice(side, market, livePrice);
   const pnl = current === null ? null : computePnl(qty, entryPrice, current);
