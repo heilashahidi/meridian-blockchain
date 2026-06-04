@@ -176,6 +176,8 @@ impl Env {
                 AccountMeta::new(config_pda, false),
                 AccountMeta::new_readonly(fx.usdc_mint.pubkey(), false),
                 AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+                AccountMeta::new_readonly(MERIDIAN_PROGRAM_ID, false), // program (C1)
+                AccountMeta::new_readonly(meridian_litesvm_tests::meridian_program_data(), false), // program_data (C1)
             ],
         );
         fx.submit_admin_ix(init_ix);

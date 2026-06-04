@@ -114,7 +114,7 @@ export function TradePanel() {
       qty: BigInt(qtyN),
       orderType,
     });
-    await run(async () => {
+    const ok = await run(async () => {
       const common = {
         program,
         connection,
@@ -161,6 +161,15 @@ export function TradePanel() {
       const label = ACTIONS.find((x) => x.key === action)!.label;
       return `${label} ${qtyN} @ $${price} submitted`;
     });
+    // Clear both inputs on success so the whole form visibly resets — a
+    // populated box + active button after submit read as "nothing happened".
+    // Clearing only shares left the just-submitted price behind, which still
+    // read as half-done; reset both for an unambiguous "order placed, start
+    // fresh".
+    if (ok) {
+      setQty("");
+      setPrice("");
+    }
   }
 
   const side: "yes" | "no" = isNoAction(action) ? "no" : "yes";

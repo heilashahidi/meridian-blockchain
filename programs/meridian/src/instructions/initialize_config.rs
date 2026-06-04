@@ -11,6 +11,7 @@
 
 use anchor_lang::prelude::*;
 
+use crate::error::MeridianError;
 use crate::state::Config;
 
 #[derive(Accounts)]
@@ -39,6 +40,24 @@ pub struct InitializeConfig<'info> {
     pub usdc_mint: Account<'info, anchor_spl::token::Mint>,
 
     pub system_program: Program<'info, System>,
+
+    /// This program's account — its data field points at `program_data`.
+    /// Binds bootstrap to the deployer: the constraint ties `program` to its
+    /// canonical programdata account, closing the "first caller wins" front-run
+    /// (C1). Placed after `system_program` so existing call sites only append.
+    #[account(
+        constraint = program.programdata_address()? == Some(program_data.key())
+            @ MeridianError::Unauthorized,
+    )]
+    pub program: Program<'info, crate::program::Meridian>,
+
+    /// The program's ProgramData account. Only the recorded upgrade authority
+    /// (i.e. the deployer) may invoke `initialize_config`.
+    #[account(
+        constraint = program_data.upgrade_authority_address == Some(payer.key())
+            @ MeridianError::Unauthorized,
+    )]
+    pub program_data: Account<'info, ProgramData>,
 }
 
 pub fn initialize_config_handler(

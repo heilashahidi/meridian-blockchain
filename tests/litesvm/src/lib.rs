@@ -52,6 +52,33 @@ pub const ASSOCIATED_TOKEN_PROGRAM_ID: Address = solana_address::address!(
     "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
 );
 
+/// BPF Upgradeable Loader — owns the program + programdata accounts. Used to
+/// derive the ProgramData PDA that `initialize_config` now binds to (C1).
+pub const BPF_LOADER_UPGRADEABLE_ID: Address = solana_address::address!(
+    "BPFLoaderUpgradeab1e11111111111111111111111"
+);
+
+/// Canonical ProgramData address for the Meridian program.
+pub fn meridian_program_data() -> Address {
+    Address::find_program_address(&[MERIDIAN_PROGRAM_ID.as_ref()], &BPF_LOADER_UPGRADEABLE_ID).0
+}
+
+/// `LiteSVM::add_program` deploys upgradeable with `upgrade_authority = None`.
+/// C1 binds `initialize_config` to that authority, so point it at `authority`.
+/// The ProgramData metadata is a fixed 45-byte header: bincode enum tag
+/// `[0..4]`, slot `[4..12]`, then `Option<Pubkey>` — the variant tag byte sits
+/// at offset 12 and the pubkey at `[13..45]`, ahead of the ELF. Patching those
+/// bytes flips `None → Some(authority)` without disturbing the program bytes.
+fn set_program_upgrade_authority(svm: &mut LiteSVM, authority: &Address) {
+    let pd = meridian_program_data();
+    let mut acct = svm
+        .get_account(&pd)
+        .expect("programdata account exists after add_program");
+    acct.data[12] = 1; // Option::Some
+    acct.data[13..45].copy_from_slice(authority.as_ref());
+    svm.set_account(pd, acct).expect("set programdata upgrade authority");
+}
+
 /// Derive the canonical associated token account address for `(owner, mint)`
 /// under the classic SPL Token program — the exact derivation the on-chain
 /// `get_associated_token_address` performs. The post-U5 ABI requires maker
@@ -180,6 +207,10 @@ impl Fixture {
         svm.airdrop(&admin.pubkey(), 10_000_000_000)
             .expect("airdrop admin");
 
+        // C1: make the admin the program's upgrade authority so the
+        // upgrade-authority-bound `initialize_config` accepts the bootstrap.
+        set_program_upgrade_authority(&mut svm, &admin.pubkey());
+
         let usdc_mint = Keypair::new();
         create_usdc_mint(&mut svm, &admin, &usdc_mint);
 
@@ -188,6 +219,15 @@ impl Fixture {
             admin,
             usdc_mint,
         }
+    }
+
+    /// The two read-only accounts C1 appends to `initialize_config`:
+    /// `(program, program_data)`. Append to each init call's account list.
+    pub fn init_upgrade_metas(&self) -> Vec<AccountMeta> {
+        vec![
+            AccountMeta::new_readonly(MERIDIAN_PROGRAM_ID, false),
+            AccountMeta::new_readonly(meridian_program_data(), false),
+        ]
     }
 
     /// PDA for the singleton Config account.
@@ -311,12 +351,56 @@ fn read_meridian_so() -> Vec<u8> {
     // `target/deploy/meridian.so` at the workspace root.
     let mut path = workspace_root();
     path.push("target/deploy/meridian.so");
-    std::fs::read(&path).unwrap_or_else(|e| {
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| {
         panic!(
             "failed to read {} ({e}). Run `anchor build` before `cargo test -p meridian-litesvm-tests`.",
             path.display()
         )
-    })
+    });
+    assert_so_fresh(&path);
+    bytes
+}
+
+/// Fail LOUDLY if `meridian.so` predates the program source. The harness loads a
+/// PREBUILT binary, so without this guard a program edit not followed by
+/// `anchor build` is silently tested against the OLD `.so` — a false pass.
+/// (This guard exists because exactly that happened.)
+fn assert_so_fresh(so_path: &std::path::Path) {
+    if std::env::var_os("MERIDIAN_SKIP_SO_FRESHNESS").is_some() {
+        return; // escape hatch for environments that build out-of-tree
+    }
+    let so_mtime = std::fs::metadata(so_path)
+        .and_then(|m| m.modified())
+        .expect("stat meridian.so");
+    let src = workspace_root().join("programs/meridian/src");
+    if let Some(newest) = newest_rs_mtime(&src) {
+        assert!(
+            so_mtime >= newest,
+            "STALE BINARY: target/deploy/meridian.so is older than the program source.\n\
+             Run `anchor build` before `cargo test -p meridian-litesvm-tests` — otherwise the \
+             suite runs against an outdated program and may FALSELY pass.\n\
+             (Set MERIDIAN_SKIP_SO_FRESHNESS=1 to bypass if you build out-of-tree.)"
+        );
+    }
+}
+
+/// Newest modified-time among all `.rs` files under `dir`, recursively.
+fn newest_rs_mtime(dir: &std::path::Path) -> Option<std::time::SystemTime> {
+    let mut newest: Option<std::time::SystemTime> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = entry.path();
+        let t = if p.is_dir() {
+            newest_rs_mtime(&p)
+        } else if p.extension().is_some_and(|e| e == "rs") {
+            entry.metadata().and_then(|m| m.modified()).ok()
+        } else {
+            None
+        };
+        if let Some(t) = t {
+            newest = Some(newest.map_or(t, |n| n.max(t)));
+        }
+    }
+    newest
 }
 
 fn workspace_root() -> PathBuf {

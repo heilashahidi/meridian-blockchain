@@ -101,9 +101,10 @@ export interface StockGroup {
  * MAG7 display order. Every stock appears (even with no markets) so the grid is
  * stable; only active markets are bucketed. Markets whose ticker is not a MAG7
  * stock are ignored. Within a ticker, markets are deduplicated by strike —
- * keeping the one with the latest expiry — so two same-day contracts for the
- * same "TICKER > $STRIKE" question never render as duplicates. Strikes are
- * returned ascending.
+ * keeping the one with the NEAREST (earliest) future expiry — so when a strike
+ * has both a same-day contract and a longer-dated one, the soonest-settling
+ * (the active 0DTE board) is what renders, never a stale longer-dated twin.
+ * Strikes are returned ascending.
  */
 export function groupActiveByTicker(
   markets: MarketView[],
@@ -121,12 +122,14 @@ export function groupActiveByTicker(
   }
 
   return MAG7.map((f) => {
-    // Dedupe by strike, keeping the latest-expiry market for each strike.
+    // Dedupe by strike, keeping the nearest (earliest) future-expiry market for
+    // each strike. All candidates are active (expiry > now), so the smallest
+    // expiry is the soonest-settling contract — the one a 0DTE board should show.
     const byStrike = new Map<string, MarketView>();
     for (const m of buckets.get(f.ticker) ?? []) {
       const k = m.strikePrice.toString();
       const cur = byStrike.get(k);
-      if (!cur || m.expiryUnix > cur.expiryUnix) byStrike.set(k, m);
+      if (!cur || m.expiryUnix < cur.expiryUnix) byStrike.set(k, m);
     }
     const active = [...byStrike.values()].sort(
       (a, b) => Number(a.strikePrice - b.strikePrice),

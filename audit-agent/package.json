@@ -1,0 +1,24 @@
+{
+  "name": "meridian-audit-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "LangGraph.js closed-loop security auditor for the Meridian Anchor program. Hypothesizes vulnerabilities, verifies them by running the real toolchain (grep/cargo/clippy/trident), and reports only confirmed findings.",
+  "scripts": {
+    "audit": "tsx src/run.ts",
+    "eval": "tsx eval/run-eval.ts",
+    "typecheck": "tsc --noEmit",
+    "dry": "tsx src/run.ts --dry"
+  },
+  "dependencies": {
+    "@langchain/anthropic": "^0.3.0",
+    "@langchain/core": "^0.3.0",
+    "@langchain/langgraph": "^0.2.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.3"
+  }
+}

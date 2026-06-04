@@ -47,6 +47,8 @@ fn u3_smoke_lifecycle() {
             AccountMeta::new(config_pda, false),       // config PDA (writable, not signer)
             AccountMeta::new_readonly(fx.usdc_mint.pubkey(), false),
             AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+            AccountMeta::new_readonly(MERIDIAN_PROGRAM_ID, false), // program (C1)
+            AccountMeta::new_readonly(meridian_litesvm_tests::meridian_program_data(), false), // program_data (C1)
         ],
     );
     fx.submit_admin_ix(init_ix);
@@ -229,6 +231,43 @@ fn u3_smoke_lifecycle() {
     let err_str = format!("{err:?}");
     assert!(
         err_str.contains("Unauthorized") || err_str.contains("custom") || err_str.contains("ConstraintHasOne"),
+        "expected an Unauthorized-style error, got: {err_str}",
+    );
+}
+
+/// C1: `initialize_config` is bound to the program's upgrade authority, so a
+/// front-runner who is NOT the upgrade authority cannot seize the admin slot.
+/// The fixture sets the upgrade authority to `fx.admin`; an attacker paying for
+/// init must be rejected by the `program_data.upgrade_authority` constraint.
+#[test]
+fn init_rejects_non_upgrade_authority() {
+    let mut fx = Fixture::new();
+    let (config_pda, _) = fx.config_pda();
+
+    let attacker = Keypair::new();
+    fx.svm
+        .airdrop(&attacker.pubkey(), 10_000_000_000)
+        .expect("airdrop attacker");
+
+    let fee_authority = Keypair::new().pubkey();
+    let mut init_args = fee_authority.to_bytes().to_vec();
+    init_args.extend_from_slice(MERIDIAN_PROGRAM_ID.as_ref()); // pyth_receiver
+
+    let mut accounts = vec![
+        AccountMeta::new(attacker.pubkey(), true), // payer = attacker (NOT the upgrade authority)
+        AccountMeta::new(config_pda, false),
+        AccountMeta::new_readonly(fx.usdc_mint.pubkey(), false),
+        AccountMeta::new_readonly(SYSTEM_PROGRAM_ID, false),
+    ];
+    accounts.extend(fx.init_upgrade_metas());
+
+    let ix = anchor_ix(MERIDIAN_PROGRAM_ID, "initialize_config", &init_args, accounts);
+    let err = fx
+        .try_submit_ix_with_signers(ix, &[&attacker])
+        .expect_err("init by a non-upgrade-authority must be rejected (C1)");
+    let err_str = format!("{err:?}");
+    assert!(
+        err_str.contains("Unauthorized") || err_str.contains("custom"),
         "expected an Unauthorized-style error, got: {err_str}",
     );
 }
