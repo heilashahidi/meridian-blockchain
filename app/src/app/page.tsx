@@ -351,6 +351,7 @@ function InsightsPanel({ items, onAsk }: { items: { ticker: string; text: string
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [busy, setBusy] = useState(false);
   const idRef = useRef(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -360,10 +361,12 @@ function InsightsPanel({ items, onAsk }: { items: { ticker: string; text: string
     setBusy(true);
     const time = etTime();
     const ansId = ++idRef.current;
+    // Append in reading order — the question then its pending answer — so the
+    // newest turn lands at the bottom of the list, right above the input box.
     setChat((c) => [
+      ...c,
       { id: ++idRef.current, ticker: "YOU", text: query, time },
       { id: ansId, ticker: "MERIDIAN", text: "…", time },
-      ...c,
     ]);
     let answer = "";
     try {
@@ -374,14 +377,22 @@ function InsightsPanel({ items, onAsk }: { items: { ticker: string; text: string
     }
   };
 
+  // Keep the latest message in view as the conversation grows / the answer fills in.
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chat]);
+
+  // Ambient live insights sit at the top as context; the conversation grows
+  // chronologically below them (oldest first, newest at the bottom).
   const live = items.map((it, i) => ({ id: -1 - i, ...it, time: etTime() }));
-  const all = [...chat, ...live];
+  const all = [...live, ...chat];
   return (
     <aside className="panel dash-insights">
       <div className="dash-aside-head">
         <h3 style={{ fontSize: 15 }}>⚡ Market insights</h3>
       </div>
-      <div className="dash-insights-list">
+      <div className="dash-insights-list" ref={listRef}>
         {all.length === 0 ? (
           <p className="muted" style={{ fontSize: 13 }}>Insights appear here once markets are live.</p>
         ) : (
