@@ -10,7 +10,7 @@ import { redeem } from "@/lib/actions";
 import { fetchBalancesMany, fetchBooks, type BookView } from "@/lib/market";
 import { useMeridian } from "@/hooks/MeridianContext";
 import { DEMO_WALLET } from "@/lib/demoWallet";
-import { noFromYes, yesMidFraction } from "@/lib/marketsView";
+import { noFromYes, yesAskFraction } from "@/lib/marketsView";
 import {
   MINT_PAIR_LEG_BASIS,
   computePnl,
@@ -35,11 +35,12 @@ interface EnrichedHolding {
 }
 
 /**
- * Per-side current price ($0–$1 fraction) from the book mid: Yes uses the mid
- * directly, No uses 1 − mid. Null when there's no derivable mid.
+ * Per-side current price ($0–$1 fraction) from the book's best ask (PRD §209):
+ * Yes uses the Yes ask directly, No uses 1 − Yes ask. Null when there's no ask
+ * to price against.
  */
 function sidePriceFromBook(book: BookView | null, side: PositionSide): number | null {
-  const yes = yesMidFraction(book);
+  const yes = yesAskFraction(book);
   if (yes === null) return null;
   return side === "yes" ? yes : noFromYes(yes);
 }
@@ -106,9 +107,9 @@ export default function PortfolioPage() {
           )) {
             const livePrice = sidePriceFromBook(book, side);
             // Entry-basis approximation (documented in lib/pnl.ts): we lack a
-            // per-fill ledger, so use the current book mid as the cost estimate;
-            // when no mid exists fall back to the exact mint-pair leg basis of
-            // $0.50. The "est." flag in the row marks the mid-based estimate.
+            // per-fill ledger, so use the current book price (best ask) as the
+            // cost estimate; when no ask exists fall back to the exact mint-pair
+            // leg basis of $0.50. The "est." flag in the row marks the estimate.
             const entryIsEstimate = livePrice !== null;
             const entryPrice = livePrice ?? MINT_PAIR_LEG_BASIS;
             rows.push({
@@ -212,7 +213,7 @@ export default function PortfolioPage() {
         <p className="muted" style={{ margin: 0, maxWidth: 680 }}>
           {preview
             ? "Previewing a demo wallet's positions. Connect your wallet to see your own and redeem."
-            : "Your Yes/No positions across all markets. Value is marked to the book mid (settled markets to $1.00 / $0.00); entry basis is estimated from the live mid where no per-fill ledger exists."}
+            : "Your Yes/No positions across all markets. Value is marked to the book price — the best Yes ask (settled markets to $1.00 / $0.00); entry basis is estimated from the live price where no per-fill ledger exists."}
         </p>
       </header>
 

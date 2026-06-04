@@ -2,18 +2,18 @@
 
 import type { BookView, MarketView } from "@/lib/market";
 import { priceAgeLabel, type PriceData } from "@/lib/prices";
-import { yesMidFraction } from "@/lib/marketsView";
+import { yesAskFraction } from "@/lib/marketsView";
 import { MarketCard } from "@/components/MarketCard";
 
 export type MoneynessFilter = "all" | "itm" | "near" | "long";
 
-/** Classify a strike by its Yes mid: in-the-money, near strike, or long shot. */
-export function passesFilter(yesMid: number | null, filter: MoneynessFilter): boolean {
+/** Classify a strike by its Yes price: in-the-money, near strike, or long shot. */
+export function passesFilter(yesPrice: number | null, filter: MoneynessFilter): boolean {
   if (filter === "all") return true;
-  if (yesMid === null) return filter === "near"; // unknown → treat as near
-  if (filter === "itm") return yesMid >= 0.6;
-  if (filter === "near") return yesMid >= 0.4 && yesMid < 0.6;
-  return yesMid < 0.4; // long shots
+  if (yesPrice === null) return filter === "near"; // unknown → treat as near
+  if (filter === "itm") return yesPrice >= 0.6;
+  if (filter === "near") return yesPrice >= 0.4 && yesPrice < 0.6;
+  return yesPrice < 0.4; // long shots
 }
 
 /**
@@ -42,7 +42,7 @@ export function StockTile({
   const spot = price ? price.price : null;
 
   const shown = active.filter((m) =>
-    passesFilter(yesMidFraction(books[m.pubkey.toBase58()] ?? null), filter),
+    passesFilter(yesAskFraction(books[m.pubkey.toBase58()] ?? null), filter),
   );
   // When a non-"all" filter is active, hide tickers with no matching strikes.
   if (filter !== "all" && shown.length === 0) return null;
@@ -95,7 +95,7 @@ export function StockTile({
                 key={m.pubkey.toBase58()}
                 ticker={ticker}
                 market={m}
-                yesMid={yesMidFraction(book)}
+                yesPrice={yesAskFraction(book)}
                 spot={spot}
               />
             );

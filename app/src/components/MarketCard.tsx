@@ -15,29 +15,29 @@ import { fmtExpiry } from "@/lib/format";
 
 /**
  * One active-strike contract card, framed as a prediction-market question:
- * "Will {TICKER} close above ${STRIKE}?". The implied probability (Yes mid as a
- * percent) is the hero metric, backed by a `.prob-bar`, with the Yes/No mid
+ * "Will {TICKER} close above ${STRIKE}?". The implied probability (Yes price as
+ * a percent) is the hero metric, backed by a `.prob-bar`, with the Yes/No
  * prices below. A distance-to-strike mini-indicator (ITM/OTM tinted) shows how
  * far live spot sits from the strike. Links into the Trade page for this
- * market's PDA. `yesMid` may be null while the book loads or is one-sided —
- * the card still renders with "—" mids. `spot` may be null off-hours.
+ * market's PDA. `yesPrice` may be null while the book loads or has no ask —
+ * the card still renders with "—" prices. `spot` may be null off-hours.
  */
 export function MarketCard({
   ticker,
   market,
-  yesMid,
+  yesPrice,
   spot,
 }: {
   ticker: string;
   market: MarketView;
-  /** Yes mid as a $0–$1 fraction, or null when no derivable mid. */
-  yesMid: number | null;
+  /** Yes price (best ask) as a $0–$1 fraction, or null when no ask to quote. */
+  yesPrice: number | null;
   /** Live spot price in USD, or null when unavailable. */
   spot: number | null;
 }) {
-  const hasMid = yesMid !== null;
-  const noMid = hasMid ? noFromYes(yesMid) : null;
-  const yesPctWidth = hasMid ? Math.round(yesMid * 100) : 0;
+  const hasPrice = yesPrice !== null;
+  const noPrice = hasPrice ? noFromYes(yesPrice) : null;
+  const yesPctWidth = hasPrice ? Math.round(yesPrice * 100) : 0;
 
   const strikeStr = strikeDollars(market.strikePrice);
   const strikeNum = Number(market.strikePrice) / 1_000_000;
@@ -76,11 +76,11 @@ export function MarketCard({
             style={{
               fontSize: 28,
               fontWeight: 700,
-              color: hasMid ? "var(--yes)" : "var(--muted)",
+              color: hasPrice ? "var(--yes)" : "var(--muted)",
               letterSpacing: "-0.02em",
             }}
           >
-            {impliedProbabilityLabel(yesMid)}
+            {impliedProbabilityLabel(yesPrice)}
           </span>
           <span className="muted" style={{ fontSize: 11 }}>
             Yes implied
@@ -91,7 +91,7 @@ export function MarketCard({
         </div>
       </div>
 
-      {/* Yes / No mid prices. */}
+      {/* Yes / No prices. */}
       <div style={{ display: "flex", gap: 8 }}>
         <div
           style={{
@@ -105,7 +105,7 @@ export function MarketCard({
             Yes
           </div>
           <div className="mono" style={{ color: "var(--yes)", fontSize: 15 }}>
-            {hasMid ? fractionUsd(yesMid) : "—"}
+            {hasPrice ? fractionUsd(yesPrice) : "—"}
           </div>
         </div>
         <div
@@ -120,7 +120,7 @@ export function MarketCard({
             No
           </div>
           <div className="mono" style={{ color: "var(--no)", fontSize: 15 }}>
-            {noMid !== null ? fractionUsd(noMid) : "—"}
+            {noPrice !== null ? fractionUsd(noPrice) : "—"}
           </div>
         </div>
       </div>

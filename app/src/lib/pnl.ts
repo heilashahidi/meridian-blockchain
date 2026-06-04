@@ -19,8 +19,8 @@
 //   1. If the position came purely from `mint_pair`, entry = $0.50/contract
 //      (the mint splits $1 of USDC into one Yes + one No, so each leg's cost
 //      basis is $0.50). This is exact for mint-only positions.
-//   2. Otherwise we approximate entry with the *current* book mid at the time
-//      the Portfolio first observes the position. This is an approximation, not
+//   2. Otherwise we approximate entry with the *current* book price (best ask)
+//      when the Portfolio first observes the position. This is an approximation, not
 //      a ledger — it understates realized edge but never fabricates a price.
 //
 // `computePnl` itself is agnostic to where `entryPrice` came from; the
@@ -68,8 +68,8 @@ export function settledContractValue(
 /**
  * The per-contract current price to value a position at:
  *   - settled market → $1 (winner) or $0 (loser),
- *   - otherwise → the supplied live/mid price ($0–$1 fraction).
- * `livePrice` may be null (no derivable mid); then an unsettled position has no
+ *   - otherwise → the supplied live price ($0–$1 fraction).
+ * `livePrice` may be null (no quotable price); then an unsettled position has no
  * current price and we treat it as 0 for valuation but flag it via the null we
  * return so the UI can render "—".
  */

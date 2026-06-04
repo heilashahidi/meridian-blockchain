@@ -11,7 +11,7 @@ import {
   strikeDollars,
   strikesForTicker,
   tradeHref,
-  yesMidFraction,
+  yesAskFraction,
 } from "@/lib/marketsView";
 
 // Right-pad an ASCII ticker into the 8-byte on-chain layout `MarketView.ticker`.
@@ -167,7 +167,7 @@ describe("groupActiveByTicker", () => {
   });
 });
 
-describe("yesMidFraction", () => {
+describe("yesAskFraction", () => {
   function book(bids: bigint[], asks: bigint[]): BookView {
     const lvl = (price: bigint) => ({
       price,
@@ -178,35 +178,38 @@ describe("yesMidFraction", () => {
     return { bids: bids.map(lvl), asks: asks.map(lvl), nextSeq: 0n };
   }
 
-  it("computes (bestBid+bestAsk)/2 as a $0–$1 fraction", () => {
-    // best bid $0.60, best ask $0.64 → mid $0.62
-    expect(yesMidFraction(book([600_000n], [640_000n]))).toBeCloseTo(0.62, 6);
+  it("returns the best (lowest) ask as a $0–$1 fraction (PRD §209)", () => {
+    // best ask $0.64 → Yes price $0.64; the bid side does not affect it.
+    expect(yesAskFraction(book([600_000n], [640_000n]))).toBeCloseTo(0.64, 6);
   });
 
-  it("uses index 0 of each side as best (priority-ordered)", () => {
-    const mid = yesMidFraction(
+  it("uses index 0 of the ask side as best (priority-ordered)", () => {
+    const price = yesAskFraction(
       book([600_000n, 550_000n], [640_000n, 700_000n]),
     );
-    expect(mid).toBeCloseTo(0.62, 6);
+    expect(price).toBeCloseTo(0.64, 6);
   });
 
-  it("returns null for a one-sided or empty book", () => {
-    expect(yesMidFraction(book([600_000n], []))).toBeNull();
-    expect(yesMidFraction(book([], [640_000n]))).toBeNull();
-    expect(yesMidFraction(book([], []))).toBeNull();
-    expect(yesMidFraction(null)).toBeNull();
+  it("prices an asks-only book (you can still buy Yes)", () => {
+    expect(yesAskFraction(book([], [640_000n]))).toBeCloseTo(0.64, 6);
+  });
+
+  it("returns null when there is no ask to quote against", () => {
+    expect(yesAskFraction(book([600_000n], []))).toBeNull(); // bids only
+    expect(yesAskFraction(book([], []))).toBeNull();
+    expect(yesAskFraction(null)).toBeNull();
   });
 });
 
 describe("impliedProbabilityLabel", () => {
-  it("renders a Yes mid of 0.62 as ~62%", () => {
+  it("renders a Yes price of 0.62 as ~62%", () => {
     expect(impliedProbabilityLabel(0.62)).toBe("62%");
   });
   it("rounds to the nearest percent", () => {
     expect(impliedProbabilityLabel(0.625)).toBe("63%");
     expect(impliedProbabilityLabel(0.054)).toBe("5%");
   });
-  it("renders a dash when there is no mid", () => {
+  it("renders a dash when there is no price", () => {
     expect(impliedProbabilityLabel(null)).toBe("—");
   });
 });

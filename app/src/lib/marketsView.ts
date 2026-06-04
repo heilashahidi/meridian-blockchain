@@ -22,20 +22,20 @@ export function isActiveMarket(m: MarketView, nowUnix: number): boolean {
 }
 
 /**
- * The Yes mid price as a $0–$1 fraction, derived from the book:
- *   mid = (bestBid + bestAsk) / 2, where best bid is the highest bid and best
- *   ask is the lowest ask. `fetchBook` returns bids in descending and asks in
- *   ascending priority order, so the best of each side is index 0.
+ * The current Yes price as a $0–$1 fraction, taken from the book's best (lowest)
+ * ask — the price at which a user can buy Yes right now. This is the PRD's
+ * headline price: "Buy Yes … from the ask side of the book" (§124) and "No
+ * price = $1.00 − Yes ask price" (§209). `fetchBook` returns asks in ascending
+ * priority order, so the best ask is index 0.
  *
- * Returns null when the book is one-sided or empty (no derivable mid).
+ * Returns null when the ask side is empty — there's nothing to buy Yes at, so
+ * no quotable price yet ("be the first to quote").
  */
-export function yesMidFraction(book: BookView | null): number | null {
+export function yesAskFraction(book: BookView | null): number | null {
   if (!book) return null;
-  const bestBid = book.bids.length > 0 ? book.bids[0].price : null;
   const bestAsk = book.asks.length > 0 ? book.asks[0].price : null;
-  if (bestBid === null || bestAsk === null) return null;
-  const midMicro = (Number(bestBid) + Number(bestAsk)) / 2;
-  return midMicro / USDC_SCALE;
+  if (bestAsk === null) return null;
+  return Number(bestAsk) / USDC_SCALE;
 }
 
 /** No price = 1 − Yes price (the same book viewed from the No perspective). */
@@ -45,7 +45,7 @@ export function noFromYes(yes: number): number {
 
 /**
  * Implied probability of the Yes outcome, as a percent string like "62%".
- * A Yes mid of 0.62 → "62%". Returns "—" when there's no mid.
+ * A Yes price of 0.62 → "62%". Returns "—" when there's no price.
  */
 export function impliedProbabilityLabel(yesFraction: number | null): string {
   if (yesFraction === null || !Number.isFinite(yesFraction)) return "—";

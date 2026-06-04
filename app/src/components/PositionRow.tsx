@@ -19,8 +19,8 @@ import {
  * Redeem button appears only on settled markets the held side won; settled
  * losers and open positions show a calm status pill instead.
  *
- * `livePrice` is the Yes/No mid for the held side as a $0–$1 fraction (or null
- * when there's no derivable mid). `entryPrice` is the per-contract cost basis
+ * `livePrice` is the Yes/No price (best ask) for the held side as a $0–$1
+ * fraction (or null when there's no ask to quote). `entryPrice` is the per-contract cost basis
  * (exact mint basis or an estimate — see `entryIsEstimate`).
  */
 export function PositionRow({
