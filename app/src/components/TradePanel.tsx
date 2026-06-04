@@ -88,6 +88,14 @@ export function TradePanel() {
 
   const fillQty = preview ? preview.fills.reduce((a, f) => a + f.qty, 0n) : 0n;
 
+  // Buy No / Sell No are atomic on-chain (mint-and-sell or buy-and-burn the Yes
+  // leg in one tx) and must fill in full or the whole order reverts with
+  // "could not fully fill within slippage bound". When the live preview shows
+  // they can't fully fill, block the submit here and explain — far better than
+  // letting the user sign a transaction that's guaranteed to revert.
+  const cannotFullyFill =
+    isNoAction(action) && inputValid && (!preview || preview.residual > 0n);
+
   async function submit() {
     // Guard the async gap so a rapid double-click can't fire two submits.
     if (!ready || !inputValid || busy) return;
@@ -249,7 +257,7 @@ export function TradePanel() {
 
       <button
         className={side === "yes" ? "btn btn-yes" : "btn btn-no"}
-        disabled={!ready || !inputValid || !gate.allowed || busy}
+        disabled={!ready || !inputValid || !gate.allowed || busy || cannotFullyFill}
         onClick={submit}
       >
         {submitLabel}
@@ -259,7 +267,15 @@ export function TradePanel() {
         <div style={{ color: "var(--no)", fontSize: 13 }}>{gate.reason}</div>
       )}
 
-      {preview && gate.allowed && (
+      {gate.allowed && cannotFullyFill && (
+        <div style={{ color: "var(--no)", fontSize: 13 }}>
+          Not enough resting liquidity to fill this {submitLabel} in full at
+          {" "}${price}. {sideLabel} orders settle atomically, so a partial fill
+          would revert — wait for a quote, or adjust the price or size.
+        </div>
+      )}
+
+      {preview && gate.allowed && !cannotFullyFill && (
         <div className="muted" style={{ fontSize: 12 }}>
           {preview.fills.length === 0
             ? isBuy(action) && !isNoAction(action)
