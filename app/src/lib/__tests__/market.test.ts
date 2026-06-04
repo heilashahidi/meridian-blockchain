@@ -13,7 +13,6 @@ function market(settled: boolean, outcome: Outcome): MarketView {
     strikePrice: 680_000_000n,
     expiryUnix: 1_900_000_000n,
     settled,
-    settledAt: settled ? 1_900_000_100n : 0n,
     outcome,
     yesMint: yes,
     noMint: no,

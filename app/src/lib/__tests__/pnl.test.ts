@@ -23,7 +23,6 @@ function mkMarket(over: Partial<MarketView> = {}): MarketView {
     strikePrice: 200_000_000n,
     expiryUnix: 2_000_000_000n,
     settled: over.settled ?? false,
-    settledAt: 0n,
     outcome: over.outcome ?? null,
     yesMint: PublicKey.unique(),
     noMint: PublicKey.unique(),

@@ -8,7 +8,7 @@ export type Meridian = {
   "address": "6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX",
   "metadata": {
     "name": "meridian",
-    "version": "0.3.0",
+    "version": "0.2.0",
     "spec": "0.1.0",
     "description": "Meridian on-chain CLOB for binary outcome markets — Anchor program wrapping a pure-Rust matching engine."
   },
@@ -20,250 +20,6 @@ export type Meridian = {
     "U7 adds the remaining instructions (settle/redeem)."
   ],
   "instructions": [
-    {
-      "name": "adminForceExpireOrder",
-      "docs": [
-        "Admin-only: recover a permanently-stuck order's collateral to the",
-        "treasury after the post-settlement recovery grace, provably only when",
-        "the order's owner canonical ATA is genuinely un-receivable."
-      ],
-      "discriminator": [
-        71,
-        139,
-        217,
-        62,
-        170,
-        10,
-        244,
-        255
-      ],
-      "accounts": [
-        {
-          "name": "admin",
-          "docs": [
-            "Admin authority. Must equal `config.admin`."
-          ],
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        },
-        {
-          "name": "market",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  109,
-                  97,
-                  114,
-                  107,
-                  101,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "market.ticker",
-                "account": "market"
-              },
-              {
-                "kind": "account",
-                "path": "market.strike_price",
-                "account": "market"
-              },
-              {
-                "kind": "account",
-                "path": "market.expiry_unix",
-                "account": "market"
-              }
-            ]
-          }
-        },
-        {
-          "name": "book",
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  98,
-                  111,
-                  111,
-                  107
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "market"
-              }
-            ]
-          }
-        },
-        {
-          "name": "usdcEscrow",
-          "docs": [
-            "USDC escrow PDA. Source for recovered bid collateral."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  117,
-                  115,
-                  100,
-                  99,
-                  95,
-                  101,
-                  115,
-                  99,
-                  114,
-                  111,
-                  119
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "market"
-              }
-            ]
-          }
-        },
-        {
-          "name": "yesEscrow",
-          "docs": [
-            "Yes escrow PDA. Source for recovered ask collateral."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  121,
-                  101,
-                  115,
-                  95,
-                  101,
-                  115,
-                  99,
-                  114,
-                  111,
-                  119
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "market"
-              }
-            ]
-          }
-        },
-        {
-          "name": "yesMint",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  121,
-                  101,
-                  115,
-                  95,
-                  109,
-                  105,
-                  110,
-                  116
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "market"
-              }
-            ]
-          },
-          "relations": [
-            "market"
-          ]
-        },
-        {
-          "name": "ownerAta",
-          "docs": [
-            "mint. Read-only; validated in the handler to be the canonical ATA (the",
-            "owner is taken from the book entry, never from here) AND to be currently",
-            "un-receivable. Never receives funds."
-          ]
-        },
-        {
-          "name": "treasuryAta",
-          "docs": [
-            "recovered mint. Validated in the handler."
-          ],
-          "writable": true
-        },
-        {
-          "name": "mintAuthority",
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  109,
-                  105,
-                  110,
-                  116,
-                  95,
-                  97,
-                  117,
-                  116,
-                  104
-                ]
-              },
-              {
-                "kind": "account",
-                "path": "market"
-              }
-            ]
-          }
-        },
-        {
-          "name": "tokenProgram",
-          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
-        }
-      ],
-      "args": [
-        {
-          "name": "args",
-          "type": {
-            "defined": {
-              "name": "adminForceExpireOrderArgs"
-            }
-          }
-        }
-      ]
-    },
     {
       "name": "adminSettleMarket",
       "docs": [
@@ -904,7 +660,12 @@ export type Meridian = {
     {
       "name": "buyNoLimit",
       "docs": [
-        "Resting Buy No limit order (PRD 211) - mint a pair, then post the Yes leg as a limit sell that rests its unfilled remainder."
+        "Resting \"Buy No\" **limit** order (PRD §211) — mint a Yes/No pair, then",
+        "post the Yes leg as a *limit* sell: cross whatever rests at/above",
+        "`min_yes_sell_price`, then rest the remainder as the user's Yes ask.",
+        "Unlike `buy_no` it never reverts on a partial fill; the user keeps",
+        "`amount` No and the unfilled Yes rests until a buyer crosses it (or they",
+        "cancel it via `cancel_order`). Reuses the `BuyNo` accounts."
       ],
       "discriminator": [
         83,
@@ -3123,64 +2884,6 @@ export type Meridian = {
       ]
     },
     {
-      "name": "setTreasury",
-      "docs": [
-        "Admin-only: rotate the treasury authority that receives collateral",
-        "recovered from permanently-stuck orders via `admin_force_expire_order`."
-      ],
-      "discriminator": [
-        57,
-        97,
-        196,
-        95,
-        195,
-        206,
-        106,
-        136
-      ],
-      "accounts": [
-        {
-          "name": "admin",
-          "docs": [
-            "Admin authority. Must equal `config.admin`."
-          ],
-          "signer": true,
-          "relations": [
-            "config"
-          ]
-        },
-        {
-          "name": "config",
-          "docs": [
-            "Singleton Config. Seeds + bump pin it to the canonical PDA; the",
-            "`has_one` ties the signer to the recorded admin."
-          ],
-          "writable": true,
-          "pda": {
-            "seeds": [
-              {
-                "kind": "const",
-                "value": [
-                  99,
-                  111,
-                  110,
-                  102,
-                  105,
-                  103
-                ]
-              }
-            ]
-          }
-        }
-      ],
-      "args": [
-        {
-          "name": "newTreasury",
-          "type": "pubkey"
-        }
-      ]
-    },
-    {
       "name": "settleMarket",
       "docs": [
         "Read the Pyth `PriceUpdateV2` account and stamp the market's",
@@ -3570,21 +3273,6 @@ export type Meridian = {
       ]
     }
   ],
-  "events": [
-    {
-      "name": "stuckOrderRecovered",
-      "discriminator": [
-        248,
-        186,
-        5,
-        13,
-        74,
-        47,
-        252,
-        11
-      ]
-    }
-  ],
   "errors": [
     {
       "code": 6000,
@@ -3695,67 +3383,9 @@ export type Meridian = {
       "code": 6021,
       "name": "badMakerAccount",
       "msg": "Maker payout account is not the maker's canonical associated token account."
-    },
-    {
-      "code": 6022,
-      "name": "recoveryGraceNotElapsed",
-      "msg": "Recovery grace period has not elapsed; cannot force-expire this order yet."
-    },
-    {
-      "code": 6023,
-      "name": "orderNotStuck",
-      "msg": "Order is not stuck (canonical ATA is receivable); use settle_sweep instead."
-    },
-    {
-      "code": 6024,
-      "name": "invalidTreasuryAccount",
-      "msg": "Recovery destination is not the treasury's canonical associated token account."
-    },
-    {
-      "code": 6025,
-      "name": "treasuryNotConfigured",
-      "msg": "Treasury is not configured (still equals admin); call set_treasury first."
-    },
-    {
-      "code": 6026,
-      "name": "treasuryAtaNotReceivable",
-      "msg": "Treasury associated token account is not receivable; create or unfreeze it first."
     }
   ],
   "types": [
-    {
-      "name": "adminForceExpireOrderArgs",
-      "docs": [
-        "`admin_force_expire_order` arguments. `(side, price, seq)` identify the",
-        "specific stuck order, same convention as `cancel_order`."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "side",
-            "docs": [
-              "0 = Bid, 1 = Ask."
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "price",
-            "docs": [
-              "Price half of the order's `OrderKey`."
-            ],
-            "type": "u64"
-          },
-          {
-            "name": "seq",
-            "docs": [
-              "Sequence half of the order's `OrderKey`."
-            ],
-            "type": "u64"
-          }
-        ]
-      }
-    },
     {
       "name": "book",
       "docs": [
@@ -3967,20 +3597,6 @@ export type Meridian = {
               "are posted) via `set_require_full_verification`."
             ],
             "type": "bool"
-          },
-          {
-            "name": "treasury",
-            "docs": [
-              "Treasury authority — custodian for collateral recovered from",
-              "permanently-stuck orders via `admin_force_expire_order`. Kept distinct",
-              "from `fee_authority` so custodial user funds (which an owner may later",
-              "reclaim off-chain) stay accounting-separate from protocol revenue.",
-              "Defaults to `admin` at `initialize_config`; operators MUST rotate it via",
-              "`set_treasury` to a dedicated custody account before any recovery",
-              "(the recovery instruction rejects `treasury == admin`). Appended at the",
-              "struct end so prior field offsets stay stable."
-            ],
-            "type": "pubkey"
           }
         ]
       }
@@ -4145,17 +3761,6 @@ export type Meridian = {
                 32
               ]
             }
-          },
-          {
-            "name": "settledAt",
-            "docs": [
-              "Unix timestamp (seconds) at which the market was settled, stamped by",
-              "`settle_market` / `admin_settle_market`. `0` while unsettled. Used as",
-              "the precise base for the post-settlement recovery grace window in",
-              "`admin_force_expire_order` (a stuck order can only be force-expired",
-              "after `settled_at + RECOVERY_GRACE_SECONDS`)."
-            ],
-            "type": "i64"
           }
         ]
       }
@@ -4281,54 +3886,6 @@ export type Meridian = {
               "[`MAX_SWEEP_PER_TX`]; 0 is a no-op success."
             ],
             "type": "u32"
-          }
-        ]
-      }
-    },
-    {
-      "name": "stuckOrderRecovered",
-      "docs": [
-        "Emitted when an admin recovers a stuck order's collateral to the treasury.",
-        "The off-chain custody ledger consumes this to track what an owner may later",
-        "reclaim."
-      ],
-      "type": {
-        "kind": "struct",
-        "fields": [
-          {
-            "name": "market",
-            "type": "pubkey"
-          },
-          {
-            "name": "owner",
-            "type": "pubkey"
-          },
-          {
-            "name": "mint",
-            "docs": [
-              "The recovered collateral's mint (USDC for a Bid, the market's Yes mint",
-              "for an Ask) — so an off-chain custody ledger needn't re-derive it."
-            ],
-            "type": "pubkey"
-          },
-          {
-            "name": "side",
-            "docs": [
-              "0 = Bid (USDC recovered), 1 = Ask (Yes recovered)."
-            ],
-            "type": "u8"
-          },
-          {
-            "name": "price",
-            "type": "u64"
-          },
-          {
-            "name": "qty",
-            "type": "u64"
-          },
-          {
-            "name": "amount",
-            "type": "u64"
           }
         ]
       }

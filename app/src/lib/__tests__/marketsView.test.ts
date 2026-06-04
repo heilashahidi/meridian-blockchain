@@ -30,7 +30,6 @@ function mkMarket(
     strikePrice: over.strikePrice ?? 200_000_000n, // $200.00
     expiryUnix: over.expiryUnix ?? 2_000_000_000n,
     settled: over.settled ?? false,
-    settledAt: 0n,
     outcome: over.outcome ?? null,
     yesMint: PublicKey.unique(),
     noMint: PublicKey.unique(),
