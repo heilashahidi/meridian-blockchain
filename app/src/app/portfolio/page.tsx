@@ -23,6 +23,7 @@ import {
   type PositionSide,
 } from "@/lib/pnl";
 import { useTx } from "@/hooks/useTx";
+import { formatError } from "@/lib/tx";
 
 const POLL_MS = 8000;
 
@@ -58,6 +59,7 @@ export default function PortfolioPage() {
 
   const [enriched, setEnriched] = useState<EnrichedHolding[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [redeemingKey, setRedeemingKey] = useState<string | null>(null);
 
   // Stable signature of the market set so the effect only re-runs when it changes.
@@ -80,6 +82,7 @@ export default function PortfolioPage() {
       if (!eff || !config) {
         if (isCurrent()) {
           setEnriched([]);
+          setLoadError(null);
           setLoading(false);
         }
         return;
@@ -122,7 +125,17 @@ export default function PortfolioPage() {
         }
         // Drop a stale or post-unmount response rather than clobbering fresher
         // state.
-        if (isCurrent()) setEnriched(rows);
+        if (isCurrent()) {
+          setEnriched(rows);
+          setLoadError(null);
+        }
+      } catch (e) {
+        // A failed read (RPC rate-limit, network blip) used to reject silently
+        // through the `void load(...)` call — leaving the page stuck on
+        // "Loading…" or a misleading "No open positions". Surface it instead;
+        // the next poll retries and clears it on success. Keep any positions
+        // already on screen rather than blanking them on a transient error.
+        if (isCurrent()) setLoadError(formatError(e));
       } finally {
         if (isCurrent()) setLoading(false);
       }
@@ -222,11 +235,28 @@ export default function PortfolioPage() {
       ) : enriched.length === 0 ? (
         loading ? (
           <p className="muted">Loading positions…</p>
+        ) : loadError ? (
+          <div className="panel" style={{ display: "grid", gap: 6 }}>
+            <div style={{ color: "var(--no)", fontWeight: 600 }}>
+              Couldn’t load your portfolio
+            </div>
+            <div className="muted" style={{ fontSize: 13 }}>
+              {loadError} — retrying automatically.
+            </div>
+          </div>
         ) : (
           <EmptyPositions />
         )
       ) : (
         <>
+          {loadError && (
+            <p
+              className="muted"
+              style={{ color: "var(--no)", fontSize: 12, marginBottom: 12 }}
+            >
+              Couldn’t refresh — showing last known positions. {loadError}
+            </p>
+          )}
           {/* Top summary: portfolio value + total P&L */}
           <div
             className="panel"
