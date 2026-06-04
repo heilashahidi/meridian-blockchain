@@ -3,8 +3,8 @@
 // This module is intentionally framework-free (no React, no wallet, no Anchor)
 // so the error-prone price mapping and instruction routing are fully unit-
 // testable in the node vitest env. `actions.ts` consumes the resolved path to
-// build the actual transaction; `TradePanel`/`BothSidesBook`/`PositionGuard`
-// consume the pure helpers here for display + gating.
+// build the actual transaction; `TradePanel`/`PositionGuard` consume the pure
+// helpers here for display + gating.
 //
 // -------------------------------------------------------------------------
 // Price space
@@ -47,7 +47,6 @@
 // Sell No: a <= cap on the Yes buy), which is exactly the Ask vs Bid side of
 // the internal Yes leg.
 
-import type { BookLevel, BookView } from "./market";
 import { SIDE_ASK, SIDE_BID } from "./matching";
 
 /** One dollar in USDC microunits — the full mint-pair cost / max price. */
@@ -60,6 +59,7 @@ export type TradeInstruction =
   | "placeLimitOrder"
   | "placeMarketOrder"
   | "buyNo"
+  | "buyNoLimit"
   | "sellNo";
 
 export interface TradePathInput {
@@ -71,7 +71,12 @@ export interface TradePathInput {
   price: bigint;
   /** Quantity in Yes/No base units (a Yes/No pair shares one base unit). */
   qty: bigint;
-  /** Only meaningful for the Yes paths; No paths are always market (atomic). */
+  /**
+   * Yes paths: "limit" rests / "market" takes. Buy No honours it too —
+   * "limit" rests the Yes leg (`buy_no_limit`, PRD §211), "market" is the
+   * atomic `buy_no`. Sell No is always market (atomic); a resting Sell No would
+   * need burn-on-fill matching that doesn't exist. Defaults to "market".
+   */
   orderType?: OrderType;
 }
 
@@ -190,12 +195,15 @@ export function resolveTradePath(input: TradePathInput): TradePath {
     }
 
     case "buyNo": {
-      // Buy No @ noPrice → mint pair, market-SELL the Yes leg (Ask taker) with
-      // a floor of `ONE − noPrice`. The Yes leg crosses the *bid* side.
+      // Buy No @ noPrice → mint pair, SELL the Yes leg (Ask taker) at a price of
+      // `ONE − noPrice`. The Yes leg crosses the *bid* side. "market" is the
+      // atomic `buy_no` (must fully fill); "limit" is `buy_no_limit` (PRD §211):
+      // cross what it can, then rest the remaining Yes ask at that price.
       assertNoPrice(price);
       const minYesSellPrice = yesPriceFromNo(price);
+      const orderType = input.orderType ?? "market";
       return {
-        instruction: "buyNo",
+        instruction: orderType === "limit" ? "buyNoLimit" : "buyNo",
         side: SIDE_ASK,
         yesLegPrice: minYesSellPrice,
         args: { amount: qty, minYesSellPrice },
@@ -267,26 +275,5 @@ export function positionGuardDecision(balances: Balances): GuardDecision {
     sellNo: hasNo
       ? { allowed: true }
       : { allowed: false, reason: "No No position to sell." },
-  };
-}
-
-// -------------------------------------------------------------------------
-// Both-sides book transform: render the single on-chain (Yes-priced) book from
-// the No perspective. A resting Yes BID is a No ASK at (1 − price); a resting
-// Yes ASK is a No BID at (1 − price). Quantity (the shared base unit) is
-// unchanged. Reflecting price preserves priority ordering because `1 − p` is
-// monotonically decreasing: Yes asks ascending → No bids descending (best No
-// bid first), Yes bids descending → No asks ascending (best No ask first).
-// -------------------------------------------------------------------------
-
-function reflectLevel(l: BookLevel): BookLevel {
-  return { ...l, price: noPriceFromYes(l.price) };
-}
-
-export function toNoView(book: BookView): BookView {
-  return {
-    bids: book.asks.map(reflectLevel), // Yes asks → No bids
-    asks: book.bids.map(reflectLevel), // Yes bids → No asks
-    nextSeq: book.nextSeq,
   };
 }

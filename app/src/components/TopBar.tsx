@@ -7,6 +7,7 @@ import { useWallet } from "@solana/wallet-adapter-react";
 
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { WalletButton } from "@/components/WalletButton";
+import { etWeekdayIndex, marketSession } from "@/lib/marketClock";
 import { useMeridian } from "@/hooks/MeridianContext";
 
 /** When connected: a clickable avatar chip (initials + short address) that
@@ -55,9 +56,12 @@ function etParts(d: Date) {
 const pad = (n: number) => String(n).padStart(2, "0");
 
 /**
- * Live status + countdown to the next 4:00 PM ET close. "Market open" when it's
- * a weekday between 9:30 and 16:00 ET. The countdown is computed from the ET
- * wall clock (no offset math), so it's DST-correct.
+ * Live status + countdown. While the market is open (a weekday between 9:30 and
+ * 16:00 ET) it counts down to today's 4:00 PM close ("Settles"); while it's
+ * closed — overnight, pre-open, or weekend — it counts down to the next
+ * session's 9:30 AM open ("Opens"), skipping weekends. The session math lives in
+ * the pure, unit-tested `marketSession` helper; this only supplies the live ET
+ * wall clock (no offset math, so it's DST-correct).
  */
 function MarketClock() {
   const [now, setNow] = useState<Date | null>(null);
@@ -70,17 +74,14 @@ function MarketClock() {
   if (!now) return <div className="topbar-clock" aria-hidden style={{ width: 188 }} />;
 
   const et = etParts(now);
-  const weekday = !["Sat", "Sun"].includes(et.weekday);
-  const mins = et.hour * 60 + et.minute;
-  const open = weekday && mins >= 570 && mins < 960; // 9:30–16:00 ET
-
-  // Seconds until the next 16:00 ET (today or tomorrow), from ET wall clock.
   const nowSec = et.hour * 3600 + et.minute * 60 + et.second;
-  const target = 16 * 3600;
-  const remaining = nowSec < target ? target - nowSec : 24 * 3600 - nowSec + target;
-  const hh = Math.floor(remaining / 3600);
-  const mm = Math.floor((remaining % 3600) / 60);
-  const ss = remaining % 60;
+  const { open, caption, remainingSeconds } = marketSession(
+    etWeekdayIndex(et.weekday),
+    nowSec,
+  );
+  const hh = Math.floor(remainingSeconds / 3600);
+  const mm = Math.floor((remainingSeconds % 3600) / 60);
+  const ss = remainingSeconds % 60;
 
   return (
     <div className="topbar-clock">
@@ -89,7 +90,7 @@ function MarketClock() {
         {open ? "Market open" : "Market closed"}
       </span>
       <span className="topbar-clock-text">
-        <span className="muted">Settles 4:00 PM ET</span>
+        <span className="muted">{caption}</span>
         <span className="mono topbar-countdown">
           {pad(hh)}:{pad(mm)}:{pad(ss)}
         </span>

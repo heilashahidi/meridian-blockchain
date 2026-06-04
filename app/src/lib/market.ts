@@ -19,7 +19,6 @@ export type Outcome = "yesWins" | "noWins" | null;
 export interface ConfigView {
   admin: PublicKey;
   usdcMint: PublicKey;
-  treasury: PublicKey;
   paused: boolean;
 }
 
@@ -29,7 +28,6 @@ export interface MarketView {
   strikePrice: bigint;
   expiryUnix: bigint;
   settled: boolean;
-  settledAt: bigint;
   outcome: Outcome;
   yesMint: PublicKey;
   noMint: PublicKey;
@@ -85,7 +83,6 @@ export async function fetchConfig(
   return {
     admin: c.admin,
     usdcMint: c.usdcMint,
-    treasury: c.treasury,
     paused: c.paused,
   };
 }
@@ -101,7 +98,6 @@ export async function listMarkets(
       strikePrice: big(account.strikePrice),
       expiryUnix: big(account.expiryUnix),
       settled: account.settled,
-      settledAt: big(account.settledAt),
       outcome: normalizeOutcome(account.outcome),
       yesMint: account.yesMint,
       noMint: account.noMint,
@@ -120,7 +116,6 @@ export async function fetchMarket(
     strikePrice: big(account.strikePrice),
     expiryUnix: big(account.expiryUnix),
     settled: account.settled,
-    settledAt: big(account.settledAt),
     outcome: normalizeOutcome(account.outcome),
     yesMint: account.yesMint,
     noMint: account.noMint,

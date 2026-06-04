@@ -10,7 +10,7 @@ import { redeem } from "@/lib/actions";
 import { fetchBalancesMany, fetchBooks, type BookView } from "@/lib/market";
 import { useMeridian } from "@/hooks/MeridianContext";
 import { DEMO_WALLET } from "@/lib/demoWallet";
-import { noFromYes, yesMidFraction } from "@/lib/marketsView";
+import { noFromYes, yesAskFraction } from "@/lib/marketsView";
 import {
   MINT_PAIR_LEG_BASIS,
   computePnl,
@@ -23,6 +23,7 @@ import {
   type PositionSide,
 } from "@/lib/pnl";
 import { useTx } from "@/hooks/useTx";
+import { formatError } from "@/lib/tx";
 
 const POLL_MS = 8000;
 
@@ -35,11 +36,12 @@ interface EnrichedHolding {
 }
 
 /**
- * Per-side current price ($0–$1 fraction) from the book mid: Yes uses the mid
- * directly, No uses 1 − mid. Null when there's no derivable mid.
+ * Per-side current price ($0–$1 fraction) from the book's best ask (PRD §209):
+ * Yes uses the Yes ask directly, No uses 1 − Yes ask. Null when there's no ask
+ * to price against.
  */
 function sidePriceFromBook(book: BookView | null, side: PositionSide): number | null {
-  const yes = yesMidFraction(book);
+  const yes = yesAskFraction(book);
   if (yes === null) return null;
   return side === "yes" ? yes : noFromYes(yes);
 }
@@ -57,6 +59,7 @@ export default function PortfolioPage() {
 
   const [enriched, setEnriched] = useState<EnrichedHolding[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [redeemingKey, setRedeemingKey] = useState<string | null>(null);
 
   // Stable signature of the market set so the effect only re-runs when it changes.
@@ -79,6 +82,7 @@ export default function PortfolioPage() {
       if (!eff || !config) {
         if (isCurrent()) {
           setEnriched([]);
+          setLoadError(null);
           setLoading(false);
         }
         return;
@@ -106,9 +110,9 @@ export default function PortfolioPage() {
           )) {
             const livePrice = sidePriceFromBook(book, side);
             // Entry-basis approximation (documented in lib/pnl.ts): we lack a
-            // per-fill ledger, so use the current book mid as the cost estimate;
-            // when no mid exists fall back to the exact mint-pair leg basis of
-            // $0.50. The "est." flag in the row marks the mid-based estimate.
+            // per-fill ledger, so use the current book price (best ask) as the
+            // cost estimate; when no ask exists fall back to the exact mint-pair
+            // leg basis of $0.50. The "est." flag in the row marks the estimate.
             const entryIsEstimate = livePrice !== null;
             const entryPrice = livePrice ?? MINT_PAIR_LEG_BASIS;
             rows.push({
@@ -121,7 +125,17 @@ export default function PortfolioPage() {
         }
         // Drop a stale or post-unmount response rather than clobbering fresher
         // state.
-        if (isCurrent()) setEnriched(rows);
+        if (isCurrent()) {
+          setEnriched(rows);
+          setLoadError(null);
+        }
+      } catch (e) {
+        // A failed read (RPC rate-limit, network blip) used to reject silently
+        // through the `void load(...)` call — leaving the page stuck on
+        // "Loading…" or a misleading "No open positions". Surface it instead;
+        // the next poll retries and clears it on success. Keep any positions
+        // already on screen rather than blanking them on a transient error.
+        if (isCurrent()) setLoadError(formatError(e));
       } finally {
         if (isCurrent()) setLoading(false);
       }
@@ -212,7 +226,7 @@ export default function PortfolioPage() {
         <p className="muted" style={{ margin: 0, maxWidth: 680 }}>
           {preview
             ? "Previewing a demo wallet's positions. Connect your wallet to see your own and redeem."
-            : "Your Yes/No positions across all markets. Value is marked to the book mid (settled markets to $1.00 / $0.00); entry basis is estimated from the live mid where no per-fill ledger exists."}
+            : "Your Yes/No positions across all markets. Value is marked to the book price — the best Yes ask (settled markets to $1.00 / $0.00); entry basis is estimated from the live price where no per-fill ledger exists."}
         </p>
       </header>
 
@@ -221,11 +235,28 @@ export default function PortfolioPage() {
       ) : enriched.length === 0 ? (
         loading ? (
           <p className="muted">Loading positions…</p>
+        ) : loadError ? (
+          <div className="panel" style={{ display: "grid", gap: 6 }}>
+            <div style={{ color: "var(--no)", fontWeight: 600 }}>
+              Couldn’t load your portfolio
+            </div>
+            <div className="muted" style={{ fontSize: 13 }}>
+              {loadError} — retrying automatically.
+            </div>
+          </div>
         ) : (
           <EmptyPositions />
         )
       ) : (
         <>
+          {loadError && (
+            <p
+              className="muted"
+              style={{ color: "var(--no)", fontSize: 12, marginBottom: 12 }}
+            >
+              Couldn’t refresh — showing last known positions. {loadError}
+            </p>
+          )}
           {/* Top summary: portfolio value + total P&L */}
           <div
             className="panel"

@@ -298,3 +298,73 @@ pub fn buy_no_handler<'info>(
 
     Ok(())
 }
+
+/// `buy_no_limit` — resting "Buy No" **limit** order (PRD §211).
+///
+/// Identical to [`buy_no_handler`] except the Yes leg is placed as a **limit**
+/// sell instead of a market sell: it crosses whatever resting bids sit at or
+/// above `min_yes_sell_price`, then **posts the unfilled remainder as a resting
+/// Yes ask** owned by the user (instead of reverting on a partial fill, the way
+/// the atomic `buy_no` does). The user keeps `amount` No immediately; the
+/// resting ask sits at `min_yes_sell_price` (= `$1 − the user's No price`) until
+/// a buyer crosses it, at which point the escrowed Yes is delivered and the
+/// user receives the USDC proceeds — a net No cost of `$1 − min_yes_sell_price`.
+///
+/// Because this rests, `min_yes_sell_price` is a real price in `(0, ONE]`, not
+/// the `1` "no floor" sentinel `buy_no` accepts — `place_order_inner` rejects a
+/// zero limit price, and the client always derives it as `ONE − noPrice`.
+///
+/// Cancelling the resting ask (via `cancel_order`) refunds the residual Yes to
+/// the user, leaving them holding a Yes/No pair they can `burn_pair` to reclaim
+/// the USDC. Reuses the [`BuyNo`] accounts struct (it still mints the pair).
+pub fn buy_no_limit_handler<'info>(
+    ctx: Context<'info, BuyNo<'info>>,
+    args: BuyNoArgs,
+) -> Result<()> {
+    require!(!ctx.accounts.config.paused, MeridianError::ProgramPaused);
+    require!(!ctx.accounts.market.settled, MeridianError::MarketSettled);
+    require!(args.amount > 0, MeridianError::InvalidAmount);
+
+    // -------- Leg 1: mint_pair(amount). --------
+    // User holds `amount` Yes + `amount` No; `amount` USDC sits in escrow.
+    super::mint_pair::mint_pair_inner(
+        &ctx.accounts.config,
+        &ctx.accounts.market,
+        &ctx.accounts.user_usdc,
+        &ctx.accounts.usdc_escrow,
+        &ctx.accounts.yes_mint,
+        &ctx.accounts.no_mint,
+        &ctx.accounts.user_yes,
+        &ctx.accounts.user_no,
+        &ctx.accounts.mint_authority,
+        &ctx.accounts.user,
+        &ctx.accounts.token_program,
+        args.amount,
+    )?;
+
+    // -------- Leg 2: place the Yes leg as a LIMIT ask. --------
+    // Crosses resting bids at/above `min_yes_sell_price`; the unfilled remainder
+    // posts as the user's resting Yes ask at that price. No full-fill assertion
+    // — resting the residual is the whole point of this path. The escrowed Yes
+    // backing the residual stays in `yes_escrow`, owned (by `OrderEntry.owner`)
+    // by the user, recoverable via `cancel_order`.
+    super::place_limit_order::place_order_inner(
+        &ctx.accounts.config,
+        &ctx.accounts.market,
+        &ctx.accounts.book,
+        &ctx.accounts.usdc_escrow,
+        &ctx.accounts.yes_escrow,
+        &ctx.accounts.user_usdc,
+        &ctx.accounts.user_yes,
+        &ctx.accounts.mint_authority,
+        &ctx.accounts.user,
+        &ctx.accounts.token_program,
+        ctx.remaining_accounts,
+        /* side_byte = Ask */ 1,
+        OrderType::Limit,
+        args.min_yes_sell_price,
+        args.amount,
+    )?;
+
+    Ok(())
+}

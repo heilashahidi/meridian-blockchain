@@ -176,6 +176,19 @@ pub mod meridian {
         instructions::buy_no::buy_no_handler(ctx, args)
     }
 
+    /// Resting "Buy No" **limit** order (PRD §211) — mint a Yes/No pair, then
+    /// post the Yes leg as a *limit* sell: cross whatever rests at/above
+    /// `min_yes_sell_price`, then rest the remainder as the user's Yes ask.
+    /// Unlike `buy_no` it never reverts on a partial fill; the user keeps
+    /// `amount` No and the unfilled Yes rests until a buyer crosses it (or they
+    /// cancel it via `cancel_order`). Reuses the `BuyNo` accounts.
+    pub fn buy_no_limit<'info>(
+        ctx: Context<'info, BuyNo<'info>>,
+        args: BuyNoArgs,
+    ) -> Result<()> {
+        instructions::buy_no::buy_no_limit_handler(ctx, args)
+    }
+
     /// Atomic "Sell No" — market-buy `amount` Yes, then burn the freshly
     /// bought Yes + a matching `amount` of the caller's existing No to
     /// reclaim `amount` USDC. Reverts atomically if the Yes buy leg can't

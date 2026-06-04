@@ -344,6 +344,29 @@ impl Env {
         try_submit(&mut self.fx.svm, ix, &[&kp])
     }
 
+    /// `buy_no_limit` — same shape and Ask-taker leg as `buy_no`, but the Yes
+    /// leg is a *limit* order: the unfilled remainder rests instead of
+    /// reverting. `min_yes_sell_price` doubles as the resting ask price.
+    fn buy_no_limit(
+        &mut self,
+        i: usize,
+        amount: u64,
+        min_yes_sell_price: u64,
+        maker_pairs: &[(Address, Address)],
+    ) -> Result<litesvm::types::TransactionMetadata, litesvm::types::FailedTransactionMetadata>
+    {
+        let args = meridian::BuyNoArgs {
+            amount,
+            min_yes_sell_price,
+        };
+        let mut data = Vec::new();
+        args.serialize(&mut data).unwrap();
+        let metas = self.trade_metas(i, /* taker_side=Ask */ 1, maker_pairs);
+        let ix = anchor_ix(MERIDIAN_PROGRAM_ID, "buy_no_limit", &data, metas);
+        let kp = self.users[i].kp.insecure_clone();
+        try_submit(&mut self.fx.svm, ix, &[&kp])
+    }
+
     fn sell_no(
         &mut self,
         i: usize,
@@ -555,6 +578,84 @@ fn buy_no_happy_path_full_fill() {
     let (y_post, n_post) = env.supplies();
     assert_eq!(y_post, n_post, "supply invariant after");
     assert_eq!(y_post - y_pre, 50, "exactly 50 Yes minted (A's mint_pair)");
+}
+
+#[test]
+fn buy_no_limit_rests_unfilled_residual() {
+    // PRD §211: a LIMIT Buy No crosses what it can, then rests the rest instead
+    // of reverting (the atomic `buy_no` would revert on this same book).
+    //
+    // Maker B bids 40 for only 20 Yes — not enough to fill A's 50. A calls
+    // buy_no_limit(50, ask=40): 20 cross B's bid, the remaining 30 rest as A's
+    // ask. A keeps all 50 No immediately.
+    let mut env = Env::new(2, 10_000);
+    env.place_limit(1, /* Bid */ 0, 40, 20, &[])
+        .expect("maker B posts a 20-lot bid");
+
+    let (y_pre, n_pre) = env.supplies();
+    assert_eq!(y_pre, n_pre, "supply invariant before");
+
+    let maker_pair = (env.users[1].usdc, env.users[1].yes);
+    env.buy_no_limit(0, 50, /* yes ask price */ 40, &[maker_pair])
+        .expect("buy_no_limit succeeds: residual rests, no revert");
+
+    let a = env.balances(0);
+    let b = env.balances(1);
+    assert_eq!(a.no, 50, "A holds all 50 No immediately");
+    assert_eq!(a.yes, 0, "A's Yes is sold (20) or escrowed in the resting ask (30)");
+    assert_eq!(a.usdc, 10_750, "A: 10_000 - 50(mint) + 800(20 @ 40 sold)");
+    assert_eq!(b.yes, 20, "B got 20 Yes from the crossed portion");
+    assert_eq!(b.no, 0, "B never minted No");
+
+    // A's mint USDC stays escrowed; the 30 unfilled Yes back the resting ask.
+    assert_eq!(env.usdc_escrow_amount(), 50, "A's mint_pair USDC remains escrowed");
+    assert_eq!(env.yes_escrow_amount(), 30, "30 Yes escrowed behind A's resting ask");
+
+    // Book: B's bid fully consumed; A now has a resting ask for 30 @ 40, owned by A.
+    let book = env.book();
+    assert_eq!(book.bids.len(), 0, "B's 20-lot bid fully consumed");
+    assert_eq!(book.asks.len(), 1, "A's residual rests as exactly one ask");
+    let ask = &book.asks.as_slice()[0];
+    assert_eq!(ask.qty, 30, "30 Yes resting");
+    assert_eq!(ask.key.price(), 40, "rests at A's chosen ask price");
+    assert_eq!(
+        ask.owner,
+        env.users[0].kp.pubkey().to_bytes(),
+        "resting ask is owned by A (cancellable / settles to A)"
+    );
+
+    let (y_post, n_post) = env.supplies();
+    assert_eq!(y_post, n_post, "supply invariant after");
+    assert_eq!(y_post - y_pre, 50, "exactly A's 50 pair minted");
+}
+
+#[test]
+fn buy_no_limit_full_rest_when_no_crossing_bids() {
+    // No resting bids at all: the atomic `buy_no` reverts here, but the LIMIT
+    // variant rests A's whole Yes leg and leaves A holding 50 No.
+    let mut env = Env::new(2, 10_000);
+    let (y_pre, _n_pre) = env.supplies();
+
+    env.buy_no_limit(0, 50, /* yes ask price */ 40, &[])
+        .expect("buy_no_limit rests the whole order when nothing crosses");
+
+    let a = env.balances(0);
+    assert_eq!(a.no, 50, "A holds 50 No");
+    assert_eq!(a.yes, 0, "A's 50 Yes are escrowed behind the resting ask");
+    assert_eq!(a.usdc, 9_950, "A: 10_000 - 50(mint), nothing sold yet");
+    assert_eq!(env.yes_escrow_amount(), 50, "all 50 Yes rest");
+    assert_eq!(env.usdc_escrow_amount(), 50, "A's mint_pair USDC escrowed");
+
+    let book = env.book();
+    assert_eq!(book.bids.len(), 0);
+    assert_eq!(book.asks.len(), 1, "one resting ask");
+    let ask = &book.asks.as_slice()[0];
+    assert_eq!(ask.qty, 50, "all 50 rest");
+    assert_eq!(ask.key.price(), 40);
+
+    let (y_post, n_post) = env.supplies();
+    assert_eq!(y_post, n_post, "supply invariant after");
+    assert_eq!(y_post - y_pre, 50);
 }
 
 #[test]

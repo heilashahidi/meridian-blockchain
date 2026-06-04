@@ -3,7 +3,7 @@
 import { useEffect, useMemo } from "react";
 import { PublicKey } from "@solana/web3.js";
 
-import { BothSidesBook } from "@/components/BothSidesBook";
+import { OrderBook } from "@/components/OrderBook";
 import { Countdown } from "@/components/Countdown";
 import { PositionGuard } from "@/components/PositionGuard";
 import { RedeemPanel } from "@/components/RedeemPanel";
@@ -13,7 +13,7 @@ import { tickerToString } from "@/lib/format";
 import { expiryEtLabel } from "@/lib/countdown";
 import { useMeridian } from "@/hooks/MeridianContext";
 import { distanceToStrike } from "@/lib/marketStats";
-import { yesMidFraction, strikeDollars } from "@/lib/marketsView";
+import { yesAskFraction, strikeDollars } from "@/lib/marketsView";
 import { usePrices } from "@/hooks/usePrices";
 
 function usd(n: number): string {
@@ -69,10 +69,10 @@ export default function TradeMarketPage({
   const strikeNum = m ? Number(m.strikePrice) / 1_000_000 : 0;
   const live = ticker ? prices[ticker] ?? null : null;
   const spot = live?.price ?? null;
-  const yesMid = onThisMarket ? yesMidFraction(book) : null;
+  const yesPrice = onThisMarket ? yesAskFraction(book) : null;
   const dist = distanceToStrike(spot, strikeNum);
 
-  const yesPct = yesMid !== null ? Math.round(yesMid * 100) : null;
+  const yesPct = yesPrice !== null ? Math.round(yesPrice * 100) : null;
   const noPct = yesPct !== null ? 100 - yesPct : null;
 
   return (
@@ -169,7 +169,7 @@ export default function TradeMarketPage({
 
           {/* Implied-probability bar — the price IS the probability. */}
           <div style={{ display: "grid", gap: 8 }}>
-            {yesMid !== null ? (
+            {yesPrice !== null ? (
               <>
                 <div
                   style={{
@@ -183,7 +183,7 @@ export default function TradeMarketPage({
                   <span style={{ color: "var(--no)" }}>No {noPct}%</span>
                 </div>
                 <div className="prob-bar">
-                  <span className="prob-yes" style={{ width: `${yesMid * 100}%` }} />
+                  <span className="prob-yes" style={{ width: `${yesPrice * 100}%` }} />
                 </div>
               </>
             ) : (
@@ -203,7 +203,7 @@ export default function TradeMarketPage({
           alignItems: "start",
         }}
       >
-        <BothSidesBook book={onThisMarket ? book : null} />
+        <OrderBook book={onThisMarket ? book : null} />
 
         <div style={{ display: "grid", gap: 16 }}>
           <PositionGuard balances={onThisMarket ? balances : null} />

@@ -12,7 +12,7 @@ import {
   noFromYes,
   strikeDollars,
   tradeHref,
-  yesMidFraction,
+  yesAskFraction,
 } from "@/lib/marketsView";
 import { distanceToStrike } from "@/lib/marketStats";
 import { contractsFromBaseUnits } from "@/lib/pnl";
@@ -41,18 +41,18 @@ function StatCard({
   ticker,
   name,
   market,
-  yesMid,
+  yesPrice,
   spot,
 }: {
   ticker: string;
   name: string;
   market: MarketView | null;
-  yesMid: number | null;
+  yesPrice: number | null;
   spot: number | null;
 }) {
   const strikeNum = market ? Number(market.strikePrice) / 1_000_000 : 0;
   const dist = market ? distanceToStrike(spot, strikeNum) : null;
-  const yesW = yesMid !== null ? Math.round(yesMid * 100) : 0;
+  const yesW = yesPrice !== null ? Math.round(yesPrice * 100) : 0;
   const inner = (
     <>
       <div className="stat-card-head">
@@ -72,7 +72,7 @@ function StatCard({
             Will close above <span className="mono">${strikeDollars(market.strikePrice)}</span>?
           </div>
           <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 6 }}>
-            <span className="mono" style={{ fontSize: 30, fontWeight: 800, color: yesMid !== null ? "var(--yes)" : "var(--muted)" }}>{pct(yesMid)}</span>
+            <span className="mono" style={{ fontSize: 30, fontWeight: 800, color: yesPrice !== null ? "var(--yes)" : "var(--muted)" }}>{pct(yesPrice)}</span>
             <span className="muted" style={{ fontSize: 11 }}>Yes implied</span>
           </div>
           <div className="prob-bar" style={{ margin: "8px 0 10px" }}>
@@ -250,7 +250,7 @@ function PortfolioPanel({ active, books }: { active: MarketView[]; books: Record
         usdc = Number(bals.usdc) / 1_000_000; // same wallet USDC across markets
         const yes = contractsFromBaseUnits(bals.yes);
         const no = contractsFromBaseUnits(bals.no);
-        const ym = yesMidFraction(books[m.pubkey.toBase58()] ?? null);
+        const ym = yesAskFraction(books[m.pubkey.toBase58()] ?? null);
         if (ym !== null) { posVal += yes * ym + no * (1 - ym); }
         if (yes > 0 || no > 0) posCount++;
       }
@@ -351,6 +351,7 @@ function InsightsPanel({ items, onAsk }: { items: { ticker: string; text: string
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [busy, setBusy] = useState(false);
   const idRef = useRef(0);
+  const listRef = useRef<HTMLDivElement>(null);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -360,10 +361,12 @@ function InsightsPanel({ items, onAsk }: { items: { ticker: string; text: string
     setBusy(true);
     const time = etTime();
     const ansId = ++idRef.current;
+    // Append in reading order — the question then its pending answer — so the
+    // newest turn lands at the bottom of the list, right above the input box.
     setChat((c) => [
+      ...c,
       { id: ++idRef.current, ticker: "YOU", text: query, time },
       { id: ansId, ticker: "MERIDIAN", text: "…", time },
-      ...c,
     ]);
     let answer = "";
     try {
@@ -374,14 +377,22 @@ function InsightsPanel({ items, onAsk }: { items: { ticker: string; text: string
     }
   };
 
+  // Keep the latest message in view as the conversation grows / the answer fills in.
+  useEffect(() => {
+    const el = listRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chat]);
+
+  // Ambient live insights sit at the top as context; the conversation grows
+  // chronologically below them (oldest first, newest at the bottom).
   const live = items.map((it, i) => ({ id: -1 - i, ...it, time: etTime() }));
-  const all = [...chat, ...live];
+  const all = [...live, ...chat];
   return (
     <aside className="panel dash-insights">
       <div className="dash-aside-head">
         <h3 style={{ fontSize: 15 }}>⚡ Market insights</h3>
       </div>
-      <div className="dash-insights-list">
+      <div className="dash-insights-list" ref={listRef}>
         {all.length === 0 ? (
           <p className="muted" style={{ fontSize: 13 }}>Insights appear here once markets are live.</p>
         ) : (
@@ -474,21 +485,21 @@ function DashboardInner() {
   const tickerName = useMemo(() => Object.fromEntries(MAG7.map((f) => [f.ticker, f.name])), []);
   const byTicker = useMemo(() => Object.fromEntries(groups.map((g) => [g.ticker, g])), [groups]);
   const tickerOf = (m: MarketView) => groups.find((g) => g.active.includes(m))?.ticker ?? "";
-  const yesMidOf = (m: MarketView) => yesMidFraction(books[m.pubkey.toBase58()] ?? null);
+  const yesPriceOf = (m: MarketView) => yesAskFraction(books[m.pubkey.toBase58()] ?? null);
   const spotOf = (t: string) => prices[t]?.price ?? null;
 
   // Stat cards: the market nearest a coin-flip for each stock, one card per
   // company (so no ticker repeats), the four closest to 50/50 first, padded to
   // 4 with MAG7 stocks that have no market yet (spot-only).
   const statCards = useMemo(() => {
-    const flip = (m: MarketView) => Math.abs((yesMidOf(m) ?? 0.5) - 0.5);
+    const flip = (m: MarketView) => Math.abs((yesPriceOf(m) ?? 0.5) - 0.5);
     // Pick each ticker's single nearest-coin-flip market. Only markets with a
-    // derivable book mid are eligible: an unpriced market (no bid or no ask)
-    // has yesMid === null, and treating null as 0.5 would make it look like a
-    // *perfect* coin-flip and sort it to the very front — surfacing blank cards.
+    // quotable price are eligible: a market with no ask has yesPrice === null,
+    // and treating null as 0.5 would make it look like a *perfect* coin-flip and
+    // sort it to the very front — surfacing blank cards.
     const bestPerTicker = new Map<string, MarketView>();
     for (const m of active) {
-      if (yesMidOf(m) === null) continue; // skip unpriced — never feature a blank
+      if (yesPriceOf(m) === null) continue; // skip unpriced — never feature a blank
       const t = tickerOf(m);
       const cur = bestPerTicker.get(t);
       if (!cur || flip(m) < flip(cur)) bestPerTicker.set(t, m);
@@ -510,7 +521,7 @@ function DashboardInner() {
     const out: { ticker: string; text: string }[] = [];
     for (const m of active) {
       const t = tickerOf(m);
-      const ym = yesMidOf(m);
+      const ym = yesPriceOf(m);
       const spot = spotOf(t);
       const strikeNum = Number(m.strikePrice) / 1_000_000;
       const dist = distanceToStrike(spot, strikeNum);
@@ -536,7 +547,7 @@ function DashboardInner() {
             const t = tickerOf(m);
             const s = spotOf(t);
             const dist = distanceToStrike(s, Number(m.strikePrice) / 1_000_000);
-            return `${t} > $${strikeDollars(m.strikePrice)} | Yes ${pct(yesMidOf(m))} | spot ${s !== null ? `$${usd(s)}` : "n/a"}${dist ? ` | ${dist.aboveStrike ? "+" : "−"}$${usd(Math.abs(dist.delta))} vs strike` : ""}`;
+            return `${t} > $${strikeDollars(m.strikePrice)} | Yes ${pct(yesPriceOf(m))} | spot ${s !== null ? `$${usd(s)}` : "n/a"}${dist ? ` | ${dist.aboveStrike ? "+" : "−"}$${usd(Math.abs(dist.delta))} vs strike` : ""}`;
           })
           .join("\n");
 
@@ -552,7 +563,7 @@ function DashboardInner() {
     const m = mkts[0];
     const s = spotOf(t);
     const dist = distanceToStrike(s, Number(m.strikePrice) / 1_000_000);
-    return `${t} > $${strikeDollars(m.strikePrice)}: Yes implied ${pct(yesMidOf(m))}${s !== null ? `, spot $${usd(s)}` : ""}${dist ? ` (${dist.aboveStrike ? "+" : "−"}$${usd(Math.abs(dist.delta))} vs strike)` : ""}. Settles at the 4:00 PM ET close.`;
+    return `${t} > $${strikeDollars(m.strikePrice)}: Yes implied ${pct(yesPriceOf(m))}${s !== null ? `, spot $${usd(s)}` : ""}${dist ? ` (${dist.aboveStrike ? "+" : "−"}$${usd(Math.abs(dist.delta))} vs strike)` : ""}. Settles at the 4:00 PM ET close.`;
   };
 
   // Chat: ask Claude (server route, grounded in live data); fall back to the
@@ -602,7 +613,7 @@ function DashboardInner() {
         {(() => {
           // Per-company strike count under the current moneyness filter.
           const shownCount = (t: string) =>
-            (byTicker[t]?.active ?? []).filter((m) => passesFilter(yesMidOf(m), filter)).length;
+            (byTicker[t]?.active ?? []).filter((m) => passesFilter(yesPriceOf(m), filter)).length;
           const available = MAG7.filter((f) => shownCount(f.ticker) > 0);
           if (available.length === 0) {
             return <p className="muted" style={{ fontSize: 13 }}>No active markets yet — the morning job creates the day&apos;s strikes.</p>;
@@ -664,7 +675,7 @@ function DashboardInner() {
       {/* Row 2 — stat cards */}
       <div className="stat-card-grid">
         {statCards.map((c) => (
-          <StatCard key={c.ticker} ticker={c.ticker} name={tickerName[c.ticker] ?? ""} market={c.market} yesMid={c.market ? yesMidOf(c.market) : null} spot={spotOf(c.ticker)} />
+          <StatCard key={c.ticker} ticker={c.ticker} name={tickerName[c.ticker] ?? ""} market={c.market} yesPrice={c.market ? yesPriceOf(c.market) : null} spot={spotOf(c.ticker)} />
         ))}
       </div>
 

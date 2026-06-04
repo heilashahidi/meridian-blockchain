@@ -319,6 +319,47 @@ export async function buyNo(args: BuyNoArgs): Promise<string> {
     .rpc();
 }
 
+/**
+ * Buy No (limit / resting) — `buy_no_limit`: mint a Yes/No pair, then place the
+ * Yes leg as a **limit** sell at `minYesSellPrice` (= `1_000_000 − noPrice`).
+ * It crosses whatever resting bids sit at/above that price and **rests the
+ * remainder** as the user's Yes ask, instead of reverting on a partial fill
+ * (PRD §211). Same accounts and maker remaining-accounts as `buyNo` (the
+ * crossing portion still pays makers Yes); the residual just rests. The user
+ * keeps `amount` No immediately and receives USDC as the ask fills.
+ */
+export async function buyNoLimit(args: BuyNoArgs): Promise<string> {
+  const { program, connection, market, usdcMint, user, amount, minYesSellPrice } =
+    args;
+  const book = await fetchBook(program, market.pubkey);
+  const plan = planFills(
+    book.bids,
+    SIDE_ASK,
+    BigInt(minYesSellPrice),
+    BigInt(amount),
+  );
+  const remaining = remainingAccountsFor(
+    plan.fills,
+    SIDE_ASK,
+    usdcMint,
+    market.yesMint,
+  );
+  const preIxs = await ensureAtaIxs(connection, user, user, [
+    usdcMint,
+    market.yesMint,
+    market.noMint,
+  ]);
+  return program.methods
+    .buyNoLimit({
+      amount: new BN(amount.toString()),
+      minYesSellPrice: new BN(minYesSellPrice.toString()),
+    })
+    .accounts(noTradeAccounts(market, usdcMint, user))
+    .remainingAccounts(remaining)
+    .preInstructions(preIxs)
+    .rpc();
+}
+
 interface SellNoArgs {
   program: MeridianProgram;
   connection: Connection;
