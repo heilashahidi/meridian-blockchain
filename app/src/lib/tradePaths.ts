@@ -59,6 +59,7 @@ export type TradeInstruction =
   | "placeLimitOrder"
   | "placeMarketOrder"
   | "buyNo"
+  | "buyNoLimit"
   | "sellNo";
 
 export interface TradePathInput {
@@ -70,7 +71,12 @@ export interface TradePathInput {
   price: bigint;
   /** Quantity in Yes/No base units (a Yes/No pair shares one base unit). */
   qty: bigint;
-  /** Only meaningful for the Yes paths; No paths are always market (atomic). */
+  /**
+   * Yes paths: "limit" rests / "market" takes. Buy No honours it too —
+   * "limit" rests the Yes leg (`buy_no_limit`, PRD §211), "market" is the
+   * atomic `buy_no`. Sell No is always market (atomic); a resting Sell No would
+   * need burn-on-fill matching that doesn't exist. Defaults to "market".
+   */
   orderType?: OrderType;
 }
 
@@ -189,12 +195,15 @@ export function resolveTradePath(input: TradePathInput): TradePath {
     }
 
     case "buyNo": {
-      // Buy No @ noPrice → mint pair, market-SELL the Yes leg (Ask taker) with
-      // a floor of `ONE − noPrice`. The Yes leg crosses the *bid* side.
+      // Buy No @ noPrice → mint pair, SELL the Yes leg (Ask taker) at a price of
+      // `ONE − noPrice`. The Yes leg crosses the *bid* side. "market" is the
+      // atomic `buy_no` (must fully fill); "limit" is `buy_no_limit` (PRD §211):
+      // cross what it can, then rest the remaining Yes ask at that price.
       assertNoPrice(price);
       const minYesSellPrice = yesPriceFromNo(price);
+      const orderType = input.orderType ?? "market";
       return {
-        instruction: "buyNo",
+        instruction: orderType === "limit" ? "buyNoLimit" : "buyNo",
         side: SIDE_ASK,
         yesLegPrice: minYesSellPrice,
         args: { amount: qty, minYesSellPrice },

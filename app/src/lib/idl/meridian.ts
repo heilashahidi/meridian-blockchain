@@ -902,6 +902,304 @@ export type Meridian = {
       ]
     },
     {
+      "name": "buyNoLimit",
+      "docs": [
+        "Resting Buy No limit order (PRD 211) - mint a pair, then post the Yes leg as a limit sell that rests its unfilled remainder."
+      ],
+      "discriminator": [
+        83,
+        53,
+        56,
+        97,
+        196,
+        15,
+        26,
+        198
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "docs": [
+            "Caller. Pays USDC, ends holding No tokens."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "Global config — paused flag + canonical USDC mint."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "docs": [
+            "Market the trade is against. `has_one` checks pin the Yes / No",
+            "mints stored on `Market` to the accounts the user passes."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.ticker",
+                "account": "market"
+              },
+              {
+                "kind": "account",
+                "path": "market.strike_price",
+                "account": "market"
+              },
+              {
+                "kind": "account",
+                "path": "market.expiry_unix",
+                "account": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "book",
+          "docs": [
+            "Zero-copy `Book` account for the market. Mutated by the market-sell",
+            "leg via `place_order_inner`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdcEscrow",
+          "docs": [
+            "USDC escrow PDA — receives the `amount` USDC from `mint_pair_inner`,",
+            "sources the per-fill USDC payouts to makers in `place_order_inner`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  100,
+                  99,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "yesEscrow",
+          "docs": [
+            "Yes escrow PDA — receives the minted Yes from the taker's",
+            "up-front lock in `place_order_inner`, sourced out to makers per fill."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  121,
+                  101,
+                  115,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "yesMint",
+          "docs": [
+            "Yes mint — `mint::authority = mint_authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  121,
+                  101,
+                  115,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          },
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "noMint",
+          "docs": [
+            "No mint — `mint::authority = mint_authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  110,
+                  111,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          },
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "userUsdc",
+          "docs": [
+            "User's USDC source ATA — pays the `amount` USDC for `mint_pair`."
+          ],
+          "writable": true
+        },
+        {
+          "name": "userYes",
+          "docs": [
+            "User's Yes ATA. Receives the minted Yes (then immediately drained",
+            "into the Yes escrow by the market-sell up-front lock)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "userNo",
+          "docs": [
+            "User's No ATA. Receives the minted No (the user's keepsake from",
+            "this whole flow)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "mintAuthority",
+          "docs": [
+            "in both the mint_pair leg and the place_order leg."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "tokenProgram",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "buyNoArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
       "name": "cancelOrder",
       "docs": [
         "Cancel a resting order by its stable [`matching::OrderKey`] `(price,",

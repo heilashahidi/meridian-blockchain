@@ -121,6 +121,22 @@ describe("resolveTradePath — Buy No → buy_no (atomic mint-pair + sell Yes)",
     const p = resolveTradePath({ action: "buyNo", price: 620_000n, qty: 1n });
     expect(p.args).toEqual({ amount: 1n, minYesSellPrice: 380_000n });
   });
+
+  it("defaults to the atomic buy_no when no orderType is given", () => {
+    expect(resolveTradePath({ action: "buyNo", price: 400_000n, qty: 100n }).instruction).toBe("buyNo");
+    expect(
+      resolveTradePath({ action: "buyNo", price: 400_000n, qty: 100n, orderType: "market" }).instruction,
+    ).toBe("buyNo");
+  });
+
+  it("orderType 'limit' routes to buy_no_limit (resting) with the same side/args (PRD §211)", () => {
+    const p = resolveTradePath({ action: "buyNo", price: 400_000n, qty: 100n, orderType: "limit" });
+    expect(p.instruction).toBe("buyNoLimit");
+    // Same Yes-leg as the atomic path — only the resting behaviour differs.
+    expect(p.side).toBe(SIDE_ASK);
+    expect(p.args).toEqual({ amount: 100n, minYesSellPrice: 600_000n });
+    expect(p.yesLegPrice).toBe(600_000n);
+  });
 });
 
 describe("resolveTradePath — Sell No → sell_no (atomic buy Yes + burn pair)", () => {

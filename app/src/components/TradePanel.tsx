@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 
-import { buyNo, placeLimitOrder, placeMarketOrder, sellNo } from "@/lib/actions";
+import { buyNo, buyNoLimit, placeLimitOrder, placeMarketOrder, sellNo } from "@/lib/actions";
 import { Payoff } from "@/components/Payoff";
 import { useMeridian } from "@/hooks/MeridianContext";
 import { planFills, SIDE_BID } from "@/lib/matching";
@@ -13,6 +13,7 @@ import {
   ONE_USDC,
   positionGuardDecision,
   resolveTradePath,
+  type OrderType,
   type TradeAction,
 } from "@/lib/tradePaths";
 import { useTx } from "@/hooks/useTx";
@@ -40,7 +41,6 @@ const ACTIONS: { key: TradeAction; label: string; tone: "yes" | "no" }[] = [
 ];
 
 const isNoAction = (a: TradeAction) => a === "buyNo" || a === "sellNo";
-const isBuy = (a: TradeAction) => a === "buyYes" || a === "buyNo";
 
 /**
  * The four trade paths (Buy/Sell × Yes/No), each a single wallet approval. The
@@ -56,12 +56,19 @@ export function TradePanel() {
   const [action, setAction] = useState<TradeAction>("buyYes");
   const [price, setPrice] = useState("0.50");
   const [qty, setQty] = useState("100");
+  // Buy No can rest (limit) or take liquidity now (market). Yes paths always
+  // rest as a limit; Sell No is always atomic (a resting Sell No would need
+  // burn-on-fill matching that the engine doesn't have).
+  const [buyNoMode, setBuyNoMode] = useState<OrderType>("market");
 
   const ready = !!market && !!config && !!book && !!walletPubkey;
   const priceMicro = dollarsToMicro(price);
   const qtyN = Number(qty);
   const qtyValid = Number.isInteger(qtyN) && qtyN > 0;
   const inputValid = priceMicro !== null && qtyValid;
+
+  const orderType: OrderType =
+    action === "buyNo" ? buyNoMode : action === "sellNo" ? "market" : "limit";
 
   // Position guard (PRD §142–144). With no balances yet (wallet/loading), allow.
   const guard = useMemo(
@@ -78,23 +85,25 @@ export function TradePanel() {
       action,
       price: priceMicro!,
       qty: BigInt(qtyN),
-      orderType: "limit",
+      orderType,
     });
     // The taker matches the opposing side of its Yes-leg side.
     const opposing =
       path.side === SIDE_BID ? book.asks : book.bids;
     return planFills(opposing, path.side, path.yesLegPrice, BigInt(qtyN));
-  }, [ready, inputValid, book, action, priceMicro, qtyN]);
+  }, [ready, inputValid, book, action, priceMicro, qtyN, orderType]);
 
   const fillQty = preview ? preview.fills.reduce((a, f) => a + f.qty, 0n) : 0n;
 
-  // Buy No / Sell No are atomic on-chain (mint-and-sell or buy-and-burn the Yes
-  // leg in one tx) and must fill in full or the whole order reverts with
-  // "could not fully fill within slippage bound". When the live preview shows
-  // they can't fully fill, block the submit here and explain — far better than
-  // letting the user sign a transaction that's guaranteed to revert.
+  // Only *atomic* No orders must fill in full or revert with "could not fully
+  // fill within slippage bound": market Buy No (mint-and-sell) and Sell No
+  // (buy-and-burn). A Buy No *limit* rests its residual on the book, so it's
+  // never blocked. When the live preview shows an atomic No can't fully fill,
+  // block the submit and explain — far better than signing a guaranteed revert.
+  const isAtomicNo =
+    (action === "buyNo" && orderType === "market") || action === "sellNo";
   const cannotFullyFill =
-    isNoAction(action) && inputValid && (!preview || preview.residual > 0n);
+    isAtomicNo && inputValid && (!preview || preview.residual > 0n);
 
   async function submit() {
     // Guard the async gap so a rapid double-click can't fire two submits.
@@ -103,9 +112,7 @@ export function TradePanel() {
       action,
       price: priceMicro!,
       qty: BigInt(qtyN),
-      // Yes paths default to a limit order so a non-crossing order rests; No
-      // paths are inherently market (atomic) on-chain.
-      orderType: "limit",
+      orderType,
     });
     await run(async () => {
       const common = {
@@ -138,6 +145,11 @@ export function TradePanel() {
         case "buyNo": {
           const a = path.args as { amount: bigint; minYesSellPrice: bigint };
           await buyNo({ ...common, amount: a.amount, minYesSellPrice: a.minYesSellPrice });
+          break;
+        }
+        case "buyNoLimit": {
+          const a = path.args as { amount: bigint; minYesSellPrice: bigint };
+          await buyNoLimit({ ...common, amount: a.amount, minYesSellPrice: a.minYesSellPrice });
           break;
         }
         case "sellNo": {
@@ -188,6 +200,32 @@ export function TradePanel() {
           );
         })}
       </div>
+
+      {/* Order type — only Buy No can choose to rest (limit) vs take (market). */}
+      {action === "buyNo" && (
+        <div style={{ display: "grid", gap: 4 }}>
+          <span className="stat-label">Order type</span>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {(["market", "limit"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                className="seg"
+                onClick={() => setBuyNoMode(m)}
+                data-active={buyNoMode === m ? "no" : undefined}
+                aria-label={`buyNo-${m}`}
+              >
+                {m === "market" ? "Market" : "Limit"}
+              </button>
+            ))}
+          </div>
+          <span className="muted" style={{ fontSize: 11 }}>
+            {buyNoMode === "market"
+              ? "Fills now against resting bids; blocked if it can’t fill in full."
+              : "Fills what it can now, then rests the remainder at your price until a buyer crosses it."}
+          </span>
+        </div>
+      )}
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
         <label style={{ display: "grid", gap: 4 }}>
@@ -269,21 +307,22 @@ export function TradePanel() {
 
       {gate.allowed && cannotFullyFill && (
         <div style={{ color: "var(--no)", fontSize: 13 }}>
-          Not enough resting liquidity to fill this {submitLabel} in full at
-          {" "}${price}. {sideLabel} orders settle atomically, so a partial fill
-          would revert — wait for a quote, or adjust the price or size.
+          Not enough resting liquidity to fill this {submitLabel} in full at ${price}.{" "}
+          {action === "buyNo"
+            ? "Switch to a Limit order to rest the unfilled part on the book, or adjust the price or size."
+            : "Sell No settles atomically, so a partial fill would revert — wait for a quote, or adjust the price or size."}
         </div>
       )}
 
       {preview && gate.allowed && !cannotFullyFill && (
         <div className="muted" style={{ fontSize: 12 }}>
           {preview.fills.length === 0
-            ? isBuy(action) && !isNoAction(action)
-              ? "rests on the book (no cross)"
-              : "no crossing liquidity at this price"
+            ? isAtomicNo
+              ? "no crossing liquidity at this price"
+              : "rests on the book (no cross)"
             : `crosses ${preview.fills.length} order(s), fills ${fillQty.toString()}` +
               (preview.residual > 0n
-                ? isNoAction(action)
+                ? isAtomicNo
                   ? `, ${preview.residual.toString()} unfilled (atomic — reverts if not full)`
                   : `, ${preview.residual.toString()} rests`
                 : "")}

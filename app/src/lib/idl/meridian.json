@@ -4,13 +4,13 @@
     "name": "meridian",
     "version": "0.3.0",
     "spec": "0.1.0",
-    "description": "Meridian on-chain CLOB for binary outcome markets — Anchor program wrapping a pure-Rust matching engine."
+    "description": "Meridian on-chain CLOB for binary outcome markets \u2014 Anchor program wrapping a pure-Rust matching engine."
   },
   "docs": [
     "U3 wired `initialize_config` and `create_strike_market`. U4 adds",
     "`mint_pair` and `burn_pair`. U5 adds `place_limit_order`,",
     "`place_market_order`, `cancel_order`. U6 adds `buy_no` and",
-    "`sell_no` — the atomic single-tx Buy-No / Sell-No trade paths.",
+    "`sell_no` \u2014 the atomic single-tx Buy-No / Sell-No trade paths.",
     "U7 adds the remaining instructions (settle/redeem)."
   ],
   "instructions": [
@@ -290,7 +290,7 @@
         {
           "name": "config",
           "docs": [
-            "Singleton Config — authenticates the admin. Boxed for stack hygiene",
+            "Singleton Config \u2014 authenticates the admin. Boxed for stack hygiene",
             "(same reason as `settle_market`)."
           ],
           "pda": {
@@ -374,7 +374,7 @@
         {
           "name": "user",
           "docs": [
-            "Caller — pays Yes + No, receives USDC."
+            "Caller \u2014 pays Yes + No, receives USDC."
           ],
           "writable": true,
           "signer": true
@@ -382,7 +382,7 @@
         {
           "name": "config",
           "docs": [
-            "Global config — read-only here; we only need the pause flag + the",
+            "Global config \u2014 read-only here; we only need the pause flag + the",
             "pinned USDC mint for the user's source/escrow constraints."
           ],
           "pda": {
@@ -441,7 +441,7 @@
         {
           "name": "user_usdc",
           "docs": [
-            "User's USDC ATA — receives the returned `amount` USDC."
+            "User's USDC ATA \u2014 receives the returned `amount` USDC."
           ],
           "writable": true
         },
@@ -480,7 +480,7 @@
         {
           "name": "yes_mint",
           "docs": [
-            "Yes mint — supply decreases by `amount`."
+            "Yes mint \u2014 supply decreases by `amount`."
           ],
           "writable": true,
           "pda": {
@@ -511,7 +511,7 @@
         {
           "name": "no_mint",
           "docs": [
-            "No mint — supply decreases by `amount`."
+            "No mint \u2014 supply decreases by `amount`."
           ],
           "writable": true,
           "pda": {
@@ -541,7 +541,7 @@
         {
           "name": "user_yes",
           "docs": [
-            "User's Yes ATA. Constraint requires balance ≥ amount — surfaces the",
+            "User's Yes ATA. Constraint requires balance \u2265 amount \u2014 surfaces the",
             "shortfall as a clean Anchor error rather than letting the burn CPI",
             "fail deep in the token program."
           ],
@@ -557,7 +557,7 @@
         {
           "name": "mint_authority",
           "docs": [
-            "the USDC escrow → user transfer."
+            "the USDC escrow \u2192 user transfer."
           ],
           "pda": {
             "seeds": [
@@ -597,7 +597,7 @@
     {
       "name": "buy_no",
       "docs": [
-        "Atomic \"Buy No\" — mint a Yes/No pair against USDC, then market-sell",
+        "Atomic \"Buy No\" \u2014 mint a Yes/No pair against USDC, then market-sell",
         "the Yes leg in the same tx. User ends holding `amount` No tokens",
         "+ USDC proceeds from the Yes sale. Reverts atomically if the Yes",
         "sell leg can't fill the full `amount` within `min_yes_sell_price`."
@@ -624,7 +624,7 @@
         {
           "name": "config",
           "docs": [
-            "Global config — paused flag + canonical USDC mint."
+            "Global config \u2014 paused flag + canonical USDC mint."
           ],
           "pda": {
             "seeds": [
@@ -707,7 +707,7 @@
         {
           "name": "usdc_escrow",
           "docs": [
-            "USDC escrow PDA — receives the `amount` USDC from `mint_pair_inner`,",
+            "USDC escrow PDA \u2014 receives the `amount` USDC from `mint_pair_inner`,",
             "sources the per-fill USDC payouts to makers in `place_order_inner`."
           ],
           "writable": true,
@@ -739,7 +739,7 @@
         {
           "name": "yes_escrow",
           "docs": [
-            "Yes escrow PDA — receives the minted Yes from the taker's",
+            "Yes escrow PDA \u2014 receives the minted Yes from the taker's",
             "up-front lock in `place_order_inner`, sourced out to makers per fill."
           ],
           "writable": true,
@@ -770,7 +770,7 @@
         {
           "name": "yes_mint",
           "docs": [
-            "Yes mint — `mint::authority = mint_authority`."
+            "Yes mint \u2014 `mint::authority = mint_authority`."
           ],
           "writable": true,
           "pda": {
@@ -801,7 +801,7 @@
         {
           "name": "no_mint",
           "docs": [
-            "No mint — `mint::authority = mint_authority`."
+            "No mint \u2014 `mint::authority = mint_authority`."
           ],
           "writable": true,
           "pda": {
@@ -831,7 +831,305 @@
         {
           "name": "user_usdc",
           "docs": [
-            "User's USDC source ATA — pays the `amount` USDC for `mint_pair`."
+            "User's USDC source ATA \u2014 pays the `amount` USDC for `mint_pair`."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_yes",
+          "docs": [
+            "User's Yes ATA. Receives the minted Yes (then immediately drained",
+            "into the Yes escrow by the market-sell up-front lock)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "user_no",
+          "docs": [
+            "User's No ATA. Receives the minted No (the user's keepsake from",
+            "this whole flow)."
+          ],
+          "writable": true
+        },
+        {
+          "name": "mint_authority",
+          "docs": [
+            "in both the mint_pair leg and the place_order leg."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  105,
+                  110,
+                  116,
+                  95,
+                  97,
+                  117,
+                  116,
+                  104
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "token_program",
+          "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+        }
+      ],
+      "args": [
+        {
+          "name": "args",
+          "type": {
+            "defined": {
+              "name": "BuyNoArgs"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "buy_no_limit",
+      "docs": [
+        "Resting \"Buy No\" limit order (PRD 211) - mint a pair, then post the Yes leg as a limit sell that rests its unfilled remainder."
+      ],
+      "discriminator": [
+        83,
+        53,
+        56,
+        97,
+        196,
+        15,
+        26,
+        198
+      ],
+      "accounts": [
+        {
+          "name": "user",
+          "docs": [
+            "Caller. Pays USDC, ends holding No tokens."
+          ],
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "config",
+          "docs": [
+            "Global config \u2014 paused flag + canonical USDC mint."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  99,
+                  111,
+                  110,
+                  102,
+                  105,
+                  103
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "name": "market",
+          "docs": [
+            "Market the trade is against. `has_one` checks pin the Yes / No",
+            "mints stored on `Market` to the accounts the user passes."
+          ],
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  109,
+                  97,
+                  114,
+                  107,
+                  101,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market.ticker",
+                "account": "Market"
+              },
+              {
+                "kind": "account",
+                "path": "market.strike_price",
+                "account": "Market"
+              },
+              {
+                "kind": "account",
+                "path": "market.expiry_unix",
+                "account": "Market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "book",
+          "docs": [
+            "Zero-copy `Book` account for the market. Mutated by the market-sell",
+            "leg via `place_order_inner`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  98,
+                  111,
+                  111,
+                  107
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "usdc_escrow",
+          "docs": [
+            "USDC escrow PDA \u2014 receives the `amount` USDC from `mint_pair_inner`,",
+            "sources the per-fill USDC payouts to makers in `place_order_inner`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  117,
+                  115,
+                  100,
+                  99,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "yes_escrow",
+          "docs": [
+            "Yes escrow PDA \u2014 receives the minted Yes from the taker's",
+            "up-front lock in `place_order_inner`, sourced out to makers per fill."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  121,
+                  101,
+                  115,
+                  95,
+                  101,
+                  115,
+                  99,
+                  114,
+                  111,
+                  119
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          }
+        },
+        {
+          "name": "yes_mint",
+          "docs": [
+            "Yes mint \u2014 `mint::authority = mint_authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  121,
+                  101,
+                  115,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          },
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "no_mint",
+          "docs": [
+            "No mint \u2014 `mint::authority = mint_authority`."
+          ],
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  110,
+                  111,
+                  95,
+                  109,
+                  105,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "market"
+              }
+            ]
+          },
+          "relations": [
+            "market"
+          ]
+        },
+        {
+          "name": "user_usdc",
+          "docs": [
+            "User's USDC source ATA \u2014 pays the `amount` USDC for `mint_pair`."
           ],
           "writable": true
         },
@@ -1167,7 +1465,7 @@
         {
           "name": "config",
           "docs": [
-            "Global config — used only to authenticate the admin. Boxed so the",
+            "Global config \u2014 used only to authenticate the admin. Boxed so the",
             "Config struct doesn't sit inline on the SBPF function frame",
             "alongside the SPL accounts below; growing Config (e.g. adding",
             "`pyth_receiver`) otherwise pushes try_accounts past the 4 KB cap."
@@ -1252,7 +1550,7 @@
           "name": "yes_mint",
           "docs": [
             "Yes-token mint. Mint authority is the per-market PDA; freeze",
-            "authority is unset (mints can't be frozen — keeps the design",
+            "authority is unset (mints can't be frozen \u2014 keeps the design",
             "simple at the cost of an option we don't need for the demo)."
           ],
           "writable": true,
@@ -1309,7 +1607,7 @@
           "name": "mint_authority",
           "docs": [
             "and the owner of the escrow token accounts below. No account data",
-            "stored at this address — the seed + bump pair *is* the identity."
+            "stored at this address \u2014 the seed + bump pair *is* the identity."
           ],
           "pda": {
             "seeds": [
@@ -1337,7 +1635,7 @@
         {
           "name": "usdc_escrow",
           "docs": [
-            "USDC escrow — receives buy-side resting collateral and any",
+            "USDC escrow \u2014 receives buy-side resting collateral and any",
             "mint_pair / settlement deposits. Owned by `mint_authority` PDA."
           ],
           "writable": true,
@@ -1369,7 +1667,7 @@
         {
           "name": "yes_escrow",
           "docs": [
-            "Yes-token escrow — receives sell-side resting Yes inventory.",
+            "Yes-token escrow \u2014 receives sell-side resting Yes inventory.",
             "Owned by the same `mint_authority` PDA."
           ],
           "writable": true,
@@ -1400,7 +1698,7 @@
         {
           "name": "usdc_mint",
           "docs": [
-            "USDC mint — must match the one pinned in `config`."
+            "USDC mint \u2014 must match the one pinned in `config`."
           ]
         },
         {
@@ -1433,7 +1731,7 @@
         "Bootstrap the singleton Config PDA. First caller becomes admin.",
         "",
         "`pyth_receiver` is the on-chain Pyth Receiver program ID that",
-        "`settle_market` will validate against — operator-set so the same",
+        "`settle_market` will validate against \u2014 operator-set so the same",
         "`.so` works on devnet (Pyth's real receiver), mainnet (same), and",
         "LiteSVM tests (`MERIDIAN_PROGRAM_ID`, since fixtures mint",
         "meridian-owned `PriceUpdateV2` accounts)."
@@ -1528,7 +1826,7 @@
         {
           "name": "user",
           "docs": [
-            "Caller — pays USDC, receives Yes + No."
+            "Caller \u2014 pays USDC, receives Yes + No."
           ],
           "writable": true,
           "signer": true
@@ -1536,7 +1834,7 @@
         {
           "name": "config",
           "docs": [
-            "Global config — read-only here; we only need the pause flag."
+            "Global config \u2014 read-only here; we only need the pause flag."
           ],
           "pda": {
             "seeds": [
@@ -1594,7 +1892,7 @@
         {
           "name": "user_usdc",
           "docs": [
-            "User's USDC source ATA — must hold ≥ `amount` USDC. Mint check",
+            "User's USDC source ATA \u2014 must hold \u2265 `amount` USDC. Mint check",
             "happens via the `token::mint = config.usdc_mint` constraint."
           ],
           "writable": true
@@ -1634,7 +1932,7 @@
         {
           "name": "yes_mint",
           "docs": [
-            "Yes mint — `mint::authority = mint_authority` PDA."
+            "Yes mint \u2014 `mint::authority = mint_authority` PDA."
           ],
           "writable": true,
           "pda": {
@@ -1665,7 +1963,7 @@
         {
           "name": "no_mint",
           "docs": [
-            "No mint — `mint::authority = mint_authority` PDA."
+            "No mint \u2014 `mint::authority = mint_authority` PDA."
           ],
           "writable": true,
           "pda": {
@@ -1755,7 +2053,7 @@
         "posts to the caller's side with the engine's next sequence number.",
         "",
         "Maker ATAs (USDC + Yes per fill) must be supplied as",
-        "`remaining_accounts` in fill order — see the module docs for the",
+        "`remaining_accounts` in fill order \u2014 see the module docs for the",
         "layout."
       ],
       "discriminator": [
@@ -1780,7 +2078,7 @@
         {
           "name": "config",
           "docs": [
-            "Global config — read-only; we only need the pause flag and USDC mint."
+            "Global config \u2014 read-only; we only need the pause flag and USDC mint."
           ],
           "pda": {
             "seeds": [
@@ -1841,9 +2139,9 @@
             "",
             "We use the plain `AccountLoader<Book>` rather than Anchor 1.0's",
             "`LazyAccount<Book>` because every code path in this instruction",
-            "touches both sides (`bids` and `asks`) — the deferred-deserialize",
+            "touches both sides (`bids` and `asks`) \u2014 the deferred-deserialize",
             "win of `LazyAccount` is marginal when the whole book is read each",
-            "step. The plan §U5 §3 explicitly endorses this choice."
+            "step. The plan \u00a7U5 \u00a73 explicitly endorses this choice."
           ],
           "writable": true,
           "pda": {
@@ -1928,7 +2226,7 @@
         {
           "name": "yes_mint",
           "docs": [
-            "Yes mint — only used to validate the escrow and maker ATAs."
+            "Yes mint \u2014 only used to validate the escrow and maker ATAs."
           ],
           "pda": {
             "seeds": [
@@ -2019,7 +2317,7 @@
     {
       "name": "place_market_order",
       "docs": [
-        "Place a market order — same matching flow as `place_limit_order`",
+        "Place a market order \u2014 same matching flow as `place_limit_order`",
         "but any unfilled residual is refunded to the taker rather than",
         "posted. `slippage_bound` caps the worst price the taker accepts."
       ],
@@ -2267,7 +2565,7 @@
         {
           "name": "user",
           "docs": [
-            "Caller — pays winning tokens, receives USDC."
+            "Caller \u2014 pays winning tokens, receives USDC."
           ],
           "writable": true,
           "signer": true
@@ -2418,7 +2716,7 @@
     {
       "name": "sell_no",
       "docs": [
-        "Atomic \"Sell No\" — market-buy `amount` Yes, then burn the freshly",
+        "Atomic \"Sell No\" \u2014 market-buy `amount` Yes, then burn the freshly",
         "bought Yes + a matching `amount` of the caller's existing No to",
         "reclaim `amount` USDC. Reverts atomically if the Yes buy leg can't",
         "fill the full `amount` within `max_yes_buy_price`. User's net USDC",
@@ -2636,7 +2934,7 @@
         {
           "name": "user_yes",
           "docs": [
-            "User's Yes ATA. Starts at any balance — the market-buy leg deposits",
+            "User's Yes ATA. Starts at any balance \u2014 the market-buy leg deposits",
             "the bought Yes here, then burn_pair burns `amount` from it. Net",
             "change: 0 (started 0, market-buy ended with `amount`, burn cleared)."
           ],
@@ -2645,7 +2943,7 @@
         {
           "name": "user_no",
           "docs": [
-            "User's No ATA. Must hold ≥ `args.amount` before the call — the",
+            "User's No ATA. Must hold \u2265 `args.amount` before the call \u2014 the",
             "burn_pair leg drains `amount` from it. Validated via Anchor",
             "constraint so the failure surfaces before any state mutation.",
             "",
@@ -2880,10 +3178,10 @@
       "name": "settle_market",
       "docs": [
         "Read the Pyth `PriceUpdateV2` account and stamp the market's",
-        "outcome (R15a). Public — anyone can call once the expiry is past",
+        "outcome (R15a). Public \u2014 anyone can call once the expiry is past",
         "and the oracle is fresh enough. Atomically sets",
         "`settled = true` + `outcome = Some(_)` so any subsequent reader",
-        "sees the invariant `settled → outcome.is_some()`."
+        "sees the invariant `settled \u2192 outcome.is_some()`."
       ],
       "discriminator": [
         193,
@@ -2899,7 +3197,7 @@
         {
           "name": "caller",
           "docs": [
-            "Caller. Pays no SOL — `Market` is already initialized and we don't",
+            "Caller. Pays no SOL \u2014 `Market` is already initialized and we don't",
             "open new accounts here. Doesn't need to be admin (the oracle + the",
             "expiry timestamp are the actual gate)."
           ],
@@ -2909,7 +3207,7 @@
         {
           "name": "config",
           "docs": [
-            "Global config — read for the operator-set `pyth_receiver` pubkey",
+            "Global config \u2014 read for the operator-set `pyth_receiver` pubkey",
             "that the price-update account must be owned by. Boxed for stack",
             "hygiene (Config is ~130 bytes; inline copies inflate try_accounts)."
           ],
@@ -2971,7 +3269,7 @@
           "docs": [
             "Pyth `PriceUpdateV2` account. Validated manually in the handler:",
             "",
-            "1. `owner == config.pyth_receiver` — operator-pinned per cluster",
+            "1. `owner == config.pyth_receiver` \u2014 operator-pinned per cluster",
             "(Pyth's real receiver on devnet/mainnet; this program's ID in",
             "LiteSVM fixtures).",
             "2. First 8 bytes match the vendored `PriceUpdateV2` discriminator",
@@ -3012,7 +3310,7 @@
         {
           "name": "caller",
           "docs": [
-            "Caller — anyone. Doesn't have to be admin or order owner; the",
+            "Caller \u2014 anyone. Doesn't have to be admin or order owner; the",
             "instruction is a public crank that just refunds escrowed collateral",
             "to the resting orders' owners."
           ],
@@ -3156,7 +3454,7 @@
         {
           "name": "yes_mint",
           "docs": [
-            "Yes mint — used to validate per-fill recipient ATAs."
+            "Yes mint \u2014 used to validate per-fill recipient ATAs."
           ],
           "pda": {
             "seeds": [
@@ -3365,7 +3663,7 @@
     {
       "code": 6016,
       "name": "InvariantBroken",
-      "msg": "Internal invariant violated. This is a bug — please report."
+      "msg": "Internal invariant violated. This is a bug \u2014 please report."
     },
     {
       "code": 6017,
@@ -3457,7 +3755,7 @@
       "docs": [
         "Order book for a single market.",
         "",
-        "Zero-copy via Anchor's `#[account(zero_copy)]` — `Book` is `Pod` (the",
+        "Zero-copy via Anchor's `#[account(zero_copy)]` \u2014 `Book` is `Pod` (the",
         "hand-written impls live on `BookSide` and `OrderEntry` in the matching",
         "module). The two sides are read/written via `AccountLoader<Book>` and",
         "`load_mut()` at instruction time."
@@ -3480,7 +3778,7 @@
           {
             "name": "bids",
             "docs": [
-              "Bid side — best (highest price) first, FIFO within a price."
+              "Bid side \u2014 best (highest price) first, FIFO within a price."
             ],
             "type": {
               "defined": {
@@ -3497,7 +3795,7 @@
           {
             "name": "asks",
             "docs": [
-              "Ask side — best (lowest price) first, FIFO within a price."
+              "Ask side \u2014 best (lowest price) first, FIFO within a price."
             ],
             "type": {
               "defined": {
@@ -3530,7 +3828,7 @@
         "",
         "`min_yes_sell_price` is the worst (lowest) price-per-Yes the taker",
         "will accept on the sell leg. See module docs for the naming rationale.",
-        "Pass `1` for \"no floor\" (`0` is rejected — collides with the OrderKey",
+        "Pass `1` for \"no floor\" (`0` is rejected \u2014 collides with the OrderKey",
         "invalid sentinel)."
       ],
       "type": {
@@ -3604,14 +3902,14 @@
           {
             "name": "paused",
             "docs": [
-              "Global pause flag — user-facing instructions refuse when set."
+              "Global pause flag \u2014 user-facing instructions refuse when set."
             ],
             "type": "bool"
           },
           {
             "name": "admin",
             "docs": [
-              "Admin authority — currently the only privileged role",
+              "Admin authority \u2014 currently the only privileged role",
               "(`create_strike_market`, `pause`/`unpause`, settle override)."
             ],
             "type": "pubkey"
@@ -3619,7 +3917,7 @@
           {
             "name": "fee_authority",
             "docs": [
-              "Fee authority — receives any fee accruals once fees are wired",
+              "Fee authority \u2014 receives any fee accruals once fees are wired",
               "(deferred to follow-up work; field exists for forward compatibility)."
             ],
             "type": "pubkey"
@@ -3636,7 +3934,7 @@
           {
             "name": "pyth_receiver",
             "docs": [
-              "Pyth Receiver program ID — the expected owner for every",
+              "Pyth Receiver program ID \u2014 the expected owner for every",
               "`PriceUpdateV2` account `settle_market` accepts. Operator sets this",
               "at `initialize_config` time:",
               "",
@@ -3667,7 +3965,7 @@
           {
             "name": "treasury",
             "docs": [
-              "Treasury authority — custodian for collateral recovered from",
+              "Treasury authority \u2014 custodian for collateral recovered from",
               "permanently-stuck orders via `admin_force_expire_order`. Kept distinct",
               "from `fee_authority` so custodial user funds (which an owner may later",
               "reclaim off-chain) stay accounting-separate from protocol revenue.",
@@ -3777,7 +4075,7 @@
           {
             "name": "strike_price",
             "docs": [
-              "Strike price in USDC microunits (USDC has 6 decimals; $680.00 →",
+              "Strike price in USDC microunits (USDC has 6 decimals; $680.00 \u2192",
               "680_000_000). Pyth feeds are normalized to the same unit at",
               "settle time."
             ],
@@ -3935,7 +4233,7 @@
             "docs": [
               "Slippage bound (worst acceptable price per Yes token). For a Bid",
               "taker this is the max it will pay; for an Ask taker the min it",
-              "will accept. `0` is rejected — pass `1` for \"no floor\" Ask or",
+              "will accept. `0` is rejected \u2014 pass `1` for \"no floor\" Ask or",
               "`u64::MAX` for \"no ceiling\" Bid."
             ],
             "type": "u64"
@@ -4003,7 +4301,7 @@
             "name": "mint",
             "docs": [
               "The recovered collateral's mint (USDC for a Bid, the market's Yes mint",
-              "for an Ask) — so an off-chain custody ledger needn't re-derive it."
+              "for an Ask) \u2014 so an off-chain custody ledger needn't re-derive it."
             ],
             "type": "pubkey"
           },
