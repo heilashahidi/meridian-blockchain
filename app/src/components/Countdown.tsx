@@ -28,6 +28,9 @@ export function Countdown({ expiryUnix }: { expiryUnix: bigint }) {
   const remaining = state.remainingSeconds;
   const urgent = !state.closed && remaining < 30 * 60;
   const critical = !state.closed && remaining < 5 * 60;
+  // A market a day+ out isn't urgent (and shows the wider "Nd HHh" label), so
+  // render it calmer instead of at the full 0DTE hero size.
+  const longRange = !state.closed && remaining >= 86400;
 
   const color = state.closed ? "var(--no)" : urgent ? "var(--warn)" : "var(--text)";
 
@@ -46,7 +49,7 @@ export function Countdown({ expiryUnix }: { expiryUnix: bigint }) {
       <span
         className="mono"
         style={{
-          fontSize: 30,
+          fontSize: longRange ? 20 : 30,
           fontWeight: 800,
           lineHeight: 1.05,
           letterSpacing: "-0.01em",
