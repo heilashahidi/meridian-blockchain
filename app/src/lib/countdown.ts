@@ -19,12 +19,20 @@ function pad2(n: number): string {
   return n.toString().padStart(2, "0");
 }
 
-/** Format a remaining-seconds count as mm:ss (<1h) or h:mm:ss (>=1h). */
+/**
+ * Format a remaining-seconds count for the settlement countdown:
+ *   - >= 1 day  → "Nd HHh"  (so a far-out market doesn't render a very wide
+ *                 8-char clock like "269:52:15" in the hero),
+ *   - >= 1 hour → "H:MM:SS",
+ *   - else      → "MM:SS".
+ */
 export function formatRemaining(remainingSeconds: number): string {
   const s = Math.max(0, Math.floor(remainingSeconds));
-  const hours = Math.floor(s / 3600);
+  const days = Math.floor(s / 86400);
+  const hours = Math.floor((s % 86400) / 3600);
   const mins = Math.floor((s % 3600) / 60);
   const secs = s % 60;
+  if (days > 0) return `${days}d ${pad2(hours)}h`;
   return hours > 0
     ? `${hours}:${pad2(mins)}:${pad2(secs)}`
     : `${pad2(mins)}:${pad2(secs)}`;
