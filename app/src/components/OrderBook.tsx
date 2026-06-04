@@ -51,7 +51,7 @@ function SideColumn({
 }) {
   const maxQty = levels.reduce((m, l) => (l.qty > m ? l.qty : m), 0n);
   return (
-    <div style={{ display: "grid", gap: 6 }}>
+    <div style={{ display: "grid", gap: 6, alignContent: "start" }}>
       <div
         className="depth-row"
         style={{ fontSize: 11, padding: "0 8px", color: "var(--muted)" }}
@@ -92,7 +92,10 @@ export function OrderBook({ book }: { book: BookView | null }) {
     <div className="panel" style={{ display: "grid", gap: 16 }}>
       <div style={{ display: "grid", gap: 8 }}>
         <div style={{ fontSize: 13, fontWeight: 600 }}>Order book</div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+        {/* align-items: start so the shorter side (e.g. one ask vs six bids)
+            keeps its natural height — otherwise the lone row stretches and its
+            absolute depth-fill balloons into a big colored block. */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, alignItems: "start" }}>
           <SideColumn title="Bids" levels={book.bids} side="bid" />
           <SideColumn title="Asks" levels={book.asks} side="ask" />
         </div>
