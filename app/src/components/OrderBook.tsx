@@ -2,15 +2,14 @@
 
 import type { BookLevel, BookView } from "@/lib/market";
 import { shortKey } from "@/lib/format";
-import { toNoView } from "@/lib/tradePaths";
 
-// One book, two perspectives. The on-chain book is priced in Yes microunits;
-// the No view reflects every level to `1 − price` and swaps sides (a resting
-// Yes ask is a No bid, a resting Yes bid is a No ask) via the pure `toNoView`.
-// Prices render as cents ($0.00–$1.00) since both Yes and No live in the same
-// $0–$1 fraction space. Each level draws a depth bar whose width is proportional
-// to that level's qty relative to the largest qty on its side, making the book
-// read like a real depth ladder.
+// The single on-chain order book — Yes tokens traded against USDC (PRD: "each
+// strike market has one order book where Yes tokens are traded against USDC").
+// Bids are buyers of Yes, asks are sellers of Yes; the No side is not a separate
+// book, it's just the inverse price (No = $1.00 − Yes) surfaced in the trade
+// panel. Prices render as cents ($0.00–$1.00). Each level draws a depth bar
+// whose width is proportional to that level's qty relative to the largest qty on
+// its side, making the book read like a real depth ladder.
 
 function priceUsd(microPerUnit: bigint): string {
   return `$${(Number(microPerUnit) / 1_000_000).toFixed(2)}`;
@@ -74,21 +73,13 @@ function SideColumn({
   );
 }
 
-function BookView2({ book }: { book: BookView }) {
-  return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
-      <SideColumn title="Bids" levels={book.bids} side="bid" />
-      <SideColumn title="Asks" levels={book.asks} side="ask" />
-    </div>
-  );
-}
-
 /**
- * Render the single on-chain book from both the Yes (native) and No
- * (`1 − price`, sides mirrored) perspectives. A single resting Yes ask shows
- * as an ask under "Yes" and as a No bid under "No".
+ * The single on-chain order book for this strike: Yes bids (buyers of Yes) and
+ * Yes asks (sellers of Yes), priced in USDC per share ($0–$1). There is no
+ * separate No book — selling Yes is buying No, so the No view is just the
+ * inverse price shown in the trade panel.
  */
-export function BothSidesBook({ book }: { book: BookView | null }) {
+export function OrderBook({ book }: { book: BookView | null }) {
   if (!book) {
     return (
       <div className="panel">
@@ -97,32 +88,17 @@ export function BothSidesBook({ book }: { book: BookView | null }) {
     );
   }
 
-  const noBook = toNoView(book);
-
   return (
     <div className="panel" style={{ display: "grid", gap: 16 }}>
       <div style={{ display: "grid", gap: 8 }}>
-        <div style={{ fontSize: 13, fontWeight: 600 }}>Yes book</div>
-        <BookView2 book={book} />
-      </div>
-      <div
-        style={{
-          borderTop: "1px solid var(--border)",
-          paddingTop: 16,
-          display: "grid",
-          gap: 8,
-        }}
-      >
-        <div style={{ fontSize: 13, fontWeight: 600 }}>
-          No book{" "}
-          <span className="muted" style={{ fontSize: 11, fontWeight: 400 }}>
-            (price = $1.00 − Yes)
-          </span>
+        <div style={{ fontSize: 13, fontWeight: 600 }}>Order book</div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+          <SideColumn title="Bids" levels={book.bids} side="bid" />
+          <SideColumn title="Asks" levels={book.asks} side="ask" />
         </div>
-        <BookView2 book={noBook} />
       </div>
       <div className="muted" style={{ fontSize: 11 }}>
-        price = USDC per share ($0–$1) · qty = shares · one Yes + one No = $1.00
+        price = USDC per Yes share ($0–$1) · qty = shares · one Yes + one No = $1.00
       </div>
     </div>
   );

@@ -3,8 +3,8 @@
 // This module is intentionally framework-free (no React, no wallet, no Anchor)
 // so the error-prone price mapping and instruction routing are fully unit-
 // testable in the node vitest env. `actions.ts` consumes the resolved path to
-// build the actual transaction; `TradePanel`/`BothSidesBook`/`PositionGuard`
-// consume the pure helpers here for display + gating.
+// build the actual transaction; `TradePanel`/`PositionGuard` consume the pure
+// helpers here for display + gating.
 //
 // -------------------------------------------------------------------------
 // Price space
@@ -47,7 +47,6 @@
 // Sell No: a <= cap on the Yes buy), which is exactly the Ask vs Bid side of
 // the internal Yes leg.
 
-import type { BookLevel, BookView } from "./market";
 import { SIDE_ASK, SIDE_BID } from "./matching";
 
 /** One dollar in USDC microunits — the full mint-pair cost / max price. */
@@ -267,26 +266,5 @@ export function positionGuardDecision(balances: Balances): GuardDecision {
     sellNo: hasNo
       ? { allowed: true }
       : { allowed: false, reason: "No No position to sell." },
-  };
-}
-
-// -------------------------------------------------------------------------
-// Both-sides book transform: render the single on-chain (Yes-priced) book from
-// the No perspective. A resting Yes BID is a No ASK at (1 − price); a resting
-// Yes ASK is a No BID at (1 − price). Quantity (the shared base unit) is
-// unchanged. Reflecting price preserves priority ordering because `1 − p` is
-// monotonically decreasing: Yes asks ascending → No bids descending (best No
-// bid first), Yes bids descending → No asks ascending (best No ask first).
-// -------------------------------------------------------------------------
-
-function reflectLevel(l: BookLevel): BookLevel {
-  return { ...l, price: noPriceFromYes(l.price) };
-}
-
-export function toNoView(book: BookView): BookView {
-  return {
-    bids: book.asks.map(reflectLevel), // Yes asks → No bids
-    asks: book.bids.map(reflectLevel), // Yes bids → No asks
-    nextSeq: book.nextSeq,
   };
 }

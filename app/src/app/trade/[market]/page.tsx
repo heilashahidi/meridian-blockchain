@@ -3,7 +3,7 @@
 import { useEffect, useMemo } from "react";
 import { PublicKey } from "@solana/web3.js";
 
-import { BothSidesBook } from "@/components/BothSidesBook";
+import { OrderBook } from "@/components/OrderBook";
 import { Countdown } from "@/components/Countdown";
 import { PositionGuard } from "@/components/PositionGuard";
 import { RedeemPanel } from "@/components/RedeemPanel";
@@ -203,7 +203,7 @@ export default function TradeMarketPage({
           alignItems: "start",
         }}
       >
-        <BothSidesBook book={onThisMarket ? book : null} />
+        <OrderBook book={onThisMarket ? book : null} />
 
         <div style={{ display: "grid", gap: 16 }}>
           <PositionGuard balances={onThisMarket ? balances : null} />

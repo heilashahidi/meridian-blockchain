@@ -5,12 +5,10 @@ import {
   noPriceFromYes,
   positionGuardDecision,
   resolveTradePath,
-  toNoView,
   yesPriceFromNo,
   type Balances,
 } from "@/lib/tradePaths";
 import { SIDE_ASK, SIDE_BID } from "@/lib/matching";
-import type { BookView } from "@/lib/market";
 
 // ---------------------------------------------------------------------------
 // Price-space mapping. Book prices are Yes prices in USDC microunits per Yes
@@ -207,64 +205,5 @@ describe("positionGuardDecision", () => {
     // New entries that would deepen an opposing imbalance are blocked.
     expect(d.buyYes.allowed).toBe(false);
     expect(d.buyNo.allowed).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Both-sides book transform: the ONE on-chain book rendered from the No view.
-// A resting Yes bid is a No ask at (1 − price); a resting Yes ask is a No bid.
-// ---------------------------------------------------------------------------
-
-describe("toNoView", () => {
-  function lvl(price: bigint, qty: bigint) {
-    return { price, qty, seq: 0n, owner: { toBase58: () => "x" } as never };
-  }
-
-  it("a single resting Yes ask renders as a No bid at 1 − price", () => {
-    const book: BookView = {
-      bids: [],
-      asks: [lvl(640_000n, 5n)],
-      nextSeq: 1n,
-    };
-    const no = toNoView(book);
-    // The Yes ask becomes a No bid at $0.36 (= 1 − $0.64), same qty.
-    expect(no.bids).toHaveLength(1);
-    expect(no.bids[0].price).toBe(360_000n);
-    expect(no.bids[0].qty).toBe(5n);
-    expect(no.asks).toHaveLength(0);
-  });
-
-  it("a single resting Yes bid renders as a No ask at 1 − price", () => {
-    const book: BookView = {
-      bids: [lvl(600_000n, 3n)],
-      asks: [],
-      nextSeq: 1n,
-    };
-    const no = toNoView(book);
-    expect(no.asks).toHaveLength(1);
-    expect(no.asks[0].price).toBe(400_000n);
-    expect(no.asks[0].qty).toBe(3n);
-    expect(no.bids).toHaveLength(0);
-  });
-
-  it("maps an empty book to an empty No view", () => {
-    const empty: BookView = { bids: [], asks: [], nextSeq: 0n };
-    const no = toNoView(empty);
-    expect(no.bids).toHaveLength(0);
-    expect(no.asks).toHaveLength(0);
-    expect(no.nextSeq).toBe(0n);
-  });
-
-  it("keeps No bids descending and No asks ascending (priority order)", () => {
-    // Yes asks ascending [0.64, 0.70] → No bids should be descending [0.36, 0.30].
-    // Yes bids descending [0.60, 0.55] → No asks should be ascending [0.40, 0.45].
-    const book: BookView = {
-      bids: [lvl(600_000n, 1n), lvl(550_000n, 1n)],
-      asks: [lvl(640_000n, 1n), lvl(700_000n, 1n)],
-      nextSeq: 1n,
-    };
-    const no = toNoView(book);
-    expect(no.bids.map((l) => l.price)).toEqual([360_000n, 300_000n]);
-    expect(no.asks.map((l) => l.price)).toEqual([400_000n, 450_000n]);
   });
 });
