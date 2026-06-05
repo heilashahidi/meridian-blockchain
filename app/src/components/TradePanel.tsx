@@ -42,6 +42,14 @@ const ACTIONS: { key: TradeAction; label: string; tone: "yes" | "no" }[] = [
 
 const isNoAction = (a: TradeAction) => a === "buyNo" || a === "sellNo";
 
+// TEMP kill-switch: No-side trading (Buy No / Sell No) is disabled pending the
+// on-chain 1e6 unit fix. buy_no/sell_no compose the order-book leg (qty * price,
+// where 1 token ≈ up to $1) with mint/burn_pair (1 base unit = 1 µUSDC); the two
+// disagree by 1e6, so No trades show negative proceeds and revert with
+// InvalidAmount. Re-enable once the program fix is deployed.
+// See docs/plans/2026-06-04-002-fix-no-side-1e6-unit-mismatch-plan.md.
+const NO_SIDE_DISABLED = true;
+
 /**
  * The four trade paths (Buy/Sell × Yes/No), each a single wallet approval. The
  * No price the user enters is reflected to the Yes-leg bound by
@@ -191,7 +199,8 @@ export function TradePanel() {
       {/* Action selector — 2x2 grid of the four paths as segmented buttons. */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         {ACTIONS.map((a) => {
-          const allowed = guard[a.key].allowed;
+          const noBlocked = NO_SIDE_DISABLED && isNoAction(a.key);
+          const allowed = guard[a.key].allowed && !noBlocked;
           const selected = action === a.key;
           return (
             <button
@@ -200,7 +209,13 @@ export function TradePanel() {
               className="seg"
               onClick={() => setAction(a.key)}
               disabled={!allowed}
-              title={allowed ? undefined : guard[a.key].reason}
+              title={
+                noBlocked
+                  ? "No-side trading is temporarily unavailable"
+                  : guard[a.key].allowed
+                    ? undefined
+                    : guard[a.key].reason
+              }
               aria-label={a.key}
               data-active={selected ? a.tone : undefined}
             >
@@ -304,7 +319,7 @@ export function TradePanel() {
 
       <button
         className={side === "yes" ? "btn btn-yes" : "btn btn-no"}
-        disabled={!ready || !inputValid || !gate.allowed || busy || cannotFullyFill}
+        disabled={!ready || !inputValid || !gate.allowed || busy || cannotFullyFill || (NO_SIDE_DISABLED && isNoAction(action))}
         onClick={submit}
       >
         {submitLabel}
