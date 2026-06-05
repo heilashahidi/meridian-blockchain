@@ -261,7 +261,10 @@ async function main() {
   const makerNo = await ata(P.noMint, maker.publicKey);
 
   // Mint test USDC to both (we are the mint authority of the local USDC mint).
-  const SEED_USDC = 5_000_000n; // base units each
+  // Post the $1/token-collateral fix, mint_pair(n) deposits n * ONE_USDC µUSDC
+  // (= $n), so MAKER's mint_pair(1000) below costs $1000. Seed $2000 each for
+  // comfortable headroom (order-book locks are µUSDC-tiny by comparison).
+  const SEED_USDC = 2_000_000_000n; // base units each ($2000)
   await mintTo(connection, payer, USDC_MINT, takerUsdc, payer, SEED_USDC);
   await mintTo(connection, payer, USDC_MINT, makerUsdc, payer, SEED_USDC);
   kv("TAKER USDC", (await bal(takerUsdc)).toString());
