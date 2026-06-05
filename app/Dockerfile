@@ -12,7 +12,13 @@ COPY package.json package-lock.json* ./
 # build tools that aren't in the alpine image, and the web build/SSR server
 # never use those native modules (browser-only wallet feature). Packages with
 # native accelerators fall back to pure JS.
-RUN npm ci --ignore-scripts
+# `npm install`, not `npm ci`: `ws`'s optional native accelerators
+# (bufferutil, utf-8-validate) are pruned from the lockfile when it's
+# regenerated on macOS but demanded by npm on linux, so `npm ci`'s strict
+# lock-vs-tree match fails the build cross-platform. `npm install` reconciles
+# at build time; the accelerators are skipped (--ignore-scripts) and ws falls
+# back to pure JS, exactly as intended above.
+RUN npm install --ignore-scripts --no-audit --no-fund
 
 # ── build ───────────────────────────────────────────────────────────────────
 FROM node:24-alpine AS build
