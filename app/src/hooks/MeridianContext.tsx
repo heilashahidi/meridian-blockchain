@@ -115,6 +115,16 @@ export function MeridianProvider({ children }: { children: React.ReactNode }) {
     setBalances(null);
   }, []);
 
+  // Clear balances the instant the connected WALLET changes. Without this, a
+  // stale Yes/No reading from the previously-connected wallet survives the
+  // switch (refreshSelected keeps last-good data on any RPC hiccup), which can
+  // keep e.g. Buy No greyed on a brand-new, position-free wallet. Null balances
+  // make the position guard treat the wallet as empty (all actions open) until
+  // refreshSelected repopulates for the new wallet — the correct neutral state.
+  useEffect(() => {
+    setBalances(null);
+  }, [walletPubkey]);
+
   // Selected-market data (market + book + balances). Stored in a ref so the
   // poll interval always calls the latest closure without re-subscribing.
   const refreshSelected = useCallback(async () => {
