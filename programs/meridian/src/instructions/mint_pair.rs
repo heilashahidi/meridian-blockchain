@@ -1,12 +1,14 @@
-//! `mint_pair` — atomically deposit `amount` USDC into the per-market
+//! `mint_pair` — atomically deposit `amount * ONE_USDC` USDC into the per-market
 //! escrow PDA and mint `amount` Yes + `amount` No tokens to the caller.
 //!
 //! Per plan §U4: this is the **forward** half of the $1.00 USDC ↔ 1 Yes +
-//! 1 No primitive that the demo's whole settlement story rests on. Every
-//! mint_pair preserves the system invariant
+//! 1 No primitive that the demo's whole settlement story rests on. Each token
+//! is collateralized at **$1.00 (`ONE_USDC` µUSDC)** — the PRD's "Yes token
+//! pays $1.00" and "Vault = $1.00 × pairs" — which is the same unit the order
+//! book prices in (`[0, ONE_USDC]`). Every mint_pair preserves the invariant
 //!
 //! ```text
-//! yes_mint.supply == no_mint.supply == usdc_escrow.amount
+//! usdc_escrow.amount == yes_mint.supply * ONE_USDC == no_mint.supply * ONE_USDC
 //! ```
 //!
 //! provided no other path can create Yes/No or move USDC out of escrow
@@ -204,7 +206,13 @@ pub(crate) fn mint_pair_inner<'info>(
         to: usdc_escrow.to_account_info(),
         authority: user.to_account_info(),
     };
-    token::transfer(CpiContext::new(token_program_id, cpi_accounts), amount)?;
+    // $1.00 of collateral per token (ONE_USDC µUSDC). The order book prices a
+    // token in [0, ONE_USDC] µUSDC, so a token bought for ≤$1 there redeems for
+    // exactly $1 here — the two unit systems agree (PRD vault invariant).
+    let collateral = amount
+        .checked_mul(crate::ONE_USDC)
+        .ok_or(MeridianError::InvalidAmount)?;
+    token::transfer(CpiContext::new(token_program_id, cpi_accounts), collateral)?;
 
     // Steps 2 + 3: mint Yes and No to user, PDA-signed.
     //

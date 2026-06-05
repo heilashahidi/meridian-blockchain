@@ -23,6 +23,16 @@ pub mod matching;
 pub mod state;
 pub(crate) mod token_util;
 
+/// USDC collateral per whole token, in µUSDC (USDC has 6 decimals).
+///
+/// A token (1 base unit, the unit the order book and the UI trade in) pays
+/// **$1.00** at settlement per the PRD ("Yes token pays $1.00"), so each
+/// mint_pair / burn_pair / redeem moves `amount * ONE_USDC` µUSDC. The order
+/// book already prices a token in `[0, ONE_USDC]` µUSDC (= $0..$1), so the two
+/// sides agree: a token bought for ≤$1 on the book redeems for exactly $1.
+/// This is also the PRD vault invariant: `usdc_escrow == pairs * ONE_USDC`.
+pub const ONE_USDC: u64 = 1_000_000;
+
 // Re-export the matching engine surface so future instruction modules
 // (U3-U7) can `use crate::matching::...` or just `use crate::*` cleanly.
 pub use matching::{

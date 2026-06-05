@@ -202,9 +202,13 @@ pub(crate) fn burn_pair_inner<'info>(
         to: user_usdc.to_account_info(),
         authority: mint_authority.to_account_info(),
     };
+    // Return the $1.00-per-token collateral (ONE_USDC µUSDC), mirroring mint_pair.
+    let refund = amount
+        .checked_mul(crate::ONE_USDC)
+        .ok_or(MeridianError::InvalidAmount)?;
     token::transfer(
         CpiContext::new_with_signer(token_program_id, transfer_accounts, signer_seeds),
-        amount,
+        refund,
     )?;
 
     Ok(())

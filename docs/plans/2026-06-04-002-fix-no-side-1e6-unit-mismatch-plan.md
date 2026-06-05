@@ -1,7 +1,7 @@
 ---
 date: 2026-06-04
 type: fix
-status: planned
+status: in-progress
 depth: deep
 title: "fix: No-side 1e6 unit mismatch (buy_no/sell_no revert; Yes redemption skewed)"
 ---
@@ -13,6 +13,46 @@ title: "fix: No-side 1e6 unit mismatch (buy_no/sell_no revert; Yes redemption sk
 order-book leg and the mint/burn-pair leg. This is a program-level fix requiring
 a devnet redeploy + re-seed. **Interim mitigation already shipped:** the No-side
 trade buttons are disabled in the UI (`TradePanel.tsx` `NO_SIDE_DISABLED`).
+
+## STATUS (2026-06-05): code implemented — chose Approach 2
+
+On closer analysis, **Approach 2 is the optimal minimal fix** (superseding the
+earlier Approach-1 lean below), for three reasons that align with the PRD:
+
+1. The order book prices a token in **integer** µUSDC `[0, ONE_USDC]` = $0–$1.
+   Integer prices only make sense if **1 token = $1** — so the order book is
+   already correct, and the bug is purely in mint/burn/redeem.
+2. The PRD says it outright: *"Yes token pays $1.00"* and *"Vault balance =
+   $1.00 × pairs minted."* The current code collateralized **1 µUSDC per token**,
+   which **violates that vault invariant**. Approach 2 restores it.
+3. It's the least code (3 one-line multiplications) and touches neither the order
+   book nor the frontend qty.
+
+**Implemented** on branch `fix/no-side-1e6-collateral`:
+- `lib.rs`: `pub const ONE_USDC: u64 = 1_000_000;`
+- `mint_pair_inner`, `burn_pair_inner`, `redeem_handler`: USDC transfer becomes
+  `amount.checked_mul(ONE_USDC)`.
+- New invariant: `usdc_escrow == supply * ONE_USDC` (= $1 × pairs). Order book
+  and `settle_sweep` unchanged (already in the `qty × price` µUSDC unit).
+- Host-compiles clean (`cargo check -p meridian --lib`).
+
+**Remaining to ship (NOT done — deliberate, not rushed on the live demo):**
+1. **SBF build** — blocked locally by a `getrandom`/platform-tools toolchain
+   issue (see `KNOWN-ISSUES.md`); build on the env that produced the deployed
+   `.so`, or pin the toolchain.
+2. **Rewrite the LiteSVM test assertions** that encode the *old* economics —
+   `u4_mint_burn`, `u6_buy_no_sell_no` (its `sell_no_happy` currently asserts the
+   seller *loses* money), `u7_settle_redeem`, `u8_lifecycle`. Any USDC delta from
+   mint/burn/redeem scales ×1e6; order-book-only tests (`u5`) are unchanged.
+   Run them green = fix proven.
+3. **Program upgrade** to devnet.
+4. **Re-create + re-seed all markets** — existing markets were collateralized
+   under the old math and are insolvent under the new; abandon + recreate.
+5. **Flip `NO_SIDE_DISABLED = false`** in `TradePanel.tsx` and redeploy the app.
+
+> Cosmetic follow-up (not required for correctness): the Yes/No mints declare 6
+> decimals but the system treats 1 base unit = 1 share. Re-minting at 0 decimals
+> would make wallets/explorers show whole-share balances. Out of scope here.
 
 ## Problem Frame
 

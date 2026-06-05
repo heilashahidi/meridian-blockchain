@@ -161,7 +161,9 @@ pub fn redeem_handler(ctx: Context<Redeem>, amount: u64) -> Result<()> {
             },
             signer_seeds,
         ),
-        amount,
+        amount
+            .checked_mul(crate::ONE_USDC)
+            .ok_or(MeridianError::InvalidAmount)?,
     )?;
 
     Ok(())
