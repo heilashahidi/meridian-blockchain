@@ -1086,6 +1086,28 @@ fn market_order_partial_fill_at_cap() {
 }
 
 #[test]
+fn place_limit_price_above_one_usdc_rejected() {
+    // A Yes token is worth at most $1 (Yes + No = $1), so a resting limit price
+    // above ONE_USDC is economically invalid. The on-chain ceiling rejects it so
+    // the book can never hold an order that would let a taker pay > $1 for a Yes.
+    let mut env = Env::new(1, 10_000);
+
+    // price = ONE + 1 ($1.000001) on a limit order → InvalidAmount.
+    let err = env
+        .place_limit(0, /* Bid */ 0, ONE + 1, 1, &[])
+        .expect_err("limit price above ONE_USDC must be rejected");
+    let s = format!("{err:?}");
+    assert!(
+        s.contains("InvalidAmount") || s.contains("custom"),
+        "expected InvalidAmount, got {s}",
+    );
+
+    // Boundary: a limit at exactly ONE_USDC ($1.00) is allowed and rests.
+    env.place_limit(0, /* Bid */ 0, ONE, 1, &[])
+        .expect("limit price == ONE_USDC must be accepted");
+}
+
+#[test]
 fn place_on_settled_market_rejected() {
     let mut env = Env::new(1, 10_000);
     env.force_settled();

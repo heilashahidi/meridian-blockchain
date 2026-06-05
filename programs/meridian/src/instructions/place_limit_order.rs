@@ -278,6 +278,15 @@ pub(crate) fn place_order_inner<'info>(
     // callers should pass the loosest realistic bound: `u64::MAX` for a
     // bid taker or `1` for an ask taker). Same check, same error.
     require!(price > 0, MeridianError::InvalidAmount);
+    // A Yes token is worth at most $1 (Yes + No = $1), so a *resting* limit price
+    // above ONE_USDC is economically invalid. Reject it so the book can never
+    // hold an order that lets a taker pay > $1 for a Yes. Market orders are
+    // exempt: their `price` is a slippage bound that legitimately uses `u64::MAX`
+    // ("no cap") for a bid taker, and they can only ever fill against resting
+    // orders — which this check keeps within `[1, ONE_USDC]`.
+    if matches!(order_type, OrderType::Limit) {
+        require!(price <= crate::ONE_USDC, MeridianError::InvalidAmount);
+    }
 
     let side = match side_byte {
         0 => Side::Bid,

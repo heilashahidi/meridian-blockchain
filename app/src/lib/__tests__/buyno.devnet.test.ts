@@ -52,6 +52,24 @@ async function createMarket(
   const expiry = Math.floor(Date.now() / 1000) + 3600; // +1h, unique PDA
   const market = marketPda(ticker, strike, expiry);
   const p = marketPdas(market);
+  // Build the accounts object as a `const` (not an inline literal) so TS's
+  // excess-property check on object literals doesn't trip on Anchor's resolved-
+  // accounts type — same pattern as multiuser.live.test.ts.
+  const accounts = {
+    admin: admin.publicKey,
+    config: configPda(),
+    market,
+    book: p.book,
+    yesMint: p.yesMint,
+    noMint: p.noMint,
+    mintAuthority: p.mintAuthority,
+    usdcEscrow: p.usdcEscrow,
+    yesEscrow: p.yesEscrow,
+    usdcMint,
+    tokenProgram: TOKEN_PROGRAM_ID,
+    systemProgram: SystemProgram.programId,
+    rent: SYSVAR_RENT_PUBKEY,
+  };
   await program.methods
     .createStrikeMarket({
       ticker: Array.from(tickerBytes(ticker)),
@@ -59,21 +77,7 @@ async function createMarket(
       expiryUnix: new BN(expiry),
       pythFeedId: Array.from(Buffer.from("01".repeat(32), "hex")),
     })
-    .accounts({
-      admin: admin.publicKey,
-      config: configPda(),
-      market,
-      book: p.book,
-      yesMint: p.yesMint,
-      noMint: p.noMint,
-      mintAuthority: p.mintAuthority,
-      usdcEscrow: p.usdcEscrow,
-      yesEscrow: p.yesEscrow,
-      usdcMint,
-      tokenProgram: TOKEN_PROGRAM_ID,
-      systemProgram: SystemProgram.programId,
-      rent: SYSVAR_RENT_PUBKEY,
-    })
+    .accounts(accounts)
     .rpc();
   return fetchMarket(program, market);
 }

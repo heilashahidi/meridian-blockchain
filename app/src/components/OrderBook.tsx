@@ -90,7 +90,27 @@ function reflectLevel(level: BookLevel): BookLevel {
   return { ...level, price: ONE_USDC - level.price };
 }
 
-type Perspective = "yes" | "no";
+export type Perspective = "yes" | "no";
+
+/**
+ * The two sides of the book in the chosen perspective (PRD §308, "same book,
+ * two views"). Pure + exported so the inversion is unit-tested.
+ *
+ * - Yes view: the book as stored — bids = Yes buyers, asks = Yes sellers.
+ * - No view: No price = ONE_USDC − yesPrice, and bid↔ask flip. Selling Yes =
+ *   buying No, so Yes asks become No bids; buying Yes = selling No, so Yes bids
+ *   become No asks. Both legs are reflected.
+ */
+export function perspectiveLevels(
+  book: BookView,
+  view: Perspective,
+): { bids: BookLevel[]; asks: BookLevel[] } {
+  if (view === "yes") return { bids: book.bids, asks: book.asks };
+  return {
+    bids: book.asks.map(reflectLevel),
+    asks: book.bids.map(reflectLevel),
+  };
+}
 
 export function OrderBook({ book }: { book: BookView | null }) {
   // Default to the Yes perspective (the canonical price space the book stores).
@@ -104,15 +124,7 @@ export function OrderBook({ book }: { book: BookView | null }) {
     );
   }
 
-  // Yes view: bids = Yes buyers, asks = Yes sellers (book as stored).
-  // No view: invert price (ONE_USDC − yesPrice) and FLIP bid↔ask. Yes asks
-  // (selling Yes = offering No to buyers) become No bids; Yes bids become No
-  // asks. Best No bid stays first because the Yes asks are already sorted best
-  // (lowest) first, which maps to the highest No price = best No bid.
-  const bids =
-    view === "yes" ? book.bids : book.asks.map(reflectLevel);
-  const asks =
-    view === "yes" ? book.bids.map(reflectLevel) : book.asks;
+  const { bids, asks } = perspectiveLevels(book, view);
 
   return (
     <div className="panel" style={{ display: "grid", gap: 16 }}>
