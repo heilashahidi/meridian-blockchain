@@ -94,6 +94,59 @@ export async function fetchLatestPriceUpdate(
   return { parsed, updateData };
 }
 
+/**
+ * Fetch the PREVIOUS trading session's closing price for a feed from Hermes.
+ *
+ * PRD §247/§292 require the morning strike ladder to be anchored on the prior
+ * day's CLOSE. `getLatestPriceUpdates` returns whatever the feed last published,
+ * which at ~08:00 ET is a stale/pre-market tick, not a defined session close.
+ *
+ * Data-source choice: we query Hermes' timestamped/benchmark endpoint
+ * (`getPriceUpdatesAtTimestamp`) as-of the prior trading session's 16:00 ET
+ * close instant (computed by `previousCloseUnix` in tradingCalendar.ts, which
+ * skips weekends + NYSE holidays). Hermes serves the benchmark update at-or-just
+ * -before that timestamp, i.e. the regular-session settle/close print. This is a
+ * defensible, deterministic "previous close" without a dedicated EOD feed.
+ *
+ * Returns the same shape as `fetchLatestPriceUpdate` (parsed price + the
+ * base64 update blobs), so callers can reuse it interchangeably.
+ *
+ * Throws if Hermes returns no parsed entry for the feed at the timestamp; the
+ * caller (createStrikes) decides whether to fall back to the latest price.
+ */
+export async function fetchPreviousClose(
+  hermes: HermesClient,
+  feedId: string,
+  closeUnix: number,
+): Promise<LatestPriceUpdate> {
+  const id = normalizeFeedId(feedId);
+  const resp = await hermes.getPriceUpdatesAtTimestamp(closeUnix, [id], {
+    encoding: "base64",
+    parsed: true,
+  });
+
+  const updateData = resp.binary.data;
+  const entry = resp.parsed?.find((p) => normalizeFeedId(p.id) === id);
+  if (!entry) {
+    throw new Error(
+      `Hermes returned no parsed previous-close price for feed ${id} at ${closeUnix}`,
+    );
+  }
+
+  const price = BigInt(entry.price.price);
+  const expo = entry.price.expo;
+  const parsed: ParsedPrice = {
+    feedId: normalizeFeedId(entry.id),
+    price,
+    conf: BigInt(entry.price.conf),
+    expo,
+    publishTime: entry.price.publish_time,
+    priceFloat: Number(price) * 10 ** expo,
+  };
+
+  return { parsed, updateData };
+}
+
 export interface PostPriceUpdateResult {
   /** The `PriceUpdateV2` account `settle_market` should reference. */
   priceUpdateAccount: PublicKey;

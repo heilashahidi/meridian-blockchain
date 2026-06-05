@@ -119,6 +119,23 @@ describe("config: loadConfig env defaults", () => {
     expect(cfg.tickers.length).toBeGreaterThan(0);
   });
 
+  it("defaults to the full MAG7 set (PRD §148/§318)", () => {
+    const cfg = loadConfig({});
+    expect(cfg.tickers).toEqual([
+      "AAPL",
+      "MSFT",
+      "GOOGL",
+      "AMZN",
+      "NVDA",
+      "META",
+      "TSLA",
+    ]);
+    // Every default ticker must have a valid Pyth feed configured.
+    for (const t of cfg.tickers) {
+      expect(() => validateTicker(t)).not.toThrow();
+    }
+  });
+
   it("honors a TICKERS override and rejects unknown tickers", () => {
     expect(loadConfig({ TICKERS: "AAPL,NVDA" }).tickers).toEqual(["AAPL", "NVDA"]);
     expect(() => loadConfig({ TICKERS: "AAPL,FOO" })).toThrow(/unknown ticker/);

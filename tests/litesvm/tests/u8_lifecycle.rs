@@ -135,6 +135,12 @@ const STRIKE_PRICE: u64 = 680_000_000;
 const EXPIRY_UNIX: i64 = 86_400;
 const FEED_ID: [u8; 32] = [9u8; 32];
 
+/// One whole USDC in base units (µUSDC). mint_pair/burn_pair/redeem move
+/// `n * ONE` µUSDC per token; order-book locks/fills move raw `qty * price`
+/// µUSDC. `assert_invariants`' conservation sum is unit-agnostic, so the
+/// `initial_total` we pass it must be in µUSDC (whole-USDC × ONE).
+const ONE: u64 = meridian::ONE_USDC;
+
 fn dollars_to_pyth(d: i64) -> i64 {
     d.saturating_mul(100_000_000)
 }
@@ -544,12 +550,15 @@ fn create_user(
     let yes = create_canonical_ata(&mut fx.svm, &kp.pubkey(), yes_mint);
     let no = create_canonical_ata(&mut fx.svm, &kp.pubkey(), no_mint);
     if usdc_each > 0 {
+        // 1 token base unit = $1.00 collateral, so mint_pair/burn_pair/redeem
+        // move `n * ONE_USDC` µUSDC. Fund each user in whole-USDC × ONE_USDC;
+        // order-book locks (qty*price µUSDC) stay raw.
         mint_usdc(
             &mut fx.svm,
             &fx.admin.insecure_clone(),
             &fx.usdc_mint.pubkey(),
             &usdc,
-            usdc_each,
+            usdc_each * meridian::ONE_USDC,
         );
     }
     UserAccounts {
@@ -571,10 +580,11 @@ fn lifecycle_dual_user_full_cycle() {
     // settle → BOTH users redeem (the dual-redeemer case) → final
     // balances + $1 USDC invariant verified end-to-end.
     //
-    // Two users each start with 10_000 USDC; total seeded = 20_000.
-    // The conservation invariant must hold across every transition.
+    // Two users each start with 10_000 USDC (= 10_000*ONE µUSDC); total seeded
+    // = 20_000*ONE µUSDC. The conservation invariant must hold across every
+    // transition.
     let mut env = Env::new(2, 10_000);
-    let initial_total: u64 = 20_000;
+    let initial_total: u64 = 20_000 * ONE;
 
     // ---- baseline invariants ----
     assert_invariants(
@@ -593,10 +603,10 @@ fn lifecycle_dual_user_full_cycle() {
 
     let a = env.balances(0);
     let b = env.balances(1);
-    assert_eq!(a, Balances { usdc: 9_900, yes: 100, no: 100 });
-    assert_eq!(b, Balances { usdc: 9_900, yes: 100, no: 100 });
+    assert_eq!(a, Balances { usdc: 9_900 * ONE, yes: 100, no: 100 });
+    assert_eq!(b, Balances { usdc: 9_900 * ONE, yes: 100, no: 100 });
 
-    // R14 holds + USDC conserved (200 USDC now in escrow).
+    // R14 holds + USDC conserved (200*ONE µUSDC now in escrow).
     assert_invariants(
         &env.fx.svm,
         &env.usdc_holders(),
@@ -606,15 +616,15 @@ fn lifecycle_dual_user_full_cycle() {
     );
 
     // ---- step 2: user A places a limit bid for 50 Yes @ price=40 ----
-    // Locks 50 * 40 = 2_000 microunits USDC in escrow.
+    // Locks 50 * 40 = 2_000 µUSDC in escrow (order-book amount, unscaled).
     env.place_limit(0, /* Bid */ 0, 40, 50, &[])
         .expect("A bid posts");
 
     let a = env.balances(0);
-    assert_eq!(a.usdc, 7_900, "A's bid locks 2_000 USDC");
+    assert_eq!(a.usdc, 9_900 * ONE - 2_000, "A's bid locks 2_000 µUSDC");
 
     // ---- step 3: user B fills via market sell of 50 Yes @ slippage=1 ----
-    // Maker is A; A receives 50 Yes, B receives 50 * 40 = 2_000 USDC.
+    // Maker is A; A receives 50 Yes, B receives 50 * 40 = 2_000 µUSDC.
     let maker_pair = (env.users[0].usdc, env.users[0].yes);
     env.place_market(1, /* Ask */ 1, 50, 1, &[maker_pair])
         .expect("B market-sell fills A");
@@ -622,9 +632,9 @@ fn lifecycle_dual_user_full_cycle() {
     let a = env.balances(0);
     let b = env.balances(1);
     // A: +50 Yes (now 150), USDC unchanged (escrow paid out).
-    assert_eq!(a, Balances { usdc: 7_900, yes: 150, no: 100 });
-    // B: -50 Yes (now 50), +2000 USDC (now 11_900).
-    assert_eq!(b, Balances { usdc: 11_900, yes: 50, no: 100 });
+    assert_eq!(a, Balances { usdc: 9_900 * ONE - 2_000, yes: 150, no: 100 });
+    // B: -50 Yes (now 50), +2000 µUSDC.
+    assert_eq!(b, Balances { usdc: 9_900 * ONE + 2_000, yes: 50, no: 100 });
 
     // Book is empty (bid fully consumed, ask not posted because market).
     let book = env.book();
@@ -661,12 +671,14 @@ fn lifecycle_dual_user_full_cycle() {
 
     let a = env.balances(0);
     let b = env.balances(1);
-    // A: USDC = 7_900 + 150 = 8_050. Yes = 0. No = 100 (worthless).
-    assert_eq!(a, Balances { usdc: 8_050, yes: 0, no: 100 });
-    // B: USDC = 11_900 + 50 = 11_950. Yes = 0. No = 100 (worthless).
-    assert_eq!(b, Balances { usdc: 11_950, yes: 0, no: 100 });
+    // A: USDC = (9_900*ONE - 2_000) + 150*ONE = 10_050*ONE - 2_000. Yes = 0.
+    //    No = 100 (worthless).
+    assert_eq!(a, Balances { usdc: 10_050 * ONE - 2_000, yes: 0, no: 100 });
+    // B: USDC = (9_900*ONE + 2_000) + 50*ONE = 9_950*ONE + 2_000. Yes = 0.
+    //    No = 100 (worthless).
+    assert_eq!(b, Balances { usdc: 9_950 * ONE + 2_000, yes: 0, no: 100 });
 
-    // Sum: 8_050 + 11_950 = 20_000. USDC conserved end-to-end.
+    // Sum: (10_050*ONE - 2_000) + (9_950*ONE + 2_000) = 20_000*ONE. Conserved.
     assert_eq!(a.usdc + b.usdc, initial_total);
 
     // ---- final invariant assertions ----
@@ -773,10 +785,10 @@ fn multi_market_isolation() {
         &fx.admin.insecure_clone(),
         &fx.usdc_mint.pubkey(),
         &user_usdc,
-        10_000,
+        10_000 * ONE,
     );
 
-    let initial_total = 10_000u64;
+    let initial_total = 10_000 * ONE;
     let usdc_holders = vec![user_usdc, market_a.usdc_escrow, market_b.usdc_escrow];
 
     // Mint 50 pairs on market A and 50 pairs on market B.
@@ -829,11 +841,11 @@ fn multi_market_isolation() {
     // both market escrows.
     assert_eq!(
         read_token_account(&fx.svm, &user_usdc).amount,
-        9_900,
-        "100 USDC locked across two escrows",
+        9_900 * ONE,
+        "100*ONE µUSDC locked across two escrows",
     );
-    assert_eq!(read_token_account(&fx.svm, &market_a.usdc_escrow).amount, 50);
-    assert_eq!(read_token_account(&fx.svm, &market_b.usdc_escrow).amount, 50);
+    assert_eq!(read_token_account(&fx.svm, &market_a.usdc_escrow).amount, 50 * ONE);
+    assert_eq!(read_token_account(&fx.svm, &market_b.usdc_escrow).amount, 50 * ONE);
 
     // Both markets' R14 holds.
     let supply_a_yes = read_mint(&fx.svm, &market_a.yes_mint).supply;
@@ -993,7 +1005,7 @@ fn multi_market_isolation() {
 #[test]
 fn mint_trade_partial_cancel_burn_roundtrip() {
     let mut env = Env::new(2, 10_000);
-    let initial_total = 20_000u64;
+    let initial_total = 20_000 * ONE;
 
     // User A is the trader; user B is the maker on the ask side.
 
@@ -1026,24 +1038,22 @@ fn mint_trade_partial_cancel_burn_roundtrip() {
 
     let a = env.balances(0);
     let b = env.balances(1);
-    // A: locked 50*40=2_000 USDC, received 30 Yes (filled), 20*40=800
-    // USDC still locked on residual bid. So:
-    //   USDC: 10_000 - 2_000 + (refund? bid filled at maker price 40, no
-    //   price improvement since same price) = 8_000. Wait: A locked at
-    //   own bid price 40; maker filled at 40; no refund. End USDC: 8_000.
-    //   Yes: +30. No: 0.
-    assert_eq!(a, Balances { usdc: 8_000, yes: 30, no: 0 });
+    // A: locked 50*40=2_000 µUSDC, received 30 Yes (filled), 20*40=800
+    // µUSDC still locked on residual bid. Bid filled at maker price 40, no
+    // price improvement (same price), so no refund. End USDC:
+    //   10_000*ONE - 2_000. Yes: +30. No: 0.
+    assert_eq!(a, Balances { usdc: 10_000 * ONE - 2_000, yes: 30, no: 0 });
     // B: had 50 Yes after mint, sold 30 → 20 Yes left. USDC: started
-    // 10_000, mint_pair cost 50 → 9_950, sold 30@40 → +1_200 → 11_150.
+    // 10_000*ONE, mint_pair cost 50*ONE → 9_950*ONE, sold 30@40 → +1_200.
     // No: 50 (untouched).
-    assert_eq!(b, Balances { usdc: 11_150, yes: 20, no: 50 });
+    assert_eq!(b, Balances { usdc: 9_950 * ONE + 1_200, yes: 20, no: 50 });
 
-    // Cancel the 20-qty residual. Should refund 20*40=800 USDC to A.
+    // Cancel the 20-qty residual. Should refund 20*40=800 µUSDC to A.
     env.cancel(0, /* Bid */ 0, 40, residual_seq)
         .expect("A cancels residual");
 
     let a = env.balances(0);
-    assert_eq!(a, Balances { usdc: 8_800, yes: 30, no: 0 });
+    assert_eq!(a, Balances { usdc: 10_000 * ONE - 2_000 + 800, yes: 30, no: 0 });
 
     // The book is now empty.
     let book = env.book();
@@ -1060,12 +1070,13 @@ fn mint_trade_partial_cancel_burn_roundtrip() {
     // mint→trade→cancel→burn correctly.
     env.mint_pair(0, 30);
     let a = env.balances(0);
-    assert_eq!(a, Balances { usdc: 8_770, yes: 60, no: 30 });
+    // -30*ONE µUSDC from the mint: (10_000*ONE - 2_000 + 800) - 30*ONE.
+    assert_eq!(a, Balances { usdc: 9_970 * ONE - 2_000 + 800, yes: 60, no: 30 });
 
     env.burn_pair(0, 30);
     let a = env.balances(0);
-    // -30 Yes -30 No +30 USDC.
-    assert_eq!(a, Balances { usdc: 8_800, yes: 30, no: 0 });
+    // -30 Yes -30 No +30*ONE µUSDC → back to 10_000*ONE - 2_000 + 800.
+    assert_eq!(a, Balances { usdc: 10_000 * ONE - 2_000 + 800, yes: 30, no: 0 });
 
     // ---- Final invariants ----
     //
@@ -1077,13 +1088,14 @@ fn mint_trade_partial_cancel_burn_roundtrip() {
     assert_eq!(yes_supply, no_supply, "R14: Yes supply == No supply");
     assert_eq!(yes_supply, 50);
 
-    // USDC conservation: A 8_800 + B 11_150 + escrow = 20_000.
-    //   Escrow holds the 50 USDC backing the still-outstanding 50
+    // USDC conservation: A (10_000*ONE - 2_000 + 800) + B (9_950*ONE + 1_200)
+    //   + escrow (50*ONE) = 20_000*ONE.
+    //   Escrow holds the 50*ONE µUSDC backing the still-outstanding 50
     //   Yes+No pairs (30 with A, 20 with B Yes; 30 burned by A; 50 No
     //   with B; the trade only moved tokens, not USDC out of the system).
     assert_eq!(
         read_token_account(&env.fx.svm, &env.market.usdc_escrow).amount,
-        50,
+        50 * ONE,
         "escrow backs the 50 outstanding pairs",
     );
     assert_invariants(

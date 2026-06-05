@@ -82,22 +82,58 @@ export function etPartsOf(date: Date): EtParts {
  * ICU (no manual ±4/±5 math).
  */
 export function settlementExpiryUnix(now: Date = new Date()): number {
-  // Unix seconds at which the ET wall clock reads y-mo-d 16:00:00.
-  const etWallToUnix = (y: number, mo: number, d: number): number => {
-    const guessMs = Date.UTC(y, mo - 1, d, 16, 0, 0); // pretend ET wall == UTC
-    const p = etPartsOf(new Date(guessMs));
-    const asIfUtcMs = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, 0);
-    const offsetMs = asIfUtcMs - guessMs; // how far ET is ahead of UTC
-    return Math.floor((guessMs - offsetMs) / 1000);
-  };
   const nowSec = Math.floor(now.getTime() / 1000);
   const et = etPartsOf(now);
-  let t = etWallToUnix(et.year, et.month, et.day);
+  let t = etCloseUnix(et.year, et.month, et.day);
   if (t <= nowSec) {
     const tom = etPartsOf(new Date(now.getTime() + 86_400_000));
-    t = etWallToUnix(tom.year, tom.month, tom.day);
+    t = etCloseUnix(tom.year, tom.month, tom.day);
   }
   return t;
+}
+
+/**
+ * Unix seconds at which the ET wall clock reads `y-mo-d 16:00:00` — the NYSE
+ * regular-session close. DST-correct (offset measured via ICU, no manual ±4/±5).
+ * Shared by `settlementExpiryUnix` and `previousCloseUnix`.
+ */
+function etCloseUnix(y: number, mo: number, d: number): number {
+  const guessMs = Date.UTC(y, mo - 1, d, 16, 0, 0); // pretend ET wall == UTC
+  const p = etPartsOf(new Date(guessMs));
+  const asIfUtcMs = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, 0);
+  const offsetMs = asIfUtcMs - guessMs; // how far ET is ahead of UTC
+  return Math.floor((guessMs - offsetMs) / 1000);
+}
+
+/**
+ * Unix seconds for the 16:00 ET close of the PREVIOUS US trading session
+ * relative to `now`. Used by the morning create-strikes job to anchor the
+ * strike ladder on the prior session's CLOSE (PRD §247/§292: "reads previous
+ * day's close"), not the stale pre-market latest price.
+ *
+ * "Previous session" = the most recent trading day whose 16:00 ET close is
+ * strictly before `now`. Walks backwards skipping weekends + NYSE holidays
+ * (via `isUsTradingDay`). E.g. run Monday 08:00 ET → the prior Friday's close;
+ * run a Tuesday after a Monday holiday → the prior Friday's close.
+ */
+export function previousCloseUnix(now: Date = new Date()): number {
+  const nowSec = Math.floor(now.getTime() / 1000);
+  // Start from today and walk back day-by-day until we find a trading day whose
+  // 16:00 ET close is already in the past. Capped at ~10 days to cover the
+  // longest realistic holiday-weekend run without looping unbounded.
+  let cursor = new Date(now.getTime());
+  for (let i = 0; i < 10; i++) {
+    const et = etPartsOf(cursor);
+    if (isUsTradingDay(et)) {
+      const close = etCloseUnix(et.year, et.month, et.day);
+      if (close < nowSec) return close;
+    }
+    // Step back one calendar day (24h is safe: we only read the ET y/mo/d).
+    cursor = new Date(cursor.getTime() - 86_400_000);
+  }
+  // Fallback (should be unreachable within the holiday horizon): yesterday 16:00.
+  const y = etPartsOf(new Date(now.getTime() - 86_400_000));
+  return etCloseUnix(y.year, y.month, y.day);
 }
 
 /**

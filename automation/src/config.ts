@@ -94,11 +94,21 @@ export const TICKERS: Record<Ticker, TickerConfig> = Object.fromEntries(
 ) as Record<Ticker, TickerConfig>;
 
 /**
- * The subset the jobs operate on by default (demo speed — the plan ships a
- * subset by default, all 7 configurable). Override with env `TICKERS`
- * (comma-separated, e.g. `TICKERS=AAPL,NVDA,TSLA`).
+ * The default ticker set the jobs operate on: the full MAG7 (PRD §148/§318).
+ * GOOGL is Alphabet's voting class (the canonical MAG7 member); GOOG is the
+ * non-voting class and is intentionally NOT in the default to avoid a duplicate
+ * Alphabet market. Override with env `TICKERS` (comma-separated, e.g.
+ * `TICKERS=AAPL,NVDA,TSLA` to run a faster demo subset).
  */
-export const DEFAULT_TICKERS: Ticker[] = ["AAPL", "NVDA", "TSLA"];
+export const DEFAULT_TICKERS: Ticker[] = [
+  "AAPL",
+  "MSFT",
+  "GOOGL",
+  "AMZN",
+  "NVDA",
+  "META",
+  "TSLA",
+];
 
 // ─── strike-spacing rules ──────────────────────────────────────────────────
 

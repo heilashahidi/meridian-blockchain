@@ -23,12 +23,12 @@
 //!     └─ burn_pair_inner(amount)
 //!           ├─ burn Yes from user [amount]
 //!           ├─ burn No from user [amount]
-//!           └─ transfer USDC from usdc_escrow → user [amount]
+//!           └─ transfer USDC from usdc_escrow → user [amount * ONE_USDC]
 //! ```
 //!
 //! End state: user's No is `prior_no - amount`, Yes back to 0, USDC delta
-//! is `amount` (from burn_pair) minus the actual notional paid on the buy
-//! leg (= `sum(fill_qty * fill_price)`).
+//! is `amount * ONE_USDC` (from burn_pair) minus the actual notional paid on
+//! the buy leg (= `sum(fill_qty * fill_price)`).
 //!
 //! # Maker payouts via `remaining_accounts`
 //!

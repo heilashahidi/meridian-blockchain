@@ -11,7 +11,7 @@
 //! ```text
 //! User signs 1 tx ──> buy_no(amount, min_yes_sell_price)
 //!     ├─ mint_pair_inner(amount)
-//!     │     ├─ transfer USDC (user → usdc_escrow) [amount]
+//!     │     ├─ transfer USDC (user → usdc_escrow) [amount * ONE_USDC]
 //!     │     ├─ mint Yes to user [amount]
 //!     │     └─ mint No to user [amount]
 //!     └─ place_order_inner(side=Ask, type=Market,
@@ -23,7 +23,7 @@
 //!           └─ residual rejected (market order)
 //!           returns OrderOutcome { filled_qty, residual_qty }
 //!     └─ U6 atomicity check: residual_qty MUST be 0, else revert.
-//!         User ends with: amount No, 0 Yes, USDC delta = sum(fill_price * fill_qty) - amount.
+//!         User ends with: amount No, 0 Yes, USDC delta = sum(fill_price * fill_qty) - amount * ONE_USDC.
 //! ```
 //!
 //! # Maker payouts via `remaining_accounts`

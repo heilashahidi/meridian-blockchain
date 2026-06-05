@@ -9,27 +9,30 @@ Legend: 🔴 critical · 🟠 high-value · 🟡 hardening · ✅ done · 🛠 i
 
 ## Correctness
 
-### 🛠 1e6 collateral unit mismatch (No-side trades + Yes redemption)
+### ✅ 1e6 collateral unit mismatch (No-side trades + Yes redemption) — FIXED
 **The big one.** The order book prices a token in `[0, ONE_USDC]` µUSDC (= $0–$1),
 but `mint_pair`/`burn_pair`/`redeem` collateralized **1 µUSDC per token** instead
 of **$1.00**. The two unit systems disagreed by 1,000,000×.
 
-- **Symptoms:** `Buy No` / `Sell No` revert with `InvalidAmount` and show negative
-  proceeds; a Yes bought for $0.72 would `redeem` for $0.000001 even when it wins.
-- **Root cause:** current code violates the PRD vault invariant
-  (`Vault = $1.00 × pairs`); it held `escrow == supply` (1 µUSDC/token).
-- **Fix (implemented, branch `fix/no-side-1e6-collateral`):** multiply the USDC
-  amount by `ONE_USDC` in the three transfers — `mint_pair_inner`,
-  `burn_pair_inner`, `redeem_handler` — plus a `pub const ONE_USDC` in `lib.rs`.
-  Order book unchanged (already correct). New invariant:
-  `usdc_escrow == supply * ONE_USDC`. Host-compiles clean.
-- **NOT yet deployed.** Requires: (a) an SBF build (blocked locally by a
-  `getrandom`/platform-tools toolchain issue — see below), (b) a program upgrade,
-  (c) **re-create + re-seed all markets** (existing markets are collateralized
-  under the old math and would be insolvent under the new), (d) rewrite the
-  LiteSVM test assertions that currently encode the *old* (wrong) economics
-  (`u4/u6/u7/u8`), (e) flip `NO_SIDE_DISABLED = false` in `TradePanel.tsx`.
-- **Interim mitigation (live):** No-side buttons disabled (`TradePanel.tsx`).
+- **Symptoms (pre-fix):** `Buy No` / `Sell No` reverted with `InvalidAmount` and
+  showed negative proceeds; a Yes bought for $0.72 would `redeem` for $0.000001
+  even when it won.
+- **Root cause:** violated the PRD vault invariant (`Vault = $1.00 × pairs`); it
+  held `escrow == supply` (1 µUSDC/token).
+- **Fix (implemented + tested, branch `fix/a-grade-1e6-and-prd-gaps`, Approach 2):**
+  multiply the USDC amount by `ONE_USDC` in the three transfers —
+  `mint_pair_inner`, `burn_pair_inner`, `redeem_handler` — plus a
+  `pub const ONE_USDC` in `lib.rs`. Order book unchanged (already correct in these
+  units). New invariant: **`usdc_escrow == supply * ONE_USDC`** (+ resting-bid
+  notional on the order book). 
+- **Verified:** `anchor build` produces the `.so`; the matching proptests (9),
+  the LiteSVM suite (101 — `u4`–`u8` reassertions + the `u8` buy-Yes-via-book →
+  settle → redeem-for-full-$1 round-trip), and the Trident R13 escrow invariant
+  were all updated to the new units and pass / reconcile. `NO_SIDE_DISABLED`
+  removed in `TradePanel.tsx`; all four trade paths live in the UI.
+- **Remaining operational step (human-gated):** program **upgrade to devnet** +
+  **re-create/re-seed markets** (old markets are collateralized under the old
+  math). See `docs/DEVNET-RUNBOOK.md` → "Redeploy after the 1e6 fix".
 - Plan: `docs/plans/2026-06-04-002-fix-no-side-1e6-unit-mismatch-plan.md`.
 
 ### ✅ Portfolio share-quantity display (was $0.00)
@@ -37,13 +40,11 @@ of **$1.00**. The two unit systems disagreed by 1,000,000×.
 `sharesFromBaseUnits`. Merged + deployed.
 Plan: `docs/plans/2026-06-04-001-fix-share-quantity-unit-scaling-plan.md`.
 
-### ⚠️ SBF build blocked in this environment (`getrandom`)
-`cargo build-sbf` fails: `getrandom 0.2.17` (via `rand_core 0.6`) **and**
-`getrandom 0.3.4` (via `rand_core 0.9`) don't support the Solana SBF target in
-platform-tools v1.52. 0.2 is fixable with a target-scoped `custom` feature; 0.3
-needs a `getrandom_backend="custom"` cfg + a backend impl. The committed
-`Cargo.toml` builds on the toolchain that produced the deployed `.so`. **Resolve
-on the working build env, or pin the toolchain, before deploying the 1e6 fix.**
+### ✅ SBF build (`anchor build`) works on the current toolchain
+Earlier the build was blocked by a `getrandom`/platform-tools mismatch. On the
+current env `anchor build` (anchor-cli 1.0.0, solana 3.1.10) produces
+`target/deploy/meridian.so` + `target/idl/meridian.json` clean — the 1e6 fix is
+build-ready for the human-gated devnet upgrade.
 
 ---
 

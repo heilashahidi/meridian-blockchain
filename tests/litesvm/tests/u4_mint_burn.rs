@@ -19,7 +19,10 @@
 //!     the bool. Documented inline so a future `pause` instruction can
 //!     replace this workaround without changing the assertion shape.
 //!   * **$1.00 invariant:** at every assertion point,
-//!     `yes_mint.supply == no_mint.supply == usdc_escrow.amount`.
+//!     `yes_mint.supply == no_mint.supply` and the escrow holds exactly
+//!     `supply * ONE_USDC` µUSDC ($1.00 collateral per token). The happy-path
+//!     dollar figures above (50 USDC, etc.) are the whole-USDC view of that
+//!     raw µUSDC escrow.
 //!
 //! The test reuses the `Fixture` from `meridian_litesvm_tests` and wires
 //! in a couple of local helpers for user-wallet creation / token-account
@@ -245,14 +248,17 @@ impl Env {
         let user_yes_kp = create_token_account(&mut fx.svm, &user, &user.pubkey(), &yes_mint);
         let user_no_kp = create_token_account(&mut fx.svm, &user, &user.pubkey(), &no_mint);
 
-        // Mint `usdc_initial` USDC to the user.
+        // Mint `usdc_initial` *whole USDC* to the user (× ONE_USDC µUSDC). The
+        // dollar-denominated `usdc_initial` keeps the per-test funding readable;
+        // mint_pair/burn_pair move ONE_USDC µUSDC per token, so a user funded
+        // with N dollars can mint exactly N tokens.
         if usdc_initial > 0 {
             mint_usdc(
                 &mut fx.svm,
                 &fx.admin.insecure_clone(),
                 &fx.usdc_mint.pubkey(),
                 &user_usdc_kp.pubkey(),
-                usdc_initial,
+                usdc_initial * meridian::ONE_USDC,
             );
         }
 
@@ -322,7 +328,10 @@ impl Env {
         config.paused
     }
 
-    /// Verify the $1.00 invariant: yes_supply == no_supply == usdc_escrow.amount.
+    /// Verify the $1.00 invariant: yes_supply == no_supply, and the escrow
+    /// holds exactly `supply * ONE_USDC` µUSDC ($1.00 of collateral per token).
+    /// Checked on the RAW on-chain amounts (no dollar rescaling) so this is a
+    /// faithful test of the deployed vault invariant.
     fn assert_invariant(&self) {
         let yes = read_mint(&self.fx.svm, &self.yes_mint);
         let no = read_mint(&self.fx.svm, &self.no_mint);
@@ -332,19 +341,29 @@ impl Env {
             "yes_mint.supply ({}) != no_mint.supply ({})",
             yes.supply, no.supply,
         );
+        let expected_escrow = (yes.supply as u128) * (meridian::ONE_USDC as u128);
         assert_eq!(
-            yes.supply, esc.amount,
-            "yes_mint.supply ({}) != usdc_escrow.amount ({})",
-            yes.supply, esc.amount,
+            expected_escrow,
+            esc.amount as u128,
+            "yes_mint.supply * ONE_USDC ({}) != usdc_escrow.amount ({})",
+            expected_escrow,
+            esc.amount,
         );
     }
 
     /// Snapshot of the user's three token balances + escrow + supplies.
+    ///
+    /// `usdc` and `escrow` are reported in **whole USDC** (raw µUSDC ÷
+    /// `ONE_USDC`). Every USDC movement in this file is a mint/burn of a token
+    /// pair, which moves exactly `ONE_USDC` µUSDC per token, so the division is
+    /// always exact and the assertions below read in dollars. Token balances
+    /// (`yes`/`no`) and supplies stay in raw base units (= share count, since
+    /// the system trades 1 base unit = 1 share).
     fn balances(&self) -> Balances {
-        let usdc = read_token_account(&self.fx.svm, &self.user_usdc).amount;
+        let usdc = read_token_account(&self.fx.svm, &self.user_usdc).amount / meridian::ONE_USDC;
         let yes = read_token_account(&self.fx.svm, &self.user_yes).amount;
         let no = read_token_account(&self.fx.svm, &self.user_no).amount;
-        let escrow = read_token_account(&self.fx.svm, &self.usdc_escrow).amount;
+        let escrow = read_token_account(&self.fx.svm, &self.usdc_escrow).amount / meridian::ONE_USDC;
         let yes_supply = read_mint(&self.fx.svm, &self.yes_mint).supply;
         let no_supply = read_mint(&self.fx.svm, &self.no_mint).supply;
         Balances {

@@ -1,12 +1,23 @@
 ---
 date: 2026-06-04
 type: fix
-status: in-progress
+status: done
 depth: deep
 title: "fix: No-side 1e6 unit mismatch (buy_no/sell_no revert; Yes redemption skewed)"
 ---
 
 # fix: No-side 1e6 unit mismatch
+
+> **✅ DONE (2026-06-05, branch `fix/a-grade-1e6-and-prd-gaps`).** Shipped
+> **Approach 2**: `mint_pair`/`burn_pair`/`redeem` now move `amount * ONE_USDC`
+> µUSDC (`pub const ONE_USDC` in `lib.rs`); the order book was already correct in
+> these units. Invariant is now `usdc_escrow == supply * ONE_USDC` (+ resting-bid
+> notional). LiteSVM `u4`–`u8` reasserted (incl. the `u8` buy-via-book →
+> settle → redeem-for-$1 round-trip), Trident R13 updated, and the UI No-side
+> kill-switch removed — all four trade paths are live. The one remaining step is
+> the **human-gated devnet program upgrade + market re-seed** (see
+> `docs/DEVNET-RUNBOOK.md`). The original plan text is retained below for the
+> decision record.
 
 `Buy No` / `Sell No` show negative proceeds and revert on-chain with
 `InvalidAmount`. Root cause is a 1,000,000× unit disagreement between the

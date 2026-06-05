@@ -239,12 +239,15 @@ impl Env {
             let yes = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &yes_mint);
             let no = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &no_mint);
             if usdc_each > 0 {
+                // 1 token base unit = $1.00 collateral, so mint_pair/burn_pair/
+                // redeem move `n * ONE_USDC` µUSDC. Fund each user in whole-USDC
+                // × ONE_USDC; order-book locks (qty*price µUSDC) stay raw.
                 mint_usdc(
                     &mut fx.svm,
                     &fx.admin.insecure_clone(),
                     &fx.usdc_mint.pubkey(),
                     &usdc,
-                    usdc_each,
+                    usdc_each * meridian::ONE_USDC,
                 );
             }
             users.push(UserAccounts {
@@ -526,6 +529,11 @@ struct Balances {
     yes: u64,
     no: u64,
 }
+
+/// One whole USDC in base units (µUSDC). mint_pair/burn_pair/redeem move
+/// `n * ONE` µUSDC per token; order-book locks/refunds move raw `qty * price`
+/// µUSDC.
+const ONE: u64 = meridian::ONE_USDC;
 
 /// Convenience: $X.00 → Pyth-scale price at PYTH_EXPONENT = -8.
 fn dollars_to_pyth(d: i64) -> i64 {
@@ -853,7 +861,7 @@ fn admin_settle_after_grace_succeeds_and_redeems() {
     env.redeem(0, env.yes_mint, env.users[0].yes, 50)
         .expect("winner redeems after emergency settle");
     assert_eq!(env.balances(0).yes, 0, "Yes burned");
-    assert_eq!(env.balances(0).usdc, 9_950 + 50, "USDC restored");
+    assert_eq!(env.balances(0).usdc, 9_950 * ONE + 50 * ONE, "USDC restored");
     assert_eq!(env.usdc_escrow_amount(), 0, "escrow drained — solvent");
 }
 
@@ -898,7 +906,7 @@ fn admin_settle_no_wins_succeeds_and_redeems() {
     env.redeem(0, env.no_mint, env.users[0].no, 50)
         .expect("No winner redeems after emergency NoWins settle");
     assert_eq!(env.balances(0).no, 0, "No burned");
-    assert_eq!(env.balances(0).usdc, 9_950 + 50, "USDC restored");
+    assert_eq!(env.balances(0).usdc, 9_950 * ONE + 50 * ONE, "USDC restored");
     assert_eq!(env.usdc_escrow_amount(), 0, "escrow drained — solvent");
 }
 
@@ -1133,9 +1141,9 @@ fn mint_pair_allowed_after_expiry() {
 fn ae1_settle_then_sweep_refunds_open_orders() {
     // AE1: open orders on both sides, settle, then sweep refunds.
     //
-    // Setup:
-    //   A: 10_000 USDC. Bids 50 Yes @ price=40 → 2_000 USDC locked.
-    //   B: 10_000 USDC. seed_yes(50) → 9_950 USDC + 50 Yes + 50 No.
+    // Setup (order-book qty*price µUSDC unchanged; mint_pair moves n*ONE µUSDC):
+    //   A: 10_000*ONE µUSDC. Bids 50 Yes @ price=40 → 2_000 µUSDC locked.
+    //   B: 10_000*ONE µUSDC. seed_yes(50) → 9_950*ONE µUSDC + 50 Yes + 50 No.
     //      Asks 50 Yes @ price=60 → 50 Yes locked in escrow.
     //
     // After settle: market settled, both orders still resting.
@@ -1154,7 +1162,7 @@ fn ae1_settle_then_sweep_refunds_open_orders() {
     let pre_b = env.balances(1);
     assert_eq!(env.book().bids.len(), 1);
     assert_eq!(env.book().asks.len(), 1);
-    assert_eq!(env.usdc_escrow_amount(), 2_000 + 50, "A bid + B mint_pair");
+    assert_eq!(env.usdc_escrow_amount(), 2_000 + 50 * ONE, "A bid + B mint_pair");
     assert_eq!(env.yes_escrow_amount(), 50, "B ask collateral");
 
     // Settle.
@@ -1188,8 +1196,8 @@ fn ae1_settle_then_sweep_refunds_open_orders() {
     assert_eq!(post_b.yes, pre_b.yes + 50, "B reclaims ask Yes");
 
     // Escrows drain (modulo unsettled mint_pair USDC which stays put).
-    // A had no mint_pair; B minted 50. So USDC escrow holds B's 50.
-    assert_eq!(env.usdc_escrow_amount(), 50);
+    // A had no mint_pair; B minted 50. So USDC escrow holds B's 50*ONE.
+    assert_eq!(env.usdc_escrow_amount(), 50 * ONE);
     assert_eq!(env.yes_escrow_amount(), 0);
 
     // Cursor advanced.
@@ -1326,11 +1334,11 @@ fn sweep_fails_before_settle() {
 #[test]
 fn redeem_happy_yes_wins() {
     // User holds 50 Yes from mint_pair; settle YesWins; redeem(50, Yes)
-    // → 50 Yes burned, 50 USDC received.
+    // → 50 Yes burned, 50*ONE µUSDC received.
     let mut env = Env::new(1, 10_000);
     env.seed_yes(0, 50);
-    // pre: 9_950 USDC + 50 Yes + 50 No, escrow has 50 USDC.
-    assert_eq!(env.balances(0).usdc, 9_950);
+    // pre: 9_950*ONE µUSDC + 50 Yes + 50 No, escrow has 50*ONE µUSDC.
+    assert_eq!(env.balances(0).usdc, 9_950 * ONE);
     assert_eq!(env.balances(0).yes, 50);
 
     let ts = EXPIRY_UNIX + 10;
@@ -1344,7 +1352,7 @@ fn redeem_happy_yes_wins() {
     let post = env.balances(0);
     assert_eq!(post.yes, 0, "Yes burned");
     assert_eq!(post.no, 50, "No untouched");
-    assert_eq!(post.usdc, 9_950 + 50, "USDC restored");
+    assert_eq!(post.usdc, 9_950 * ONE + 50 * ONE, "USDC restored");
     assert_eq!(env.usdc_escrow_amount(), 0, "escrow drained");
     let (y, _n) = env.supplies();
     assert_eq!(y, 0, "Yes supply zero");
@@ -1366,7 +1374,7 @@ fn redeem_happy_no_wins() {
     let post = env.balances(0);
     assert_eq!(post.no, 0, "No burned");
     assert_eq!(post.yes, 50, "Yes untouched");
-    assert_eq!(post.usdc, 9_950 + 50, "USDC restored");
+    assert_eq!(post.usdc, 9_950 * ONE + 50 * ONE, "USDC restored");
 }
 
 #[test]
@@ -1383,7 +1391,7 @@ fn redeem_works_after_clock_advance() {
     env.advance_clock(ts + 7 * 86_400);
     env.redeem(0, env.yes_mint, env.users[0].yes, 50)
         .expect("redeem still works much later");
-    assert_eq!(env.balances(0).usdc, 10_000);
+    assert_eq!(env.balances(0).usdc, 10_000 * ONE);
 }
 
 #[test]
@@ -1440,15 +1448,15 @@ fn end_to_end_dollar_invariant() {
     // The strongest single test in the U7 suite: assert sum-of-USDC across
     // all user wallets + escrow is conserved across the full lifecycle.
     //
-    // Two users start with 10_000 USDC each = 20_000 total. After
+    // Two users start with 10_000*ONE µUSDC each = 20_000*ONE total. After
     // create → mint → trade → settle → sweep → redeem, the sum across
-    // all USDC-bearing accounts must still equal 20_000.
+    // all USDC-bearing accounts must still equal 20_000*ONE.
     let mut env = Env::new(2, 10_000);
     let initial_total: u64 = env.balances(0).usdc + env.balances(1).usdc;
-    assert_eq!(initial_total, 20_000);
+    assert_eq!(initial_total, 20_000 * ONE);
 
     // A buys some Yes (50 @ price=40) from B's mint+ask.
-    env.seed_yes(1, 50); // B: 9_950 USDC, 50 Yes, 50 No
+    env.seed_yes(1, 50); // B: 9_950*ONE µUSDC, 50 Yes, 50 No
     env.place_limit(1, /* Ask */ 1, 40, 50, &[])
         .expect("B ask posts");
     // A places a crossing bid → 50 Yes flows to A.

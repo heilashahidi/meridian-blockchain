@@ -1,7 +1,7 @@
 // jobs/createStrikes.ts — the morning "create-strikes" job (U4).
 //
 // For each configured MAG7 ticker:
-//   1. read a reference price off-chain from Hermes (allowed per PRD §292),
+//   1. read the PREVIOUS session's close off-chain from Hermes (PRD §247/§292),
 //   2. compute a strike ladder (config.computeStrikes),
 //   3. derive each per-strike Market PDA and SKIP the ones that already exist
 //      (idempotent — never crashes with AccountAlreadyInitialized),
@@ -41,7 +41,7 @@ import {
   type Ticker,
 } from "../config.js";
 import { alert, log } from "../log.js";
-import { settlementExpiryUnix } from "../tradingCalendar.js";
+import { previousCloseUnix, settlementExpiryUnix } from "../tradingCalendar.js";
 
 // NOTE: `../pyth.js` (and its `@pythnetwork/pyth-solana-receiver` →
 // `@pythnetwork/solana-utils` → `jito-ts` chain) is imported LAZILY inside
@@ -78,7 +78,11 @@ export interface TickerPlan {
 // ─── injectable effects (mocked in unit tests) ────────────────────────────────
 
 export interface CreateStrikesDeps {
-  /** Read the reference (latest/previous-close) price for a ticker, in dollars. */
+  /**
+   * Read the reference price for a ticker, in dollars. The live impl returns the
+   * PREVIOUS trading session's close (PRD §247/§292), with a latest-price
+   * fallback only if the historical fetch fails. Injected/mocked in unit tests.
+   */
   fetchReferencePrice(ticker: Ticker): Promise<number>;
   /** True if an account already exists on-chain at `address`. */
   accountExists(address: PublicKey): Promise<boolean>;
@@ -387,17 +391,38 @@ export function makeLiveDeps(cfg: AutomationConfig): CreateStrikesDeps {
     async fetchReferencePrice(ticker) {
       const tcfg = validateTicker(ticker);
       // Lazy-load the Pyth helper (see top-of-file note on the jito-ts chain).
-      const { fetchLatestPriceUpdate, makeHermesClient } = await import(
-        "../pyth.js"
-      );
+      const { fetchPreviousClose, fetchLatestPriceUpdate, makeHermesClient } =
+        await import("../pyth.js");
       const hermes = makeHermesClient(cfg.hermesUrl);
-      const update = await fetchLatestPriceUpdate(hermes, tcfg.feedId);
-      if (!(update.parsed.priceFloat > 0)) {
+
+      // PRD §247/§292: anchor the strike ladder on the PREVIOUS session's CLOSE
+      // (prior trading day's 16:00 ET print), not the stale pre-market latest
+      // price. Fall back to the latest price ONLY if the historical fetch fails,
+      // so the morning job never hard-fails on a transient Hermes/benchmark gap.
+      const closeUnix = previousCloseUnix();
+      let priceFloat: number;
+      try {
+        const prev = await fetchPreviousClose(hermes, tcfg.feedId, closeUnix);
+        priceFloat = prev.parsed.priceFloat;
+      } catch (e) {
+        log.warn(
+          "previous-close fetch failed; falling back to latest price",
+          {
+            ticker,
+            closeUnix,
+            error: e instanceof Error ? e.message : String(e),
+          },
+        );
+        const latest = await fetchLatestPriceUpdate(hermes, tcfg.feedId);
+        priceFloat = latest.parsed.priceFloat;
+      }
+
+      if (!(priceFloat > 0)) {
         throw new Error(
-          `Hermes returned non-positive price ${update.parsed.priceFloat} for ${ticker}`,
+          `Hermes returned non-positive reference price ${priceFloat} for ${ticker}`,
         );
       }
-      return update.parsed.priceFloat;
+      return priceFloat;
     },
 
     async accountExists(address) {

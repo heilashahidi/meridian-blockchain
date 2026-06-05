@@ -34,7 +34,8 @@
 //! ## Invariants (asserted after each relevant flow step)
 //!
 //!   * **R13 — escrow reconciliation:** for every market,
-//!     `usdc_escrow == sum(open_bid.qty * open_bid.price)` AND
+//!     `usdc_escrow == yes_supply * ONE_USDC + sum(open_bid.qty * open_bid.price)`
+//!     (mint-pair $1/token collateral + resting-bid collateral) AND
 //!     `yes_escrow == sum(open_ask.qty)`. Plus token conservation:
 //!     `sum(USDC across all user ATAs + escrows) == initial total seeded`.
 //!   * **R14 — pair supply:** `yes_mint.supply == no_mint.supply`.
@@ -1533,10 +1534,16 @@ impl FuzzTest {
         let open_ask_qty: u128 = resting.asks.iter().map(|e| e.qty as u128).sum();
         let usdc_in_escrow = self.read_token_balance(&usdc_escrow) as u128;
         let yes_in_escrow = self.read_token_balance(&yes_escrow) as u128;
+        // The shared USDC escrow holds TWO claims: (a) mint-pair collateral,
+        // exactly `yes_supply * ONE_USDC` µUSDC ($1.00/token — winners redeem
+        // this), and (b) resting-bid collateral `sum(bid.qty * price)`. Both
+        // must reconcile against the live balance.
+        let mint_collateral = (yes_supply as u128) * (meridian::ONE_USDC as u128);
+        let expected_usdc = mint_collateral + open_bid_notional;
         assert_eq!(
-            usdc_in_escrow, open_bid_notional,
-            "R13 USDC-escrow violated for market {}: escrow={} sum(bid.qty*price)={}",
-            market_idx, usdc_in_escrow, open_bid_notional,
+            usdc_in_escrow, expected_usdc,
+            "R13 USDC-escrow violated for market {}: escrow={} expected yes_supply*ONE_USDC ({}) + sum(bid.qty*price) ({})",
+            market_idx, usdc_in_escrow, mint_collateral, open_bid_notional,
         );
         assert_eq!(
             yes_in_escrow, open_ask_qty,

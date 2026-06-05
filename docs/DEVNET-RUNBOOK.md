@@ -97,6 +97,26 @@ On success it prints the program id
 (`6oe2PzNoWyLMrWHqGAj5hirRUX68z35oqBTW9T1E9mWX`) and a "deployed and invokable"
 confirmation.
 
+### Redeploy after the 1e6 fix (one-time)
+
+The collateral-unit fix (`docs/KNOWN-ISSUES.md` → "1e6 collateral unit mismatch")
+changes the on-chain math: `mint_pair`/`burn_pair`/`redeem` now move
+`amount * ONE_USDC` µUSDC and the vault invariant is `usdc_escrow == supply *
+ONE_USDC`. The instruction interface and account layouts are **unchanged** (the
+IDL is byte-identical), so this is an in-place program **upgrade**, not a new
+program id. But **markets created under the old math are collateralized at the
+old scale** and must not be mixed with new ones.
+
+1. `make devnet-deploy DEVNET_RPC="<keyed-rpc>"` — upgrades the bytecode in place.
+2. **Re-create markets** with `create_strike_market` (old markets stay redeemable
+   under their own escrow but should be retired from the UI). The cleanest path is
+   a fresh `Config`+market bootstrap (step 3) and a re-seed (step 4) for a new
+   trading day — the daily board only shows today's markets anyway.
+3. Re-seed liquidity (`SEED_LIQUIDITY=true` / `seed-liquidity`) so the new markets
+   have a book. Confirm a `mint_pair(n)` now costs `n` whole USDC (not `n` µUSDC).
+4. The frontend needs no flag change — `NO_SIDE_DISABLED` is already removed; all
+   four trade paths go live against the upgraded program.
+
 ---
 
 ## 3. Bootstrap `Config` + a market

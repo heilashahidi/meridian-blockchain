@@ -42,13 +42,12 @@ const ACTIONS: { key: TradeAction; label: string; tone: "yes" | "no" }[] = [
 
 const isNoAction = (a: TradeAction) => a === "buyNo" || a === "sellNo";
 
-// TEMP kill-switch: No-side trading (Buy No / Sell No) is disabled pending the
-// on-chain 1e6 unit fix. buy_no/sell_no compose the order-book leg (qty * price,
-// where 1 token ≈ up to $1) with mint/burn_pair (1 base unit = 1 µUSDC); the two
-// disagree by 1e6, so No trades show negative proceeds and revert with
-// InvalidAmount. Re-enable once the program fix is deployed.
+// No-side trading (Buy No / Sell No) is now ENABLED. The on-chain 1e6 unit fix
+// landed: mint_pair/burn_pair/redeem now move `n × ONE_USDC` µUSDC, so the
+// order-book leg (qty × price, µUSDC) and the pair leg agree and buy_no/sell_no
+// no longer revert with InvalidAmount. The position-guard and atomic
+// partial-fill block below still apply.
 // See docs/plans/2026-06-04-002-fix-no-side-1e6-unit-mismatch-plan.md.
-const NO_SIDE_DISABLED = true;
 
 /**
  * The four trade paths (Buy/Sell × Yes/No), each a single wallet approval. The
@@ -199,8 +198,7 @@ export function TradePanel() {
       {/* Action selector — 2x2 grid of the four paths as segmented buttons. */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         {ACTIONS.map((a) => {
-          const noBlocked = NO_SIDE_DISABLED && isNoAction(a.key);
-          const allowed = guard[a.key].allowed && !noBlocked;
+          const allowed = guard[a.key].allowed;
           const selected = action === a.key;
           return (
             <button
@@ -209,13 +207,7 @@ export function TradePanel() {
               className="seg"
               onClick={() => setAction(a.key)}
               disabled={!allowed}
-              title={
-                noBlocked
-                  ? "No-side trading is temporarily unavailable"
-                  : guard[a.key].allowed
-                    ? undefined
-                    : guard[a.key].reason
-              }
+              title={allowed ? undefined : guard[a.key].reason}
               aria-label={a.key}
               data-active={selected ? a.tone : undefined}
             >
@@ -319,7 +311,7 @@ export function TradePanel() {
 
       <button
         className={side === "yes" ? "btn btn-yes" : "btn btn-no"}
-        disabled={!ready || !inputValid || !gate.allowed || busy || cannotFullyFill || (NO_SIDE_DISABLED && isNoAction(action))}
+        disabled={!ready || !inputValid || !gate.allowed || busy || cannotFullyFill}
         onClick={submit}
       >
         {submitLabel}

@@ -239,12 +239,18 @@ impl Env {
             let yes = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &yes_mint);
             let no = create_canonical_ata(&mut fx.svm, &kp.pubkey(), &no_mint);
             if usdc_each > 0 {
+                // The on-chain unit convention is now 1 token base unit =
+                // $1.00 collateral, so mint_pair(n) moves `n * ONE_USDC`
+                // µUSDC. Fund each user in whole-USDC × ONE_USDC so a user
+                // funded with `usdc_each` dollars can both mint pairs and lock
+                // order-book collateral (qty*price µUSDC) without going
+                // negative. Order-book amounts stay raw µUSDC.
                 mint_usdc(
                     &mut fx.svm,
                     &fx.admin.insecure_clone(),
                     &fx.usdc_mint.pubkey(),
                     &usdc,
-                    usdc_each,
+                    usdc_each * meridian::ONE_USDC,
                 );
             }
             users.push(UserAccounts {
@@ -492,6 +498,12 @@ struct Balances {
     no: u64,
 }
 
+/// One whole USDC in base units (µUSDC). Used to keep the recomputed
+/// balance/escrow literals readable: mint_pair/burn_pair move `n * ONE`
+/// µUSDC per token, while order-book locks/fills move raw `qty * price`
+/// µUSDC (NOT a multiple of ONE), so balances mix both terms.
+const ONE: u64 = meridian::ONE_USDC;
+
 // ============================================================
 // Scenario tests
 // ============================================================
@@ -514,7 +526,7 @@ fn happy_bid_only_rests_on_book() {
     assert_eq!(entry.owner, env.users[0].kp.pubkey().to_bytes());
 
     let bal = env.balances(0);
-    assert_eq!(bal.usdc, 10_000 - 4_000, "user paid 4_000 USDC into escrow");
+    assert_eq!(bal.usdc, 10_000 * ONE - 4_000, "user paid 4_000 µUSDC into escrow");
     assert_eq!(env.usdc_escrow_amount(), 4_000);
     assert_eq!(env.yes_escrow_amount(), 0);
 }
@@ -525,10 +537,11 @@ fn happy_bid_then_crossing_ask_matches() {
     // mint_pair then asks 100 @ price=40 → matches fully, both sides
     // empty. usdc_each=10_000.
     //
-    // Expected end state:
-    //   A: 10_000 - 4000 (= 100*40) = 6_000 USDC + 100 Yes
-    //   B: 10_000 - 100 (mint_pair) + 4000 (sale) = 13_900 USDC + 0 Yes
-    //   USDC escrow: 100 (B's mint_pair only)
+    // Expected end state (mint_pair now moves n*ONE µUSDC; order-book
+    // qty*price µUSDC is unchanged):
+    //   A: 10_000*ONE - 4000 (= 100*40) µUSDC + 100 Yes
+    //   B: 10_000*ONE - 100*ONE (mint_pair) + 4000 (sale) µUSDC + 0 Yes
+    //   USDC escrow: 100*ONE (B's mint_pair only)
     //   Yes escrow: 0
     let mut env = Env::new(2, 10_000);
     env.seed_yes(1, 100);
@@ -545,12 +558,12 @@ fn happy_bid_then_crossing_ask_matches() {
 
     let a = env.balances(0);
     let b = env.balances(1);
-    assert_eq!(a.usdc, 6_000);
+    assert_eq!(a.usdc, 10_000 * ONE - 4_000);
     assert_eq!(a.yes, 100);
-    assert_eq!(b.usdc, 13_900);
+    assert_eq!(b.usdc, 10_000 * ONE - 100 * ONE + 4_000);
     assert_eq!(b.yes, 0);
 
-    assert_eq!(env.usdc_escrow_amount(), 100);
+    assert_eq!(env.usdc_escrow_amount(), 100 * ONE);
     assert_eq!(env.yes_escrow_amount(), 0);
 }
 
@@ -597,10 +610,10 @@ fn force_skip_now_reverts_with_bad_maker_account() {
     // ask posted, so the Yes is back in B's wallet.
     let a = env.balances(0);
     let b = env.balances(1);
-    assert_eq!(a.usdc, 6_000, "A: 10_000 - 4000 bid lock");
-    assert_eq!(b.usdc, 9_900, "B: 10_000 - 100 mint_pair, tx reverted so no trade");
+    assert_eq!(a.usdc, 10_000 * ONE - 4_000, "A: 10_000*ONE - 4000 bid lock");
+    assert_eq!(b.usdc, 10_000 * ONE - 100 * ONE, "B: 10_000*ONE - 100*ONE mint_pair, tx reverted so no trade");
     assert_eq!(b.yes, 100, "B keeps its 100 Yes (ask never posted)");
-    assert_eq!(env.usdc_escrow_amount(), 4_100, "A's 4000 bid + B's 100 mint_pair");
+    assert_eq!(env.usdc_escrow_amount(), 4_000 + 100 * ONE, "A's 4000 bid + B's 100*ONE mint_pair");
     assert_eq!(env.yes_escrow_amount(), 0, "no resting ask → no Yes escrowed");
 }
 
@@ -648,18 +661,18 @@ fn legitimate_skip_on_frozen_canonical_ata_reinserts_at_back() {
     let a = env.balances(0);
     let c = env.balances(2);
     let b = env.balances(1);
-    assert_eq!(a.usdc, 6_000, "A: 10_000 - 4000 bid lock, skipped so no payout");
+    assert_eq!(a.usdc, 10_000 * ONE - 4_000, "A: 10_000*ONE - 4000 bid lock, skipped so no payout");
     assert_eq!(a.yes, 0, "A's Yes payout was skipped (frozen ATA)");
-    assert_eq!(c.usdc, 6_000, "C: 10_000 - 4000 bid lock");
+    assert_eq!(c.usdc, 10_000 * ONE - 4_000, "C: 10_000*ONE - 4000 bid lock");
     assert_eq!(c.yes, 100, "C received 100 Yes on the fill");
-    assert_eq!(b.usdc, 13_800, "B: 10_000 - 200 mint_pair + 4000 from C's fill");
+    assert_eq!(b.usdc, 10_000 * ONE - 200 * ONE + 4_000, "B: 10_000*ONE - 200*ONE mint_pair + 4000 from C's fill");
 
     // Escrow reconciliation (R13):
-    //   USDC escrow: A's resting bid 4000 + B's mint_pair 200 (C's 4000 paid
+    //   USDC escrow: A's resting bid 4000 + B's mint_pair 200*ONE (C's 4000 paid
     //   out to taker B). Yes escrow: B's residual ask backs 100 Yes.
     assert_eq!(
         env.usdc_escrow_amount(),
-        4_000 + 200,
+        4_000 + 200 * ONE,
         "USDC escrow == A's resting bid + B's mint_pair lock",
     );
     assert_eq!(env.yes_escrow_amount(), 100, "Yes escrow == B's residual ask qty");
@@ -703,25 +716,25 @@ fn partial_skip_does_not_duplicate_maker_entry() {
     assert_eq!(book.asks.as_slice()[0].qty, 3);
 
     // R13 escrow reconciliation: USDC escrow == A's full bid notional 10*40=400
-    // + B's mint_pair 10; Yes escrow == B's residual ask qty 3.
-    assert_eq!(env.usdc_escrow_amount(), 400 + 10, "A's bid + B's mint_pair");
+    // + B's mint_pair 10*ONE; Yes escrow == B's residual ask qty 3.
+    assert_eq!(env.usdc_escrow_amount(), 400 + 10 * ONE, "A's bid + B's mint_pair");
     assert_eq!(env.yes_escrow_amount(), 3, "B's residual ask collateral");
 
     // TAKER-balance regression guard (review follow-up): B (the ask taker,
     // user 1) must NOT be credited any USDC proceeds for the SKIPPED fill qty.
     // From first principles:
-    //   * start: 10_000 USDC, 0 Yes, 0 No
-    //   * seed_yes(10): mint_pair locks 10 USDC → 9_990 USDC, 10 Yes, 10 No
+    //   * start: 10_000*ONE µUSDC, 0 Yes, 0 No
+    //   * seed_yes(10): mint_pair locks 10*ONE µUSDC → 9_990*ONE µUSDC, 10 Yes, 10 No
     //   * place ask 3: step-1 locks 3 Yes into yes_escrow → 7 Yes left
     //   * the single fill (qty 3) SKIPS (A's frozen canonical Yes ATA), so the
     //     USDC leg of that fill is NEVER paid to B — no proceeds, no price
     //     improvement. The skipped 3 folds into residual and posts as B's ask
     //     (the 3 Yes stay escrowed), so B does not get the Yes back either.
-    // Expected: USDC unchanged at 9_990 (zero proceeds), Yes = 7, No = 10.
+    // Expected: USDC unchanged at 9_990*ONE (zero proceeds), Yes = 7, No = 10.
     let b = env.balances(1);
     assert_eq!(
         b,
-        Balances { usdc: 9_990, yes: 7, no: 10 },
+        Balances { usdc: 9_990 * ONE, yes: 7, no: 10 },
         "taker must receive NO USDC proceeds for the skipped fill qty",
     );
 }
@@ -742,8 +755,8 @@ fn market_buy_frozen_maker_skip_folds_into_market_refund() {
     // filled qty settled correctly (C paid, B got Yes), (c) A's order survives at
     // a fresh seq, (d) escrow reconciles to total open notional.
     let mut env = Env::new(3, 10_000);
-    env.seed_yes(0, 10); // A (maker): 9_990 USDC, 10 Yes, 10 No
-    env.seed_yes(2, 10); // C (maker): 9_990 USDC, 10 Yes, 10 No
+    env.seed_yes(0, 10); // A (maker): 9_990*ONE µUSDC, 10 Yes, 10 No
+    env.seed_yes(2, 10); // C (maker): 9_990*ONE µUSDC, 10 Yes, 10 No
 
     // A posts first → A at the front of the ask level; C behind A (same price).
     env.place_limit(0, /* Ask */ 1, 40, 10, &[]).expect("A ask posts (front)");
@@ -774,36 +787,37 @@ fn market_buy_frozen_maker_skip_folds_into_market_refund() {
     assert!(restored.key.seq() > a_seq, "A re-inserted at a FRESH seq");
 
     // (a) + (b) Taker B's balances from first principles:
-    //   start 10_000 USDC.
-    //   step1 lock = 25 * 100 = 2_500 → 7_500.
+    //   start 10_000*ONE µUSDC.
+    //   step1 lock = 25 * 100 = 2_500 → 10_000*ONE - 2_500.
     //   step3 C fill: 400 paid from escrow to C (not from B); B gets 10 Yes.
     //   step4 price-improvement on FILLED qty only (10): 10*100 - 10*40 = 600 → B.
     //   step5 Market residual refund: residual=15 (5 unmatched + 10 skipped),
     //         15 * 100 = 1_500 → B.
-    //   final: 7_500 + 600 + 1_500 = 9_600 USDC; bought 10 Yes for net 400.
+    //   final: 10_000*ONE - 2_500 + 600 + 1_500 = 10_000*ONE - 400 µUSDC;
+    //         bought 10 Yes for net 400.
     let b = env.balances(1);
     assert_eq!(
         b,
-        Balances { usdc: 9_600, yes: 10, no: 0 },
+        Balances { usdc: 10_000 * ONE - 400, yes: 10, no: 0 },
         "skipped + unmatched qty fully refunded; only the 10 C-fill settled",
     );
 
-    // (b) Maker C settled: paid 400 USDC, gave up 10 Yes.
+    // (b) Maker C settled: paid 400 µUSDC, gave up 10 Yes.
     let c = env.balances(2);
-    assert_eq!(c.usdc, 10_390, "C: 9_990 + 400 sale proceeds");
+    assert_eq!(c.usdc, 9_990 * ONE + 400, "C: 9_990*ONE + 400 sale proceeds");
     assert_eq!(c.yes, 0, "C's 10 Yes delivered to B");
 
     // A skipped: no proceeds, ask still backed by its escrowed Yes.
     let a = env.balances(0);
-    assert_eq!(a.usdc, 9_990, "A skipped — no USDC proceeds");
+    assert_eq!(a.usdc, 9_990 * ONE, "A skipped — no USDC proceeds");
     assert_eq!(a.yes, 0, "A's 10 Yes remain escrowed behind the restored ask");
 
     // (d) Escrow reconciles to total open notional:
     //   Yes escrow == A's restored ask collateral (10). C's 10 went to B.
-    //   USDC escrow == only the two mint_pair locks (10 + 10); B's deposit fully
-    //   resolved (C payout + PI refund + residual refund).
+    //   USDC escrow == only the two mint_pair locks (10*ONE + 10*ONE); B's
+    //   deposit fully resolved (C payout + PI refund + residual refund).
     assert_eq!(env.yes_escrow_amount(), 10, "A's restored ask backs 10 Yes");
-    assert_eq!(env.usdc_escrow_amount(), 20, "only the two mint_pair locks remain");
+    assert_eq!(env.usdc_escrow_amount(), 20 * ONE, "only the two mint_pair locks remain");
 }
 
 #[test]
@@ -842,9 +856,9 @@ fn full_skip_reinserts_single_fresh_entry() {
     assert_eq!(book.asks.len(), 1, "B's 50 residual posts");
     assert_eq!(book.asks.as_slice()[0].qty, 50);
 
-    // R13: USDC escrow == A's resting bid 2000 + B's mint_pair 100 (C's 2000
+    // R13: USDC escrow == A's resting bid 2000 + B's mint_pair 100*ONE (C's 2000
     // paid to taker B). Yes escrow == B's residual ask 50.
-    assert_eq!(env.usdc_escrow_amount(), 2_000 + 100, "A's bid + B's mint_pair");
+    assert_eq!(env.usdc_escrow_amount(), 2_000 + 100 * ONE, "A's bid + B's mint_pair");
     assert_eq!(env.yes_escrow_amount(), 50, "B's residual ask collateral");
 }
 
@@ -875,15 +889,15 @@ fn ae4_partial_fill_then_cancel_reconciles_after_abi_change() {
 
     let a = env.balances(0);
     let b = env.balances(1);
-    // A: 10_000 - 4000 lock + 1600 cancel refund = 7600 USDC, + 60 Yes filled.
-    assert_eq!(a.usdc, 7_600);
+    // A: 10_000*ONE - 4000 lock + 1600 cancel refund, + 60 Yes filled.
+    assert_eq!(a.usdc, 10_000 * ONE - 4_000 + 1_600);
     assert_eq!(a.yes, 60);
-    // B: 10_000 - 100 mint_pair + 2400 (60*40 sale) = 12_300 USDC.
-    assert_eq!(b.usdc, 12_300);
+    // B: 10_000*ONE - 100*ONE mint_pair + 2400 (60*40 sale).
+    assert_eq!(b.usdc, 10_000 * ONE - 100 * ONE + 2_400);
 
-    // Escrow reconciliation: only B's 100 mint_pair lock remains in USDC
+    // Escrow reconciliation: only B's 100*ONE mint_pair lock remains in USDC
     // escrow; Yes escrow fully drained.
-    assert_eq!(env.usdc_escrow_amount(), 100, "only B's mint_pair lock left");
+    assert_eq!(env.usdc_escrow_amount(), 100 * ONE, "only B's mint_pair lock left");
     assert_eq!(env.yes_escrow_amount(), 0, "Yes escrow drained");
 }
 
@@ -891,13 +905,14 @@ fn ae4_partial_fill_then_cancel_reconciles_after_abi_change() {
 fn partial_fill_residual_posts() {
     // A bids 100 @ price=40 (microunits/Yes) → escrow locks 100 * 40 =
     // 4000. B asks 60 @ price=40 → 60 fill, A's bid trimmed to 40.
-    // B gets 60*40 = 2400 USDC; A gets 60 Yes. With usdc_each=10_000:
+    // B gets 60*40 = 2400 USDC; A gets 60 Yes. With usdc_each=10_000
+    // (funded as 10_000*ONE µUSDC):
     //
-    //   A: 10_000 - 4000 (lock) = 6_000 USDC + 60 Yes
-    //   B: 10_000 - 100 (mint_pair) + 2400 (sale) = 12_300 USDC + 40 Yes
+    //   A: 10_000*ONE - 4000 (lock) µUSDC + 60 Yes
+    //   B: 10_000*ONE - 100*ONE (mint_pair) + 2400 (sale) µUSDC + 40 Yes
     //
-    // USDC escrow: 100 (B's mint_pair) + 1_600 (A's residual 40*40 still
-    // locked for the open bid) = 1_700.
+    // USDC escrow: 100*ONE (B's mint_pair) + 1_600 (A's residual 40*40 still
+    // locked for the open bid).
     let mut env = Env::new(2, 10_000);
     env.seed_yes(1, 100);
 
@@ -914,12 +929,12 @@ fn partial_fill_residual_posts() {
 
     let a = env.balances(0);
     let b = env.balances(1);
-    assert_eq!(a.usdc, 6_000);
+    assert_eq!(a.usdc, 10_000 * ONE - 4_000);
     assert_eq!(a.yes, 60);
-    assert_eq!(b.usdc, 12_300);
+    assert_eq!(b.usdc, 10_000 * ONE - 100 * ONE + 2_400);
     assert_eq!(b.yes, 40);
 
-    assert_eq!(env.usdc_escrow_amount(), 1_700);
+    assert_eq!(env.usdc_escrow_amount(), 100 * ONE + 1_600);
     assert_eq!(env.yes_escrow_amount(), 0);
 }
 
@@ -946,15 +961,15 @@ fn price_improvement_refunds_buyer() {
     let a = env.balances(0);
     let b = env.balances(1);
     // A: locked 100*50 = 5000, filled at 100*40 = 4000 → refund 1000.
-    // Net USDC: 10_000 - 5000 + 1000 = 6000.
-    assert_eq!(a.usdc, 6_000);
+    // Net USDC: 10_000*ONE - 5000 + 1000.
+    assert_eq!(a.usdc, 10_000 * ONE - 5_000 + 1_000);
     assert_eq!(a.yes, 100);
-    // B: -100 from mint_pair, +4000 from sale; net 10_000 - 100 + 4000 = 13_900.
-    assert_eq!(b.usdc, 13_900);
+    // B: -100*ONE from mint_pair, +4000 from sale; net 10_000*ONE - 100*ONE + 4000.
+    assert_eq!(b.usdc, 10_000 * ONE - 100 * ONE + 4_000);
     assert_eq!(b.yes, 0);
 
-    // USDC escrow: only the 100 from B's mint_pair stays.
-    assert_eq!(env.usdc_escrow_amount(), 100);
+    // USDC escrow: only the 100*ONE from B's mint_pair stays.
+    assert_eq!(env.usdc_escrow_amount(), 100 * ONE);
     assert_eq!(env.yes_escrow_amount(), 0);
 }
 
@@ -973,7 +988,7 @@ fn cancel_returns_escrowed_usdc() {
     assert_eq!(book_after.bids.len(), 0);
     assert_eq!(env.usdc_escrow_amount(), 0);
     let bal = env.balances(0);
-    assert_eq!(bal.usdc, 10_000, "USDC fully refunded to owner");
+    assert_eq!(bal.usdc, 10_000 * ONE, "USDC fully refunded to owner");
 }
 
 #[test]
@@ -995,9 +1010,9 @@ fn cancel_after_partial_fill_returns_remainder_only() {
     assert_eq!(book.bids.len(), 0);
 
     let a = env.balances(0);
-    // A pre-fill USDC was 10_000 - 4000 (lock) = 6000. After cancel
-    // refund of 1600: 6000 + 1600 = 7600. (Plus the 60 Yes received.)
-    assert_eq!(a.usdc, 7_600);
+    // A pre-fill USDC was 10_000*ONE - 4000 (lock). After cancel
+    // refund of 1600. (Plus the 60 Yes received.)
+    assert_eq!(a.usdc, 10_000 * ONE - 4_000 + 1_600);
     assert_eq!(a.yes, 60);
 }
 
@@ -1030,12 +1045,10 @@ fn market_order_partial_fill_at_cap() {
         .map(|i| (env.users[i].usdc, env.users[i].yes))
         .collect();
 
-    // User 0 has 10_000 USDC. Try to buy 10 Yes @ slippage cap $1.00 = 100.
-    // Pre-deposit lock = 10 * 100 = 1000. After 4 fills at 40 each
-    // (= 160), price improvement refund = 4 * (100 - 40) = 240, residual
-    // refund = (10 - 4) * 100 = 600. Final balance:
-    // 10_000 - 1000 + 160(taken from escrow to makers) -- wait,
-    // the escrow logic:
+    // User 0 has 10_000*ONE µUSDC. Try to buy 10 Yes @ slippage cap $1.00 = 100
+    // microunits/Yes. Pre-deposit lock = 10 * 100 = 1000. After 4 fills at 40
+    // each (= 160), price improvement refund = 4 * (100 - 40) = 240, residual
+    // refund = (10 - 4) * 100 = 600. The escrow logic:
     //   * step 1: user_usdc → escrow, 1000
     //   * step 3: per-fill: escrow → maker's canonical USDC ATA, 40 each
     //     (4 makers, total 160); also yes_escrow → user_yes
@@ -1043,29 +1056,29 @@ fn market_order_partial_fill_at_cap() {
     //     = 240 → user_usdc
     //   * step 5 (market residual): refund (10 - 4) * 100 = 600 → user_usdc
     //
-    // Final user USDC: 10_000 - 1000 + 240 + 600 = 9_840.
+    // Final user USDC: 10_000*ONE - 1000 + 240 + 600 = 10_000*ONE - 160.
     let res = env.place_market(0, 0, 10, /* slippage */ 100, &maker_pairs);
     res.expect("market buy fills 4 then rejects residual");
 
     let a = env.balances(0);
     assert_eq!(a.yes, 4, "user 0 received 4 Yes (cap)");
-    assert_eq!(a.usdc, 9_840, "rest of lock refunded");
+    assert_eq!(a.usdc, 10_000 * ONE - 160, "rest of lock refunded");
 
     // The book still has 2 asks resting (users 5 and 6).
     let book_post = env.book();
     assert_eq!(book_post.asks.len(), 2);
 
-    // Each maker (1..=4) received 40 microunits USDC. Started 10_000,
-    // minted 1 Yes (-1 USDC), sold 1 Yes (+40 USDC) → 10_039.
+    // Each maker (1..=4) received 40 microunits USDC. Started 10_000*ONE,
+    // minted 1 Yes (-1*ONE), sold 1 Yes (+40 µUSDC) → 9_999*ONE + 40.
     for i in 1..=4 {
         let b = env.balances(i);
-        assert_eq!(b.usdc, 10_039, "maker {i} received sale proceeds");
+        assert_eq!(b.usdc, 9_999 * ONE + 40, "maker {i} received sale proceeds");
         assert_eq!(b.yes, 0);
     }
     // Makers 5..=6 still rest on book; they minted but didn't sell.
     for i in 5..=6 {
         let b = env.balances(i);
-        assert_eq!(b.usdc, 9_999, "maker {i} only paid the mint_pair $1");
+        assert_eq!(b.usdc, 9_999 * ONE, "maker {i} only paid the mint_pair $1");
         assert_eq!(b.yes, 0, "maker {i}'s Yes is in the escrow");
     }
     // Yes escrow holds the 2 unsold Yes from makers 5..=6.
@@ -1177,7 +1190,7 @@ fn market_order_against_empty_book_residual_refunded() {
     env.place_market(0, /* Bid */ 0, 50, /* slippage */ 100, &[])
         .expect("market-buy against empty book succeeds with full refund");
     let bal = env.balances(0);
-    assert_eq!(bal.usdc, 10_000, "USDC fully refunded");
+    assert_eq!(bal.usdc, 10_000 * ONE, "USDC fully refunded");
     assert_eq!(bal.yes, 0);
     assert_eq!(env.usdc_escrow_amount(), 0);
 }
@@ -1197,7 +1210,7 @@ fn market_order_beyond_slippage_no_fill() {
     let book = env.book();
     assert_eq!(book.asks.len(), 1, "ask still resting");
     let bal = env.balances(0);
-    assert_eq!(bal.usdc, 10_000, "USDC fully refunded");
+    assert_eq!(bal.usdc, 10_000 * ONE, "USDC fully refunded");
     assert_eq!(bal.yes, 0);
 }
 
@@ -1206,10 +1219,13 @@ fn invariant_holds_after_complex_sequence() {
     // Compose several happy paths and assert key reconciliation totals
     // after each step.
     let mut env = Env::new(3, 100_000);
-    env.seed_yes(1, 1000); // B mints 1000 Yes (escrow now holds 1000 USDC)
-    env.seed_yes(2, 500); // C mints 500 Yes (escrow now holds 1500 USDC)
+    env.seed_yes(1, 1000); // B mints 1000 Yes (escrow now holds 1000*ONE µUSDC)
+    env.seed_yes(2, 500); // C mints 500 Yes (escrow now holds 1500*ONE µUSDC)
 
+    // Token-unit total minted (drives the Yes/No supply check below).
     let mint_pair_total = 1500_u64;
+    // µUSDC collateral those mints locked in escrow (1 token = $1.00 = ONE µUSDC).
+    let mint_pair_usdc = mint_pair_total * ONE;
 
     // A places bids; B partially crosses; C cancels.
     env.place_limit(0, 0, 40, 200, &[]).expect("A bid 200@40"); // lock 8_000
@@ -1227,8 +1243,8 @@ fn invariant_holds_after_complex_sequence() {
     assert_eq!(book.asks.as_slice()[0].qty, 100);
 
     // Reconcile: USDC escrow holds
-    //   mint_pair_total (1500) + A's bid residual (120 * 40 = 4800) = 6300.
-    assert_eq!(env.usdc_escrow_amount(), mint_pair_total + 120 * 40);
+    //   mint_pair_usdc (1500*ONE) + A's bid residual (120 * 40 = 4800).
+    assert_eq!(env.usdc_escrow_amount(), mint_pair_usdc + 120 * 40);
     // Yes escrow holds C's resting 100.
     assert_eq!(env.yes_escrow_amount(), 100);
 
@@ -1236,8 +1252,8 @@ fn invariant_holds_after_complex_sequence() {
     let seq_a = book.bids.as_slice()[0].key.seq();
     env.cancel(0, 0, 40, seq_a).expect("A cancels");
 
-    // USDC escrow now only holds the mint_pair_total.
-    assert_eq!(env.usdc_escrow_amount(), mint_pair_total);
+    // USDC escrow now only holds the mint_pair collateral.
+    assert_eq!(env.usdc_escrow_amount(), mint_pair_usdc);
     // Yes escrow still has C's ask.
     assert_eq!(env.yes_escrow_amount(), 100);
 
@@ -1246,7 +1262,7 @@ fn invariant_holds_after_complex_sequence() {
     env.cancel(2, 1, 60, seq_c).expect("C cancels");
 
     assert_eq!(env.yes_escrow_amount(), 0);
-    assert_eq!(env.usdc_escrow_amount(), mint_pair_total);
+    assert_eq!(env.usdc_escrow_amount(), mint_pair_usdc);
 
     // Yes/No supply invariant (from U4) still holds.
     let yes_mint_state = read_mint(&env.fx.svm, &env.yes_mint);
