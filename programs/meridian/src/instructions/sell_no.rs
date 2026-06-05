@@ -234,6 +234,14 @@ pub fn sell_no_handler<'info>(
     );
     debug_assert_eq!(outcome.filled_qty, args.amount);
 
+    // Leg 1 delivered `amount` Yes into `user_yes` via a token CPI, but the
+    // in-memory `Account<TokenAccount>` still reflects the PRE-buy balance.
+    // burn_pair_inner below asserts `user_yes.amount >= amount`, so we must
+    // reload the freshly-bought balance first — otherwise the realistic Sell No
+    // (caller holds only No, zero Yes at entry) reads a stale 0 and reverts with
+    // InvalidAmount even though the on-chain account now holds the bought Yes.
+    ctx.accounts.user_yes.reload()?;
+
     // -------- Leg 2: burn_pair(amount). --------
     //
     // After the market-buy the user holds `amount` Yes (just bought) + at

@@ -741,6 +741,54 @@ fn sell_no_happy_path_full_fill() {
 }
 
 #[test]
+fn sell_no_holding_only_no_round_trip() {
+    // REGRESSION (sell_no stale-balance bug): the realistic Sell No flow where
+    // the caller holds ONLY No and ZERO Yes at entry — exactly what you get
+    // after a Buy No. `sell_no` market-buys the Yes leg into `user_yes` via CPI,
+    // then `burn_pair_inner` asserts `user_yes.amount >= amount`. Without a
+    // post-buy `user_yes.reload()`, that check reads the STALE pre-buy balance
+    // (0) and reverts with InvalidAmount. `sell_no_happy_path_full_fill` masked
+    // this because its caller already held 50 Yes from `seed_yes`.
+    //
+    // Here A gets its No purely via buy_no (Yes leg fully sold → 0 Yes), then
+    // sells that No back. Both legs must reconcile with no leftover position.
+    let mut env = Env::new(2, 10_000);
+
+    // B provides a two-sided book: a BID @40 (for A's buy_no Yes-sell) and an
+    // ASK @60 (for A's sell_no Yes-buy).
+    env.seed_yes(1, 100); // B: 100 Yes + 100 No, USDC 9_900*ONE
+    env.place_limit(1, /* Ask */ 1, 60, 50, &[]).expect("B ask @60 posts");
+    env.place_limit(1, /* Bid */ 0, 40, 50, &[]).expect("B bid @40 posts");
+
+    let maker = (env.users[1].usdc, env.users[1].yes);
+
+    // A Buys No: mint 50 pair, sell 50 Yes into B's bid @40 → A holds 50 No, 0 Yes.
+    env.buy_no(0, 50, /* min_yes_sell_price */ 40, &[maker])
+        .expect("buy_no should succeed");
+    let a_mid = env.balances(0);
+    assert_eq!(a_mid.no, 50, "A holds 50 No after buy_no");
+    assert_eq!(a_mid.yes, 0, "A holds 0 Yes after buy_no (the realistic case)");
+
+    // A Sells No: market-buy 50 Yes from B's ask @60, then burn the pair. This
+    // is the path that reverted before the reload fix.
+    env.sell_no(0, 50, /* max_yes_buy_price */ 60, &[maker])
+        .expect("sell_no must succeed when caller holds only No (reload fix)");
+
+    let a = env.balances(0);
+    assert_eq!(a.no, 0, "A's No fully closed");
+    assert_eq!(a.yes, 0, "A holds no leftover Yes");
+    // Round-trip cost = the $0.20 spread on 50 contracts = 50*(60-40) = 1_000 µUSDC.
+    //   start 10_000*ONE - 50*ONE(mint) + 2_000(sell Yes @40) - 3_000(buy Yes @60)
+    //         + 50*ONE(burn) = 10_000*ONE - 1_000.
+    assert_eq!(a.usdc, 10_000 * ONE - 1_000, "A net -1_000 µUSDC (the spread)");
+
+    // Supply: B's 100 + A's buy_no 50 - A's sell_no 50 = 100.
+    let (y_post, n_post) = env.supplies();
+    assert_eq!(y_post, n_post, "supply invariant after");
+    assert_eq!(y_post, 100, "B's 100 intact; A's mint/burn nets to 0");
+}
+
+#[test]
 fn buy_no_insufficient_book_depth_reverts_atomically() {
     // Maker has only 30 Yes worth of bid; A tries buy_no(50). The market
     // sell hits 30, leaves residual_qty=20, the residual_qty != 0 check
