@@ -117,15 +117,19 @@ const bal = async (ata) => {
 
 // One whole token of collateral, in µUSDC (matches on-chain ONE_USDC).
 const ONE_USDC = 1_000_000;
-const QTY = 50;          // contracts per resting order (base units = shares)
+const QTY = 200;         // contracts per resting order (base units = shares).
+                         // Deep enough that a default-qty (100) market Buy No /
+                         // Buy Yes fully fills against one side.
 const SPREAD = 40_000;   // ±$0.04 around the mid (µUSDC)
 
-// A small ATM ladder. Each entry: strike (whole $) + a hand-set Yes mid (¢ of $1)
-// so the demo book shows sensible implied odds without a live-price dependency.
+// A near-the-money ladder straddling AAPL's live ~$308 spot, at $5-off-grid
+// strikes so they do NOT collide with the automation's $10-grid markets (which
+// would otherwise shadow these on the board until they expire). Each entry: strike
+// (whole $) + a hand-set Yes mid so the book shows sensible implied odds.
 const LADDER = [
-  { strikeDollars: 220, midUsd: 0.65 }, // in-the-money → Yes rich
-  { strikeDollars: 230, midUsd: 0.50 }, // ~at-the-money
-  { strikeDollars: 240, midUsd: 0.35 }, // out-of-the-money → Yes cheap
+  { strikeDollars: 295, midUsd: 0.62 }, // below spot → in-the-money, Yes rich
+  { strikeDollars: 305, midUsd: 0.54 }, // ~at-the-money
+  { strikeDollars: 315, midUsd: 0.42 }, // above spot → out-of-the-money, Yes cheap
 ];
 
 async function main() {
@@ -144,11 +148,12 @@ async function main() {
   kv("Strikes", LADDER.map((l) => `$${l.strikeDollars}`).join(", "));
 
   // Fund the maker with test USDC (admin is the mint authority — free test USDC).
-  // Per market: mint QTY ($QTY) + a resting bid lock (QTY * bid µUSDC < $QTY).
-  // $300/market is comfortable headroom.
+  // Per market: mint QTY ($QTY) + a resting bid lock (QTY * bid µUSDC). At QTY=200
+  // that's ~$200 + ~$108; $500/market is comfortable headroom.
+  const FUND_PER_MARKET = 500;
   const makerUsdc = (await getOrCreateAssociatedTokenAccount(connection, payer, USDC_MINT, payer.publicKey)).address;
-  await mintTo(connection, payer, USDC_MINT, makerUsdc, payer, BigInt(LADDER.length) * 300n * BigInt(ONE_USDC));
-  kv("Maker USDC funded", `$${LADDER.length * 300}`);
+  await mintTo(connection, payer, USDC_MINT, makerUsdc, payer, BigInt(LADDER.length) * BigInt(FUND_PER_MARKET) * BigInt(ONE_USDC));
+  kv("Maker USDC funded", `$${LADDER.length * FUND_PER_MARKET}`);
 
   let ok = 0;
   for (const { strikeDollars, midUsd } of LADDER) {
