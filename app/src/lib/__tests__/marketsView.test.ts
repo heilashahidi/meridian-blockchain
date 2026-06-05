@@ -28,7 +28,7 @@ function mkMarket(
     pubkey: PublicKey.unique(),
     ticker: tickerBytes(over.ticker),
     strikePrice: over.strikePrice ?? 200_000_000n, // $200.00
-    expiryUnix: over.expiryUnix ?? 2_000_000_000n,
+    expiryUnix: over.expiryUnix ?? 1_700_003_600n, // NOW + 1h — within the 0DTE board horizon
     settled: over.settled ?? false,
     outcome: over.outcome ?? null,
     yesMint: PublicKey.unique(),
@@ -155,14 +155,28 @@ describe("groupActiveByTicker", () => {
   it("dedupes same-strike markets, keeping the nearest (earliest) future expiry", () => {
     const groups = groupActiveByTicker(
       [
-        mkMarket({ ticker: "AAPL", strikePrice: 200_000_000n, expiryUnix: 2_000_000_000n }),
-        mkMarket({ ticker: "AAPL", strikePrice: 200_000_000n, expiryUnix: 2_100_000_000n }),
+        mkMarket({ ticker: "AAPL", strikePrice: 200_000_000n, expiryUnix: 1_700_003_600n }),
+        mkMarket({ ticker: "AAPL", strikePrice: 200_000_000n, expiryUnix: 1_700_007_200n }),
       ],
       NOW,
     );
     const aapl = groups.find((g) => g.ticker === "AAPL")!;
     expect(aapl.active).toHaveLength(1);
-    expect(aapl.active[0].expiryUnix).toBe(2_000_000_000n);
+    expect(aapl.active[0].expiryUnix).toBe(1_700_003_600n);
+  });
+
+  it("excludes far-out markets beyond the 0DTE horizon (the demo set)", () => {
+    const groups = groupActiveByTicker(
+      [
+        mkMarket({ ticker: "AAPL", expiryUnix: 1_700_003_600n }), // today, ~1h out
+        // 10 days out — a 6/15-style demo market; must NOT surface on the 0DTE board.
+        mkMarket({ ticker: "AAPL", strikePrice: 210_000_000n, expiryUnix: BigInt(NOW + 10 * 86_400) }),
+      ],
+      NOW,
+    );
+    const aapl = groups.find((g) => g.ticker === "AAPL")!;
+    expect(aapl.active).toHaveLength(1);
+    expect(aapl.active[0].expiryUnix).toBe(1_700_003_600n);
   });
 });
 

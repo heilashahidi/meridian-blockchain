@@ -9,6 +9,7 @@ import { PositionGuard } from "@/components/PositionGuard";
 import { RedeemPanel } from "@/components/RedeemPanel";
 import { StrikeList } from "@/components/StrikeList";
 import { TradePanel } from "@/components/TradePanel";
+import { WalletButton } from "@/components/WalletButton";
 import { tickerToString } from "@/lib/format";
 import { expiryEtLabel } from "@/lib/countdown";
 import { useMeridian } from "@/hooks/MeridianContext";
@@ -28,7 +29,7 @@ export default function TradeMarketPage({
 }: {
   params: { market: string };
 }) {
-  const { selectMarket, market, markets, book, balances, configError } =
+  const { selectMarket, market, markets, book, balances, configError, walletPubkey } =
     useMeridian();
   const prices = usePrices();
 
@@ -207,10 +208,27 @@ export default function TradeMarketPage({
 
         <div style={{ display: "grid", gap: 16 }}>
           <PositionGuard balances={onThisMarket ? balances : null} />
-          {m && !m.settled && <TradePanel />}
+          {m && !m.settled &&
+            (walletPubkey ? <TradePanel /> : <ConnectToTrade />)}
           {m && m.settled && <RedeemPanel />}
         </div>
       </div>
     </main>
+  );
+}
+
+/** Guard rail: trading requires a connected wallet. Shown in place of the trade
+ *  panel when no wallet is connected — the order book stays visible (read-only),
+ *  but you must connect to place an order. */
+function ConnectToTrade() {
+  return (
+    <div className="panel" style={{ display: "grid", gap: 12, justifyItems: "start" }}>
+      <div style={{ fontSize: 15, fontWeight: 700 }}>Trade</div>
+      <p className="muted" style={{ fontSize: 13, margin: 0 }}>
+        Connect your wallet to place an order. The book above is live and
+        read-only until you connect.
+      </p>
+      <WalletButton />
+    </div>
   );
 }

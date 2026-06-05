@@ -113,8 +113,14 @@ export function groupActiveByTicker(
   const buckets = new Map<string, MarketView[]>();
   for (const f of MAG7) buckets.set(f.ticker, []);
 
+  // 0DTE board: only TODAY's contracts. Excludes the far-out demo set (and any
+  // non-same-session market) by requiring expiry within the next 24h, so a
+  // 6/15-style demo market 10 days out never surfaces.
+  const ZERO_DTE_HORIZON_SECS = 24 * 60 * 60;
+
   for (const m of markets) {
     if (!isActiveMarket(m, nowUnix)) continue;
+    if (Number(m.expiryUnix) - nowUnix > ZERO_DTE_HORIZON_SECS) continue;
     const ticker = tickerToString(m.ticker);
     const bucket = buckets.get(ticker);
     if (!bucket) continue; // non-MAG7 ticker — ignore
