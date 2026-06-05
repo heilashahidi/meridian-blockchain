@@ -38,7 +38,7 @@ export function PositionGuard({ balances }: { balances: Balances | null }) {
         <div style={{ fontSize: 13, color: "var(--text-dim)" }}>
           {reason}{" "}
           <span className="muted">
-            (no position holds both Yes and No from trading)
+            (holding both nets to a flat $1, so you trade one side at a time)
           </span>
         </div>
       )}

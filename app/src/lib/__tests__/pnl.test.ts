@@ -5,7 +5,7 @@ import type { MarketView } from "@/lib/market";
 import {
   canRedeem,
   computePnl,
-  contractsFromBaseUnits,
+  sharesFromBaseUnits,
   currentContractPrice,
   fmtDollars,
   fmtPct,
@@ -144,10 +144,19 @@ describe("canRedeem", () => {
   });
 });
 
-describe("contractsFromBaseUnits", () => {
-  it("scales 6-decimal base units to whole contracts", () => {
-    expect(contractsFromBaseUnits(5_000_000n)).toBe(5);
-    expect(contractsFromBaseUnits(1_500_000n)).toBe(1.5);
+describe("sharesFromBaseUnits", () => {
+  it("treats 1 base unit as 1 share (no 1e6 divide)", () => {
+    expect(sharesFromBaseUnits(5n)).toBe(5);
+    expect(sharesFromBaseUnits(25n)).toBe(25);
+    expect(sharesFromBaseUnits(0n)).toBe(0);
+  });
+
+  it("yields a non-zero portfolio value for a small holding (regression)", () => {
+    // 5 Yes shares, entry $0.50/share, current $0.87/share.
+    const qty = sharesFromBaseUnits(5n);
+    const r = computePnl(qty, MINT_PAIR_LEG_BASIS, 0.87);
+    expect(r.currentValue).toBeCloseTo(4.35, 6);
+    expect(r.pnl).toBeCloseTo(1.85, 6);
   });
 });
 

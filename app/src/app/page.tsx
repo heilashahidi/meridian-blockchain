@@ -15,7 +15,7 @@ import {
   yesAskFraction,
 } from "@/lib/marketsView";
 import { distanceToStrike } from "@/lib/marketStats";
-import { contractsFromBaseUnits } from "@/lib/pnl";
+import { sharesFromBaseUnits } from "@/lib/pnl";
 import { fetchHistory, type HistoryEntry } from "@/lib/history";
 import { useMeridian } from "@/hooks/MeridianContext";
 import { usePrices } from "@/hooks/usePrices";
@@ -248,8 +248,8 @@ function PortfolioPanel({ active, books }: { active: MarketView[]; books: Record
         const bals = byMarket[m.pubkey.toBase58()];
         if (!bals) continue;
         usdc = Number(bals.usdc) / 1_000_000; // same wallet USDC across markets
-        const yes = contractsFromBaseUnits(bals.yes);
-        const no = contractsFromBaseUnits(bals.no);
+        const yes = sharesFromBaseUnits(bals.yes);
+        const no = sharesFromBaseUnits(bals.no);
         const ym = yesAskFraction(books[m.pubkey.toBase58()] ?? null);
         if (ym !== null) { posVal += yes * ym + no * (1 - ym); }
         if (yes > 0 || no > 0) posCount++;
