@@ -89,6 +89,26 @@ describe("config: computeStrikes (PRD ±3/6/9% rounded to $10)", () => {
     expect(() => computeStrikes(100, { percents: [3, -6] })).toThrow(/positive finite/);
     expect(() => computeStrikes(100, { roundingDollars: 0 })).toThrow(/positive finite/);
   });
+
+  it("fixed-step mode builds an exact $10 ladder (center ± N·step)", () => {
+    const ladder = computeStrikes(228.5, { stepDollars: 10, stepsPerSide: 3 });
+    expect(ladder.strikesDollars).toEqual([200, 210, 220, 230, 240, 250, 260]);
+    // every gap is exactly $10
+    const gaps = ladder.strikesDollars.slice(1).map((d, i) => d - ladder.strikesDollars[i]);
+    expect(gaps.every((g) => g === 10)).toBe(true);
+  });
+
+  it("fixed-step mode ignores percents and stays $10-even at any price", () => {
+    for (const ref of [681.2, 142.3, 905]) {
+      const l = computeStrikes(ref, { stepDollars: 10, percents: [3, 6, 9] });
+      const gaps = l.strikesDollars.slice(1).map((d, i) => d - l.strikesDollars[i]);
+      expect(gaps.every((g) => g === 10)).toBe(true);
+    }
+  });
+
+  it("rejects a non-positive step", () => {
+    expect(() => computeStrikes(100, { stepDollars: 0 })).toThrow(/positive finite/);
+  });
 });
 
 describe("config: loadConfig env defaults", () => {
