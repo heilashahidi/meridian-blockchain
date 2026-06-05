@@ -67,15 +67,30 @@ export function TradePanel() {
   // rest as a limit; Sell No is always atomic (a resting Sell No would need
   // burn-on-fill matching that the engine doesn't have).
   const [buyNoMode, setBuyNoMode] = useState<OrderType>("market");
+  // Buy Yes / Sell Yes can take liquidity now (market) or rest at a price (limit).
+  // Default market so the common "buy, then sell" flow fills against the resting
+  // quote instead of resting unfilled below the ask.
+  const [yesMode, setYesMode] = useState<OrderType>("market");
 
   const ready = !!market && !!config && !!book && !!walletPubkey;
-  const priceMicro = dollarsToMicro(price);
+  const isYesSide = action === "buyYes" || action === "sellYes";
+  const isYesMarket = isYesSide && yesMode === "market";
+
+  const orderType: OrderType =
+    action === "buyNo" ? buyNoMode : action === "sellNo" ? "market" : yesMode;
+
+  // Yes market order: take the best price now. The slippage bound lets a buy
+  // cross asks up to ~$0.99 and a sell hit bids down to ~$0.01, so the trade
+  // fills against the resting quote instead of resting unfilled. Limit mode uses
+  // the user's typed price.
+  const priceMicro = isYesMarket
+    ? action === "buyYes"
+      ? 990_000n
+      : 10_000n
+    : dollarsToMicro(price);
   const qtyN = Number(qty);
   const qtyValid = Number.isInteger(qtyN) && qtyN > 0;
   const inputValid = priceMicro !== null && qtyValid;
-
-  const orderType: OrderType =
-    action === "buyNo" ? buyNoMode : action === "sellNo" ? "market" : "limit";
 
   // Position guard (PRD §142–144). With no balances yet (wallet/loading), allow.
   const guard = useMemo(
@@ -166,7 +181,8 @@ export function TradePanel() {
         }
       }
       const label = ACTIONS.find((x) => x.key === action)!.label;
-      return `${label} ${qtyN} @ $${price} submitted`;
+      const at = isYesMarket ? "market" : `$${price}`;
+      return `${label} ${qtyN} @ ${at} submitted`;
     });
     // Clear both inputs on success so the whole form visibly resets — a
     // populated box + active button after submit read as "nothing happened".
@@ -217,6 +233,32 @@ export function TradePanel() {
         })}
       </div>
 
+      {/* Order type — Yes side: take now (market) vs rest at a price (limit). */}
+      {isYesSide && (
+        <div style={{ display: "grid", gap: 4 }}>
+          <span className="stat-label">Order type</span>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+            {(["market", "limit"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                className="seg"
+                onClick={() => setYesMode(m)}
+                data-active={yesMode === m ? "yes" : undefined}
+                aria-label={`yes-${m}`}
+              >
+                {m === "market" ? "Market" : "Limit"}
+              </button>
+            ))}
+          </div>
+          <span className="muted" style={{ fontSize: 11 }}>
+            {yesMode === "market"
+              ? "Fills now at the book’s best price; any unfilled shares are refunded."
+              : "Rests at your price until someone crosses it."}
+          </span>
+        </div>
+      )}
+
       {/* Order type — only Buy No can choose to rest (limit) vs take (market). */}
       {action === "buyNo" && (
         <div style={{ display: "grid", gap: 4 }}>
@@ -243,20 +285,22 @@ export function TradePanel() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-        <label style={{ display: "grid", gap: 4 }}>
-          <span className="stat-label">{sideLabel} price ($)</span>
-          <input
-            className="input mono"
-            type="number"
-            min={0.01}
-            max={0.99}
-            step={0.01}
-            value={price}
-            onChange={(e) => setPrice(e.target.value)}
-            aria-label="price"
-          />
-        </label>
+      <div style={{ display: "grid", gridTemplateColumns: isYesMarket ? "1fr" : "1fr 1fr", gap: 10 }}>
+        {!isYesMarket && (
+          <label style={{ display: "grid", gap: 4 }}>
+            <span className="stat-label">{sideLabel} price ($)</span>
+            <input
+              className="input mono"
+              type="number"
+              min={0.01}
+              max={0.99}
+              step={0.01}
+              value={price}
+              onChange={(e) => setPrice(e.target.value)}
+              aria-label="price"
+            />
+          </label>
+        )}
         <label style={{ display: "grid", gap: 4 }}>
           <span className="stat-label">shares</span>
           <input
@@ -270,8 +314,9 @@ export function TradePanel() {
         </label>
       </div>
 
-      {/* Payoff / return summary — max gain/loss known at entry (PRD). */}
-      {payoff && (
+      {/* Payoff / return summary — max gain/loss known at entry (PRD). Skipped
+          for Yes market orders, where the fill price comes from the book. */}
+      {payoff && !isYesMarket && (
         <div
           className="panel"
           style={{
@@ -333,14 +378,16 @@ export function TradePanel() {
       {preview && gate.allowed && !cannotFullyFill && (
         <div className="muted" style={{ fontSize: 12 }}>
           {preview.fills.length === 0
-            ? isAtomicNo
+            ? isAtomicNo || isYesMarket
               ? "no crossing liquidity at this price"
               : "rests on the book (no cross)"
             : `crosses ${preview.fills.length} order(s), fills ${fillQty.toString()}` +
               (preview.residual > 0n
                 ? isAtomicNo
                   ? `, ${preview.residual.toString()} unfilled (atomic — reverts if not full)`
-                  : `, ${preview.residual.toString()} rests`
+                  : isYesMarket
+                    ? `, ${preview.residual.toString()} unfilled (refunded)`
+                    : `, ${preview.residual.toString()} rests`
                 : "")}
         </div>
       )}
