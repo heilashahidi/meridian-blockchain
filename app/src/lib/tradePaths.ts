@@ -240,12 +240,6 @@ export interface ActionGate {
   allowed: boolean;
   /** Why the action is blocked (for the UI), when not allowed. */
   reason?: string;
-  /**
-   * Non-blocking caution shown when the action IS allowed but has a surprising
-   * consequence the user should understand (e.g. Buy No while holding Yes leaves
-   * the wallet holding BOTH legs). The button stays enabled.
-   */
-  warn?: string;
 }
 
 export interface GuardDecision {
@@ -258,18 +252,11 @@ export interface GuardDecision {
 /**
  * Pure guard decision from the wallet's Yes/No balances for this market.
  *
- *   - Holding No  → block Buy Yes ("sell No first").
- *   - Holding Yes → Buy No is ALLOWED but WARNED (see below).
+ *   - Holding No  → block Buy Yes ("sell No first"); Buy No / Sell No allowed.
+ *   - Holding Yes → block Buy No  ("sell Yes first"); Buy Yes / Sell Yes allowed.
+ *   - Holding both (transient mint-pair) → block BOTH new entries but still
+ *     allow Sell Yes and Sell No so the user can always unwind a leg.
  *   - Sell actions require a balance on that side (nothing to sell otherwise).
- *
- * DEVIATION FROM PRD §142–144 (deliberate, operator-requested): the PRD says a
- * user holding Yes should not be able to Buy No without first selling the Yes.
- * Buy No is implemented as mint-a-pair + sell-the-Yes, which is self-contained
- * and works regardless of any Yes already held — so we keep Buy No ENABLED while
- * holding Yes and surface a non-blocking warning that it leaves the wallet
- * holding BOTH legs (a flat $1 position). Buy Yes keeps the PRD block when
- * holding No (it has no mint-and-sell escape hatch). To restore strict PRD
- * behavior, change `buyNo`'s `hasYes` branch back to `{ allowed: false, … }`.
  */
 export function positionGuardDecision(balances: Balances): GuardDecision {
   const hasYes = balances.yes > 0n;
@@ -280,13 +267,7 @@ export function positionGuardDecision(balances: Balances): GuardDecision {
       ? { allowed: false, reason: "You hold No — sell No first to buy Yes." }
       : { allowed: true },
     buyNo: hasYes
-      ? {
-          allowed: true,
-          warn:
-            "You already hold Yes for this strike. Buy No mints a new pair and " +
-            "sells the new Yes, so you'll end up holding BOTH Yes and No (a flat " +
-            "$1 position). To go net-bearish, Sell Yes instead.",
-        }
+      ? { allowed: false, reason: "You hold Yes — sell Yes first to buy No." }
       : { allowed: true },
     sellYes: hasYes
       ? { allowed: true }

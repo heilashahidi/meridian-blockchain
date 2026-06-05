@@ -198,7 +198,7 @@ export function TradePanel() {
       {/* Action selector — 2x2 grid of the four paths as segmented buttons. */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
         {ACTIONS.map((a) => {
-          const g = guard[a.key];
+          const allowed = guard[a.key].allowed;
           const selected = action === a.key;
           return (
             <button
@@ -206,8 +206,8 @@ export function TradePanel() {
               type="button"
               className="seg"
               onClick={() => setAction(a.key)}
-              disabled={!g.allowed}
-              title={g.allowed ? g.warn : g.reason}
+              disabled={!allowed}
+              title={allowed ? undefined : guard[a.key].reason}
               aria-label={a.key}
               data-active={selected ? a.tone : undefined}
             >
@@ -319,12 +319,6 @@ export function TradePanel() {
 
       {!gate.allowed && (
         <div style={{ color: "var(--no)", fontSize: 13 }}>{gate.reason}</div>
-      )}
-
-      {gate.allowed && gate.warn && (
-        <div style={{ color: "var(--warn, #b58900)", fontSize: 13 }}>
-          ⚠ {gate.warn}
-        </div>
       )}
 
       {gate.allowed && cannotFullyFill && (
