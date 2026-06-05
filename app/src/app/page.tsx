@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { Suspense, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useSearchParams } from "next/navigation";
 import { useConnection } from "@solana/wallet-adapter-react";
@@ -11,7 +10,6 @@ import {
   groupActiveByTicker,
   noFromYes,
   strikeDollars,
-  tradeHref,
   yesAskFraction,
 } from "@/lib/marketsView";
 import { distanceToStrike } from "@/lib/marketStats";
@@ -35,79 +33,6 @@ const FILTERS: { key: MoneynessFilter; label: string }[] = [
   { key: "near", label: "Near strike" },
   { key: "long", label: "Long shots" },
 ];
-
-/** Top stat card. `market` null → a "no contract yet" spot-only card (padding). */
-function StatCard({
-  ticker,
-  name,
-  market,
-  yesPrice,
-  spot,
-}: {
-  ticker: string;
-  name: string;
-  market: MarketView | null;
-  yesPrice: number | null;
-  spot: number | null;
-}) {
-  const strikeNum = market ? Number(market.strikePrice) / 1_000_000 : 0;
-  const dist = market ? distanceToStrike(spot, strikeNum) : null;
-  const yesW = yesPrice !== null ? Math.round(yesPrice * 100) : 0;
-  const inner = (
-    <>
-      <div className="stat-card-head">
-        <span className="ticker-badge mono">{ticker}</span>
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700 }}>{ticker}</div>
-          <div className="muted" style={{ fontSize: 11 }}>{name}</div>
-        </div>
-        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="var(--muted)" strokeWidth="1.8" style={{ marginLeft: "auto" }} aria-hidden>
-          <path d="M3 17l5-5 4 3 6-7" />
-          <path d="M16 8h5v5" />
-        </svg>
-      </div>
-      {market ? (
-        <>
-          <div className="muted" style={{ fontSize: 12 }}>
-            Will close above <span className="mono">${strikeDollars(market.strikePrice)}</span>?
-          </div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 6 }}>
-            <span className="mono" style={{ fontSize: 30, fontWeight: 800, color: yesPrice !== null ? "var(--yes)" : "var(--muted)" }}>{pct(yesPrice)}</span>
-            <span className="muted" style={{ fontSize: 11 }}>Yes implied</span>
-          </div>
-          <div className="prob-bar" style={{ margin: "8px 0 10px" }}>
-            <span className="prob-yes" style={{ width: `${yesW}%` }} />
-          </div>
-          <div className="stat-card-foot">
-            <span className="muted" style={{ fontSize: 11 }}>Spot <span className="mono" style={{ color: "var(--text-dim)" }}>{spot !== null ? `$${usd(spot)}` : "—"}</span></span>
-            {dist !== null && (
-              <span style={{ fontSize: 11, fontWeight: 600, color: dist.aboveStrike ? "var(--yes)" : "var(--no)" }}>{dist.aboveStrike ? "In the money" : "Below strike"}</span>
-            )}
-          </div>
-        </>
-      ) : (
-        <>
-          <div className="muted" style={{ fontSize: 12 }}>No contract yet</div>
-          <div style={{ display: "flex", alignItems: "baseline", gap: 8, marginTop: 6 }}>
-            <span className="mono" style={{ fontSize: 28, fontWeight: 800, color: "var(--text-dim)" }}>{spot !== null ? `$${usd(spot)}` : "—"}</span>
-            <span className="muted" style={{ fontSize: 11 }}>spot</span>
-          </div>
-          <div className="prob-bar" style={{ margin: "8px 0 10px", opacity: 0.25 }}>
-            <span className="prob-yes" style={{ width: "0%" }} />
-          </div>
-          <div className="stat-card-foot">
-            <span className="muted" style={{ fontSize: 11 }}>Awaiting the morning job</span>
-          </div>
-        </>
-      )}
-    </>
-  );
-  return market ? (
-    <Link href={tradeHref(market.pubkey)} className="panel stat-card">{inner}</Link>
-  ) : (
-    <div className="panel stat-card stat-card-empty">{inner}</div>
-  );
-}
 
 /** ET day-of-week (0=Mon..6=Sun) + time slot (0..3) for a unix instant. */
 function etBucket(unix: number): { day: number; slot: number } | null {
@@ -488,35 +413,6 @@ function DashboardInner() {
   const yesPriceOf = (m: MarketView) => yesAskFraction(books[m.pubkey.toBase58()] ?? null);
   const spotOf = (t: string) => prices[t]?.price ?? null;
 
-  // Stat cards: the market nearest a coin-flip for each stock, one card per
-  // company (so no ticker repeats), the four closest to 50/50 first, padded to
-  // 4 with MAG7 stocks that have no market yet (spot-only).
-  const statCards = useMemo(() => {
-    const flip = (m: MarketView) => Math.abs((yesPriceOf(m) ?? 0.5) - 0.5);
-    // Pick each ticker's single nearest-coin-flip market. Only markets with a
-    // quotable price are eligible: a market with no ask has yesPrice === null,
-    // and treating null as 0.5 would make it look like a *perfect* coin-flip and
-    // sort it to the very front — surfacing blank cards.
-    const bestPerTicker = new Map<string, MarketView>();
-    for (const m of active) {
-      if (yesPriceOf(m) === null) continue; // skip unpriced — never feature a blank
-      const t = tickerOf(m);
-      const cur = bestPerTicker.get(t);
-      if (!cur || flip(m) < flip(cur)) bestPerTicker.set(t, m);
-    }
-    const cards: { ticker: string; market: MarketView | null }[] = [...bestPerTicker.values()]
-      .sort((a, b) => flip(a) - flip(b))
-      .slice(0, 4)
-      .map((m) => ({ ticker: tickerOf(m), market: m }));
-    const used = new Set(cards.map((c) => c.ticker));
-    for (const f of MAG7) {
-      if (cards.length >= 4) break;
-      if (!used.has(f.ticker)) cards.push({ ticker: f.ticker, market: null });
-    }
-    return cards;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSig, books]);
-
   const insights = useMemo(() => {
     const out: { ticker: string; text: string }[] = [];
     for (const m of active) {
@@ -672,14 +568,7 @@ function DashboardInner() {
       {/* Row 1b — trading activity (full width) */}
       <ActivityPanel />
 
-      {/* Row 2 — stat cards */}
-      <div className="stat-card-grid">
-        {statCards.map((c) => (
-          <StatCard key={c.ticker} ticker={c.ticker} name={tickerName[c.ticker] ?? ""} market={c.market} yesPrice={c.market ? yesPriceOf(c.market) : null} spot={spotOf(c.ticker)} />
-        ))}
-      </div>
-
-      {/* Row 3 — portfolio + insights */}
+      {/* Row 2 — portfolio + insights */}
       <div className="dash-2col">
         <PortfolioPanel active={active} books={books} />
         <InsightsPanel items={insights} onAsk={onAsk} />
