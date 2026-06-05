@@ -140,6 +140,8 @@ export async function planTicker(
   const ladder = computeStrikes(referencePrice, {
     percents: cfg.strikePercents,
     roundingDollars: cfg.strikeRoundingDollars,
+    stepDollars: cfg.strikeStepDollars,
+    stepsPerSide: cfg.strikeStepsPerSide,
   });
 
   const pythFeedId = Array.from(Buffer.from(tcfg.feedId, "hex"));

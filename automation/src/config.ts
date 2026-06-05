@@ -118,6 +118,9 @@ export const DEFAULT_STRIKE_PERCENTS: number[] = [3, 6, 9];
 /** Strikes are rounded to the nearest multiple of this many dollars ($10). */
 export const DEFAULT_STRIKE_ROUNDING_DOLLARS = 10;
 
+/** Fixed-step ladder: strikes each side of the rounded center. 3 → 7 strikes. */
+export const DEFAULT_STRIKE_STEPS_PER_SIDE = 3;
+
 /** USDC has 6 decimals; the program stores strike prices in microdollars. */
 export const USDC_DECIMALS = 6;
 export const MICRO = 1_000_000;
@@ -135,6 +138,14 @@ export interface AutomationConfig {
   strikePercents: number[];
   /** Round each strike to the nearest multiple of this many dollars. */
   strikeRoundingDollars: number;
+  /**
+   * Fixed-dollar strike step (e.g. 10 → strikes every $10). When set, the
+   * ladder is center ± N·step and `strikePercents` is ignored. Undefined →
+   * percentage ladder. From `STRIKE_STEP_DOLLARS`.
+   */
+  strikeStepDollars?: number;
+  /** Strikes each side of center in fixed-step mode. From `STRIKE_STEP_COUNT`. */
+  strikeStepsPerSide: number;
   /** Hours-from-now the create-strikes job sets as market expiry. */
   expiryHoursFromNow: number;
   /** Demo opt-in (SEED_LIQUIDITY=true): after create-strikes, rest a small
@@ -197,6 +208,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AutomationConf
     strikeRoundingDollars: env.STRIKE_ROUNDING
       ? Number(env.STRIKE_ROUNDING)
       : DEFAULT_STRIKE_ROUNDING_DOLLARS,
+    strikeStepDollars: env.STRIKE_STEP_DOLLARS
+      ? Number(env.STRIKE_STEP_DOLLARS)
+      : undefined,
+    strikeStepsPerSide: env.STRIKE_STEP_COUNT
+      ? Number(env.STRIKE_STEP_COUNT)
+      : DEFAULT_STRIKE_STEPS_PER_SIDE,
     expiryHoursFromNow: env.EXPIRY_HOURS_FROM_NOW
       ? Number(env.EXPIRY_HOURS_FROM_NOW)
       : 24,
@@ -246,6 +263,15 @@ export interface ComputeStrikesOptions {
   roundingDollars?: number;
   /** Include the rounded reference (at-the-money) as a center strike. Default true. */
   includeCenter?: boolean;
+  /**
+   * Fixed-dollar-step mode: when set (> 0), build the ladder as the rounded
+   * reference ± N·stepDollars (exact even spacing, e.g. $10), ignoring
+   * `percents`/`roundingDollars`. `stepsPerSide` controls N (default 3 → 7
+   * strikes). This is the "$10 increments" ladder.
+   */
+  stepDollars?: number;
+  /** Strikes each side of center in fixed-step mode. Default 3. */
+  stepsPerSide?: number;
 }
 
 export interface StrikeLadder {
@@ -295,15 +321,32 @@ export function computeStrikes(
   }
 
   const dollars: number[] = [];
-  if (includeCenter) {
-    const center = roundToNearest(referencePrice, rounding);
-    if (center > 0) dollars.push(center);
-  }
-  for (const pct of percents) {
-    const above = roundToNearest(referencePrice * (1 + pct / 100), rounding);
-    const below = roundToNearest(referencePrice * (1 - pct / 100), rounding);
-    if (above > 0) dollars.push(above);
-    if (below > 0) dollars.push(below);
+  if (opts.stepDollars !== undefined) {
+    // Fixed-dollar-step ladder: rounded center ± N·step, exact even spacing.
+    const step = opts.stepDollars;
+    if (!(step > 0) || !Number.isFinite(step)) {
+      throw new Error(`stepDollars must be a positive finite number, got ${step}`);
+    }
+    const perSide = opts.stepsPerSide ?? DEFAULT_STRIKE_STEPS_PER_SIDE;
+    if (!Number.isInteger(perSide) || perSide < 1) {
+      throw new Error(`stepsPerSide must be a positive integer, got ${perSide}`);
+    }
+    const center = roundToNearest(referencePrice, step);
+    for (let i = -perSide; i <= perSide; i++) {
+      const s = center + i * step;
+      if (s > 0) dollars.push(s);
+    }
+  } else {
+    if (includeCenter) {
+      const center = roundToNearest(referencePrice, rounding);
+      if (center > 0) dollars.push(center);
+    }
+    for (const pct of percents) {
+      const above = roundToNearest(referencePrice * (1 + pct / 100), rounding);
+      const below = roundToNearest(referencePrice * (1 - pct / 100), rounding);
+      if (above > 0) dollars.push(above);
+      if (below > 0) dollars.push(below);
+    }
   }
   // Dedupe (collisions from rounding, per the PRD AAPL example) and sort.
   const unique = [...new Set(dollars)].sort((a, b) => a - b);
