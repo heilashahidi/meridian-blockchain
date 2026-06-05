@@ -203,23 +203,25 @@ describe("positionGuardDecision", () => {
     expect(d.sellYes.allowed).toBe(false);
   });
 
-  it("holding Yes disables Buy No with the 'sell Yes first' prompt", () => {
+  it("holding Yes keeps Buy No ENABLED with a warning (mint-and-sell; deviation from PRD §142-144)", () => {
+    // Buy No mints a fresh pair and sells the new Yes, so it works regardless of
+    // any Yes already held — we keep it enabled but warn it leaves both legs.
     const d = positionGuardDecision(bal(100n, 0n));
-    expect(d.buyNo.allowed).toBe(false);
-    expect(d.buyNo.reason).toMatch(/sell Yes first/i);
+    expect(d.buyNo.allowed).toBe(true);
+    expect(d.buyNo.warn).toMatch(/both Yes and No/i);
     expect(d.buyYes.allowed).toBe(true);
     expect(d.sellYes.allowed).toBe(true);
     expect(d.sellNo.allowed).toBe(false);
   });
 
-  it("transient both-held (mid mint-pair) does not hard-block exits", () => {
+  it("transient both-held: Buy Yes blocked, Buy No allowed-with-warning, both exits open", () => {
     // Holding both is only transient; we must still let the user unwind either
     // leg rather than dead-locking them.
     const d = positionGuardDecision(bal(100n, 100n));
     expect(d.sellYes.allowed).toBe(true);
     expect(d.sellNo.allowed).toBe(true);
-    // New entries that would deepen an opposing imbalance are blocked.
-    expect(d.buyYes.allowed).toBe(false);
-    expect(d.buyNo.allowed).toBe(false);
+    expect(d.buyYes.allowed).toBe(false); // holds No → Buy Yes still blocked (no mint-and-sell escape)
+    expect(d.buyNo.allowed).toBe(true); //  mint-and-sell escape hatch keeps Buy No open
+    expect(d.buyNo.warn).toBeTruthy();
   });
 });
