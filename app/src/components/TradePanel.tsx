@@ -74,17 +74,18 @@ export function TradePanel() {
 
   const ready = !!market && !!config && !!book && !!walletPubkey;
   const isYesSide = action === "buyYes" || action === "sellYes";
-  const isYesMarket = isYesSide && yesMode === "market";
 
   const orderType: OrderType =
     action === "buyNo" ? buyNoMode : action === "sellNo" ? "market" : yesMode;
+  const isMarket = orderType === "market";
 
-  // Yes market order: take the best price now. The slippage bound lets a buy
-  // cross asks up to ~$0.99 and a sell hit bids down to ~$0.01, so the trade
-  // fills against the resting quote instead of resting unfilled. Limit mode uses
-  // the user's typed price.
-  const priceMicro = isYesMarket
-    ? action === "buyYes"
+  // A market order takes the best price now, so it asks for no price: it passes a
+  // permissive slippage bound — a buy crosses up to ~$0.99, a sell down to
+  // ~$0.01 (mapped through the No leg for the No side) — and fills against the
+  // resting quote. Limit mode uses the user's typed price.
+  const isBuy = action === "buyYes" || action === "buyNo";
+  const priceMicro = isMarket
+    ? isBuy
       ? 990_000n
       : 10_000n
     : dollarsToMicro(price);
@@ -181,7 +182,7 @@ export function TradePanel() {
         }
       }
       const label = ACTIONS.find((x) => x.key === action)!.label;
-      const at = isYesMarket ? "market" : `$${price}`;
+      const at = isMarket ? "market" : `$${price}`;
       return `${label} ${qtyN} @ ${at} submitted`;
     });
     // Clear both inputs on success so the whole form visibly resets — a
@@ -285,8 +286,8 @@ export function TradePanel() {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: isYesMarket ? "1fr" : "1fr 1fr", gap: 10 }}>
-        {!isYesMarket && (
+      <div style={{ display: "grid", gridTemplateColumns: isMarket ? "1fr" : "1fr 1fr", gap: 10 }}>
+        {!isMarket && (
           <label style={{ display: "grid", gap: 4 }}>
             <span className="stat-label">{sideLabel} price ($)</span>
             <input
@@ -316,7 +317,7 @@ export function TradePanel() {
 
       {/* Payoff / return summary — max gain/loss known at entry (PRD). Skipped
           for Yes market orders, where the fill price comes from the book. */}
-      {payoff && !isYesMarket && (
+      {payoff && !isMarket && (
         <div
           className="panel"
           style={{
@@ -378,14 +379,14 @@ export function TradePanel() {
       {preview && gate.allowed && !cannotFullyFill && (
         <div className="muted" style={{ fontSize: 12 }}>
           {preview.fills.length === 0
-            ? isAtomicNo || isYesMarket
+            ? isAtomicNo || isMarket
               ? "no crossing liquidity at this price"
               : "rests on the book (no cross)"
             : `crosses ${preview.fills.length} order(s), fills ${fillQty.toString()}` +
               (preview.residual > 0n
                 ? isAtomicNo
                   ? `, ${preview.residual.toString()} unfilled (atomic — reverts if not full)`
-                  : isYesMarket
+                  : isMarket
                     ? `, ${preview.residual.toString()} unfilled (refunded)`
                     : `, ${preview.residual.toString()} rests`
                 : "")}
