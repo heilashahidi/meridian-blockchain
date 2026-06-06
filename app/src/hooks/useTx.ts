@@ -13,6 +13,8 @@ export interface TxRunner {
    *  Resolves `true` when the tx succeeded, `false` if it threw — lets callers
    *  reset their form only on success. */
   run: (fn: () => Promise<string>) => Promise<boolean>;
+  /** Clear the last success/error message (e.g. when the user switches action). */
+  reset: () => void;
 }
 
 /** Shared submit/status plumbing for the trade panels. */
@@ -42,5 +44,10 @@ export function useTx(): TxRunner {
     [refresh],
   );
 
-  return { busy, error, status, run };
+  const reset = useCallback(() => {
+    setError(null);
+    setStatus(null);
+  }, []);
+
+  return { busy, error, status, run, reset };
 }
