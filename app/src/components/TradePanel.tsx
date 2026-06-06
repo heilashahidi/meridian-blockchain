@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useConnection } from "@solana/wallet-adapter-react";
 
 import { buyNo, buyNoLimit, placeLimitOrder, placeMarketOrder, sellNo } from "@/lib/actions";
@@ -58,7 +58,7 @@ export function TradePanel() {
   const { connection } = useConnection();
   const { program, market, config, book, balances, walletPubkey } =
     useMeridian();
-  const { busy, error, status, run } = useTx();
+  const { busy, error, status, run, reset } = useTx();
 
   const [action, setAction] = useState<TradeAction>("buyYes");
   const [price, setPrice] = useState("0.50");
@@ -100,6 +100,10 @@ export function TradePanel() {
     [balances],
   );
   const gate = guard[action];
+
+  // Switching action drops a stale success/error from the prior trade, so the
+  // last "submitted" message never lingers under a different action's controls.
+  useEffect(() => reset(), [action, reset]);
 
   // Crossing preview against the live book using the resolved Yes-leg price.
   const preview = useMemo(() => {
@@ -363,7 +367,10 @@ export function TradePanel() {
         {submitLabel}
       </button>
 
-      {!gate.allowed && (
+      {/* Suppress the "no position to sell" guard note while a fresh success is
+          shown: after a sell closes a position the guard correctly reports it,
+          but stacked under "submitted" it reads as if the trade failed. */}
+      {!gate.allowed && !status && (
         <div style={{ color: "var(--no)", fontSize: 13 }}>{gate.reason}</div>
       )}
 
