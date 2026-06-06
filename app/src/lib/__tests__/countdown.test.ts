@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { countdownState, expiryEtLabel, formatRemaining } from "@/lib/countdown";
+import { countdownState, dteLabel, expiryEtLabel, formatRemaining } from "@/lib/countdown";
+
+describe("dteLabel", () => {
+  const sec = (iso: string) => Math.floor(Date.parse(iso) / 1000);
+  it("is 0DTE on the expiry's own ET day", () => {
+    expect(dteLabel(sec("2026-06-08T13:00:00Z"), sec("2026-06-08T20:00:00Z"))).toBe("0DTE");
+  });
+  it("counts ET calendar days: Friday evening → Monday close is 3DTE", () => {
+    expect(dteLabel(sec("2026-06-05T22:00:00Z"), sec("2026-06-08T20:00:00Z"))).toBe("3DTE");
+  });
+});
 
 describe("countdownState", () => {
   const expiry = 1_700_000_000; // unix seconds

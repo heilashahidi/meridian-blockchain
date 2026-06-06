@@ -83,13 +83,22 @@ export function etPartsOf(date: Date): EtParts {
  */
 export function settlementExpiryUnix(now: Date = new Date()): number {
   const nowSec = Math.floor(now.getTime() / 1000);
-  const et = etPartsOf(now);
-  let t = etCloseUnix(et.year, et.month, et.day);
-  if (t <= nowSec) {
-    const tom = etPartsOf(new Date(now.getTime() + 86_400_000));
-    t = etCloseUnix(tom.year, tom.month, tom.day);
+  // The next 16:00 ET close that is BOTH in the future AND on a US trading day,
+  // so a market never expires on a weekend or holiday. An off-hours / Friday-
+  // evening run settles the next TRADING day (e.g. Monday), not Saturday. Walk
+  // forward day-by-day; capped at ~10 days to cover the longest holiday run.
+  let cursor = new Date(now.getTime());
+  for (let i = 0; i < 10; i++) {
+    const et = etPartsOf(cursor);
+    if (isUsTradingDay(et)) {
+      const close = etCloseUnix(et.year, et.month, et.day);
+      if (close > nowSec) return close;
+    }
+    cursor = new Date(cursor.getTime() + 86_400_000);
   }
-  return t;
+  // Fallback (unreachable within the holiday horizon): next calendar day's close.
+  const tom = etPartsOf(new Date(now.getTime() + 86_400_000));
+  return etCloseUnix(tom.year, tom.month, tom.day);
 }
 
 /**
