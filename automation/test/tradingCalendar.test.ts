@@ -59,4 +59,28 @@ describe("tradingCalendar: settlementExpiryUnix (regression after refactor)", ()
     expect(et.hour).toBe(16);
     expect(expiry).toBeGreaterThan(Math.floor(now.getTime() / 1000));
   });
+
+  it("Friday after the close settles the next TRADING day (Monday), not Saturday", () => {
+    const now = new Date("2026-06-05T22:00:00Z"); // Fri 18:00 ET, past the 16:00 close
+    const et = etPartsOf(new Date(settlementExpiryUnix(now) * 1000));
+    expect(et.weekday).toBe(1); // Monday, not Sat(6)/Sun(0)
+    expect(et.day).toBe(8); // 2026-06-08
+    expect(et.hour).toBe(16);
+  });
+
+  it("Saturday and Sunday both settle the following Monday", () => {
+    for (const iso of ["2026-06-06T16:00:00Z", "2026-06-07T16:00:00Z"]) {
+      const et = etPartsOf(new Date(settlementExpiryUnix(new Date(iso)) * 1000));
+      expect(et.weekday).toBe(1);
+      expect(et.day).toBe(8);
+    }
+  });
+
+  it("skips an NYSE holiday: Friday before Memorial Day Monday settles Tuesday", () => {
+    // 2026-05-25 is Memorial Day (observed). Fri 2026-05-22 after close → Tue 5/26.
+    const now = new Date("2026-05-22T22:00:00Z"); // Fri 18:00 ET
+    const et = etPartsOf(new Date(settlementExpiryUnix(now) * 1000));
+    expect(et.weekday).toBe(2); // Tuesday
+    expect(et.day).toBe(26);
+  });
 });

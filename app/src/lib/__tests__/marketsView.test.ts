@@ -135,6 +135,21 @@ describe("groupActiveByTicker", () => {
     expect(groups.reduce((n, g) => n + g.active.length, 0)).toBe(0);
   });
 
+  it("hides weekend-expiry markets and surfaces the next trading session", () => {
+    const friNow = Math.floor(Date.parse("2026-06-05T22:00:00Z") / 1000); // Fri 18:00 ET
+    const sat = BigInt(Math.floor(Date.parse("2026-06-06T20:00:00Z") / 1000)); // Sat 16:00 ET
+    const mon = BigInt(Math.floor(Date.parse("2026-06-08T20:00:00Z") / 1000)); // Mon 16:00 ET
+    const markets = [
+      mkMarket({ ticker: "AAPL", strikePrice: 300_000_000n, expiryUnix: sat }),
+      mkMarket({ ticker: "AAPL", strikePrice: 300_000_000n, expiryUnix: mon }),
+    ];
+    const aapl = groupActiveByTicker(markets, friNow).find((g) => g.ticker === "AAPL")!;
+    // Saturday dropped (can't open/settle on a weekend); Monday shown even though
+    // it's 3 days out — the next trading session, within the weekend window.
+    expect(aapl.active).toHaveLength(1);
+    expect(aapl.active[0].expiryUnix).toBe(mon);
+  });
+
   it("sorts each stock's active strikes ascending by strike", () => {
     const groups = groupActiveByTicker(
       [

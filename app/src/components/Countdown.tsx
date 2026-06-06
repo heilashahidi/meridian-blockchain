@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 
-import { countdownState, expiryEtLabel } from "@/lib/countdown";
+import { countdownState, dteLabel, expiryEtLabel } from "@/lib/countdown";
 
 /**
  * Prominent settlement countdown to the market's expiry (`expiryUnix`, unix
@@ -60,7 +60,7 @@ export function Countdown({ expiryUnix }: { expiryUnix: bigint }) {
         {state.closed ? "Settling / Closed" : state.label}
       </span>
       <span className="muted" style={{ fontSize: 11 }}>
-        0DTE · {expiryEtLabel(expiry)}
+        {dteLabel(now, expiry)} · {expiryEtLabel(expiry)}
       </span>
     </div>
   );

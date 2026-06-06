@@ -55,6 +55,29 @@ export function expiryEtLabel(expiryUnix: number): string {
   return `${t} ET`;
 }
 
+/** ET calendar date (YYYY-MM-DD) of a unix instant. */
+function etYmd(unixSec: number): string {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/New_York",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(unixSec * 1000));
+}
+
+/**
+ * Days-to-expiry label by ET calendar date: "0DTE" when the market expires today
+ * (its trading session), "3DTE" for a Monday market viewed the prior Friday, etc.
+ * Honest over a weekend — a market seeded for the next session isn't "0DTE" until
+ * its day, so the hero must not hardcode "0DTE".
+ */
+export function dteLabel(nowUnix: number, expiryUnix: number): string {
+  const a = Date.parse(`${etYmd(nowUnix)}T00:00:00Z`);
+  const b = Date.parse(`${etYmd(expiryUnix)}T00:00:00Z`);
+  const days = Math.max(0, Math.round((b - a) / 86_400_000));
+  return `${days}DTE`;
+}
+
 /**
  * Pure countdown state from a `now` and an `expiry` (both unix seconds). At or
  * past expiry the market is closed (remaining 0, label "Closed").

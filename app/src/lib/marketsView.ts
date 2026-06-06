@@ -12,6 +12,7 @@
 import type { BookView, MarketView } from "./market";
 import { MAG7 } from "./feeds";
 import { tickerToString, USDC_DECIMALS } from "./format";
+import { etWeekdayIndex } from "./marketClock";
 
 /** USDC microunits per whole dollar (6-decimal mints). */
 const USDC_SCALE = 10 ** USDC_DECIMALS;
@@ -19,6 +20,22 @@ const USDC_SCALE = 10 ** USDC_DECIMALS;
 /** A market is "active" if it is unsettled and has not yet expired. */
 export function isActiveMarket(m: MarketView, nowUnix: number): boolean {
   return !m.settled && m.expiryUnix > BigInt(Math.floor(nowUnix));
+}
+
+/**
+ * True if a market's expiry instant falls on a US trading day (Mon–Fri ET).
+ * A market expiring on a weekend can never open or settle — an off-hours seed
+ * can stamp e.g. a Saturday expiry — so the board must hide it. Weekend-only
+ * (matches `marketClock`); holiday expiries are prevented upstream by the
+ * automation's trading-day-aware `settlementExpiryUnix`.
+ */
+export function expiryOnTradingDay(expiryUnix: bigint): boolean {
+  const wk = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/New_York",
+    weekday: "short",
+  }).format(new Date(Number(expiryUnix) * 1000));
+  const d = etWeekdayIndex(wk); // Sun=0…Sat=6
+  return d >= 1 && d <= 5;
 }
 
 /**
@@ -113,14 +130,17 @@ export function groupActiveByTicker(
   const buckets = new Map<string, MarketView[]>();
   for (const f of MAG7) buckets.set(f.ticker, []);
 
-  // 0DTE board: only TODAY's contracts. Excludes the far-out demo set (and any
-  // non-same-session market) by requiring expiry within the next 24h, so a
-  // 6/15-style demo market 10 days out never surfaces.
-  const ZERO_DTE_HORIZON_SECS = 24 * 60 * 60;
+  // Show the current/next trading session's contracts. The window spans a long
+  // weekend (Fri-evening → Tue-after-a-Monday-holiday ≈ 96h) so the board stays
+  // live when there's no same-day session, while still excluding the far-out
+  // demo set (6/15-style markets ~10 days out never surface). Weekend-expiry
+  // markets are dropped outright — they can never open or settle.
+  const SESSION_HORIZON_SECS = 4 * 24 * 60 * 60 + 12 * 60 * 60; // 4.5 days
 
   for (const m of markets) {
     if (!isActiveMarket(m, nowUnix)) continue;
-    if (Number(m.expiryUnix) - nowUnix > ZERO_DTE_HORIZON_SECS) continue;
+    if (!expiryOnTradingDay(m.expiryUnix)) continue;
+    if (Number(m.expiryUnix) - nowUnix > SESSION_HORIZON_SECS) continue;
     const ticker = tickerToString(m.ticker);
     const bucket = buckets.get(ticker);
     if (!bucket) continue; // non-MAG7 ticker — ignore
